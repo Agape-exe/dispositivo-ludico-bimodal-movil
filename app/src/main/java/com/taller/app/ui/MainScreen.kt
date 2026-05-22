@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun MainScreen() {
     val showVisionTest = remember { mutableStateOf(false) }
+    val showSpeechTest = remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -30,39 +31,56 @@ fun MainScreen() {
         println("Permiso micrófono: $audioGranted")
     }
 
-    if (showVisionTest.value) {
-        VisionTestScreen()
-    } else {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(text = "TallerApp - Prototipo móvil bimodal")
+    when {
+        showVisionTest.value -> {
+            VisionTestScreen()
+        }
 
-            Button(
-                onClick = {
-                    permissionLauncher.launch(
-                        arrayOf(
-                            Manifest.permission.CAMERA,
-                            Manifest.permission.RECORD_AUDIO
+        showSpeechTest.value -> {
+            SpeechTestScreen()
+        }
+
+        else -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(text = "TallerApp - Prototipo móvil bimodal")
+
+                Button(
+                    onClick = {
+                        permissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.CAMERA,
+                                Manifest.permission.RECORD_AUDIO
+                            )
                         )
-                    )
-                },
-                modifier = Modifier.padding(top = 16.dp)
-            ) {
-                Text(text = "Solicitar permisos base")
-            }
+                    },
+                    modifier = Modifier.padding(top = 16.dp)
+                ) {
+                    Text(text = "Solicitar permisos base")
+                }
 
-            Button(
-                onClick = {
-                    showVisionTest.value = true
-                },
-                modifier = Modifier.padding(top = 16.dp)
-            ) {
-                Text(text = "Abrir prueba de visión")
+                Button(
+                    onClick = {
+                        showVisionTest.value = true
+                    },
+                    modifier = Modifier.padding(top = 16.dp)
+                ) {
+                    Text(text = "Abrir prueba de visión")
+                }
+
+                Button(
+                    onClick = {
+                        showSpeechTest.value = true
+                    },
+                    modifier = Modifier.padding(top = 16.dp)
+                ) {
+                    Text(text = "Abrir prueba de voz STT")
+                }
             }
         }
     }
