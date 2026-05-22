@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Melissa\\\\AndroidStudioProjects\\\\TallerApp\" -Force)",
+      "Bash(Select-Object Name, Mode)",
+      "Bash(find \"C:\\\\\\\\Users\\\\\\\\Melissa\\\\\\\\AndroidStudioProjects\\\\\\\\TallerApp\" -type d -name \"main\")",
+      "Bash(grep -E \"\\\\.\\(kts|gradle|xml|properties\\)$|settings\")",
+      "Bash(./gradlew assembleDebug)",
+      "Bash(./gradlew test *)"
+    ]
+  }
+}

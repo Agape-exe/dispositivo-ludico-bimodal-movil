@@ -1,0 +1,8 @@
+package com.taller.app.ui
+
+enum class Screen {
+    MAIN,
+    FACE_DETECTION,
+    SPEECH_TEST,
+    SEMANTIC_TEST
+}
