@@ -6,7 +6,9 @@
       "Bash(find \"C:\\\\\\\\Users\\\\\\\\Melissa\\\\\\\\AndroidStudioProjects\\\\\\\\TallerApp\" -type d -name \"main\")",
       "Bash(grep -E \"\\\\.\\(kts|gradle|xml|properties\\)$|settings\")",
       "Bash(./gradlew assembleDebug)",
-      "Bash(./gradlew test *)"
+      "Bash(./gradlew test *)",
+      "PowerShell(.\\\\gradlew.bat assembleDebug --no-daemon 2>&1 | Select-Object -Last 60)",
+      "PowerShell(.\\\\gradlew.bat test --no-daemon 2>&1 | Select-Object -Last 40)"
     ]
   }
 }
