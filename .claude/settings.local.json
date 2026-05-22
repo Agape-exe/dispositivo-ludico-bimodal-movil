@@ -9,7 +9,8 @@
       "Bash(./gradlew test *)",
       "PowerShell(.\\\\gradlew.bat assembleDebug --no-daemon 2>&1 | Select-Object -Last 60)",
       "PowerShell(.\\\\gradlew.bat test --no-daemon 2>&1 | Select-Object -Last 40)",
-      "Bash(./gradlew clean *)"
+      "Bash(./gradlew clean *)",
+      "Bash(./gradlew assembleDebug --no-daemon --console=plain)"
     ]
   }
 }
