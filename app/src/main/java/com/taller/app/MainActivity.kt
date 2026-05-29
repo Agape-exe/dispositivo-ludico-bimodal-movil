@@ -14,6 +14,7 @@ import com.taller.app.ui.SemanticTestScreen
 import com.taller.app.ui.SpeechTestScreen
 import com.taller.app.ui.TeacherActivitiesScreen
 import com.taller.app.ui.TeacherQuestionsScreen
+import com.taller.app.ui.ToySpeechTestScreen
 import com.taller.app.ui.theme.TallerAppTheme
 
 class MainActivity : ComponentActivity() {
@@ -29,7 +30,8 @@ class MainActivity : ComponentActivity() {
                         onNavigateToFaceDetection = { currentScreen = Screen.FACE_DETECTION },
                         onNavigateToSpeechTest = { currentScreen = Screen.SPEECH_TEST },
                         onNavigateToSemanticTest = { currentScreen = Screen.SEMANTIC_TEST },
-                        onNavigateToTeacherActivities = { currentScreen = Screen.TEACHER_ACTIVITIES }
+                        onNavigateToTeacherActivities = { currentScreen = Screen.TEACHER_ACTIVITIES },
+                        onNavigateToToySpeechTest = { currentScreen = Screen.TOY_SPEECH_TEST }
                     )
                     Screen.FACE_DETECTION -> FaceDetectionScreen(
                         onBack = { currentScreen = Screen.MAIN }
@@ -50,6 +52,9 @@ class MainActivity : ComponentActivity() {
                     Screen.TEACHER_QUESTIONS -> TeacherQuestionsScreen(
                         activityId = selectedActivityId,
                         onBack = { currentScreen = Screen.TEACHER_ACTIVITIES }
+                    )
+                    Screen.TOY_SPEECH_TEST -> ToySpeechTestScreen(
+                        onBack = { currentScreen = Screen.MAIN }
                     )
                 }
             }
