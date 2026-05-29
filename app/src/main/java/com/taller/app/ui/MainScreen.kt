@@ -42,7 +42,6 @@ fun MainScreen(
     onNavigateToSpeechTest: () -> Unit,
     onNavigateToSemanticTest: () -> Unit,
     onNavigateToTeacherActivities: () -> Unit,
-    onNavigateToToySpeechTest: () -> Unit,
     onNavigateToToyVoiceSettings: () -> Unit
 ) {
     val context = LocalContext.current
@@ -186,15 +185,6 @@ fun MainScreen(
                 .padding(bottom = 8.dp)
         ) {
             Text("Panel docente — actividades")
-        }
-
-        Button(
-            onClick = onNavigateToToySpeechTest,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp)
-        ) {
-            Text("Probar voz del juguete")
         }
 
         Button(
