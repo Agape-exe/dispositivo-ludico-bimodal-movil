@@ -40,7 +40,8 @@ import androidx.lifecycle.LifecycleOwner
 fun MainScreen(
     onNavigateToFaceDetection: () -> Unit,
     onNavigateToSpeechTest: () -> Unit,
-    onNavigateToSemanticTest: () -> Unit
+    onNavigateToSemanticTest: () -> Unit,
+    onNavigateToTeacherActivities: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -169,9 +170,18 @@ fun MainScreen(
 
         Button(
             onClick = onNavigateToSemanticTest,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
         ) {
             Text("Prueba de procesamiento semántico")
+        }
+
+        Button(
+            onClick = onNavigateToTeacherActivities,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Panel docente — actividades")
         }
     }
 }
