@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Claude Code artifacts — no deben subirse al repo
+.claude/
+claude/
+Claude/
+claude-design/
