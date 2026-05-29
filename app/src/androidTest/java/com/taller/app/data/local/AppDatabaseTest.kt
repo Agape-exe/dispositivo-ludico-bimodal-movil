@@ -223,6 +223,92 @@ class AppDatabaseTest {
     }
 
     @Test
+    fun updateQuestion() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Actividad test",
+                topic = "Test",
+                operationMode = "CLASSIC",
+                maxAttempts = 3,
+                maxTimeSeconds = 60,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        val questionId = questionDao.insert(
+            QuestionEntity(
+                activityId = activityId,
+                questionText = "Texto original",
+                expectedAnswer = "respuesta original",
+                keywords = "original",
+                orderIndex = 1,
+                maxAttempts = 3,
+                maxTimeSeconds = 30,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+
+        questionDao.update(
+            QuestionEntity(
+                id = questionId,
+                activityId = activityId,
+                questionText = "Texto actualizado",
+                expectedAnswer = "respuesta actualizada",
+                keywords = "nueva,clave",
+                orderIndex = 1,
+                maxAttempts = 2,
+                maxTimeSeconds = 45,
+                createdAt = now,
+                updatedAt = now + 1000
+            )
+        )
+
+        val questions = questionDao.getByActivityIdOnce(activityId)
+        assertEquals(1, questions.size)
+        assertEquals("Texto actualizado", questions[0].questionText)
+        assertEquals("respuesta actualizada", questions[0].expectedAnswer)
+        assertEquals(2, questions[0].maxAttempts)
+        assertEquals(45, questions[0].maxTimeSeconds)
+        assertEquals(now, questions[0].createdAt)
+    }
+
+    @Test
+    fun deleteQuestion() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Actividad test",
+                topic = "Test",
+                operationMode = "CLASSIC",
+                maxAttempts = 3,
+                maxTimeSeconds = 60,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        val questionId = questionDao.insert(
+            QuestionEntity(
+                activityId = activityId,
+                questionText = "¿Pregunta a eliminar?",
+                expectedAnswer = "respuesta",
+                keywords = "clave",
+                orderIndex = 1,
+                maxAttempts = 3,
+                maxTimeSeconds = 30,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+
+        questionDao.deleteById(questionId)
+
+        val questions = questionDao.getByActivityIdOnce(activityId)
+        assertEquals(0, questions.size)
+    }
+
+    @Test
     fun technicalEventWithoutQuestionIsAllowed() = runBlocking {
         val now = System.currentTimeMillis()
         val activityId = activityDao.insert(

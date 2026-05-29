@@ -13,6 +13,7 @@ import com.taller.app.ui.Screen
 import com.taller.app.ui.SemanticTestScreen
 import com.taller.app.ui.SpeechTestScreen
 import com.taller.app.ui.TeacherActivitiesScreen
+import com.taller.app.ui.TeacherQuestionsScreen
 import com.taller.app.ui.theme.TallerAppTheme
 
 class MainActivity : ComponentActivity() {
@@ -21,6 +22,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             TallerAppTheme {
                 var currentScreen by remember { mutableStateOf(Screen.MAIN) }
+                var selectedActivityId by remember { mutableStateOf(0L) }
 
                 when (currentScreen) {
                     Screen.MAIN -> MainScreen(
@@ -39,7 +41,15 @@ class MainActivity : ComponentActivity() {
                         onBack = { currentScreen = Screen.MAIN }
                     )
                     Screen.TEACHER_ACTIVITIES -> TeacherActivitiesScreen(
-                        onBack = { currentScreen = Screen.MAIN }
+                        onBack = { currentScreen = Screen.MAIN },
+                        onNavigateToQuestions = { activityId ->
+                            selectedActivityId = activityId
+                            currentScreen = Screen.TEACHER_QUESTIONS
+                        }
+                    )
+                    Screen.TEACHER_QUESTIONS -> TeacherQuestionsScreen(
+                        activityId = selectedActivityId,
+                        onBack = { currentScreen = Screen.TEACHER_ACTIVITIES }
                     )
                 }
             }

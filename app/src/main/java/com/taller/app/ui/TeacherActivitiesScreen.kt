@@ -50,7 +50,7 @@ import java.util.Locale
 private enum class TeacherView { LIST, FORM }
 
 @Composable
-fun TeacherActivitiesScreen(onBack: () -> Unit) {
+fun TeacherActivitiesScreen(onBack: () -> Unit, onNavigateToQuestions: (Long) -> Unit) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getInstance(context) }
     val dao = remember { db.activityDao() }
@@ -80,7 +80,8 @@ fun TeacherActivitiesScreen(onBack: () -> Unit) {
             onEdit = { activity ->
                 editingActivity = activity
                 view = TeacherView.FORM
-            }
+            },
+            onManageQuestions = { activity -> onNavigateToQuestions(activity.id) }
         )
         TeacherView.FORM -> ActivityFormView(
             existing = editingActivity,
@@ -100,7 +101,8 @@ private fun ActivityListView(
     activities: List<ActivityEntity>,
     onBack: () -> Unit,
     onCreate: () -> Unit,
-    onEdit: (ActivityEntity) -> Unit
+    onEdit: (ActivityEntity) -> Unit,
+    onManageQuestions: (ActivityEntity) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -152,7 +154,11 @@ private fun ActivityListView(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(activities, key = { it.id }) { activity ->
-                    ActivityCard(activity = activity, onClick = { onEdit(activity) })
+                    ActivityCard(
+                        activity = activity,
+                        onEdit = { onEdit(activity) },
+                        onManageQuestions = { onManageQuestions(activity) }
+                    )
                 }
             }
         }
@@ -160,12 +166,15 @@ private fun ActivityListView(
 }
 
 @Composable
-private fun ActivityCard(activity: ActivityEntity, onClick: () -> Unit) {
+private fun ActivityCard(
+    activity: ActivityEntity,
+    onEdit: () -> Unit,
+    onManageQuestions: () -> Unit
+) {
     val dateFormat = remember { SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()) }
     val modeLabel = if (activity.operationMode == "ADVANCED") "Avanzado" else "Clásico"
 
     Card(
-        onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
@@ -192,6 +201,15 @@ private fun ActivityCard(activity: ActivityEntity, onClick: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
+                    Text("Editar")
+                }
+                Button(onClick = onManageQuestions, modifier = Modifier.weight(1f)) {
+                    Text("Preguntas")
+                }
+            }
         }
     }
 }
