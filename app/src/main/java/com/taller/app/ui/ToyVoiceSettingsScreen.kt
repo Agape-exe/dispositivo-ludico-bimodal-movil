@@ -87,7 +87,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         scope.launch { repository.save(s) }
     }
 
-    val canInteract = ttsState == ToySpeechState.READY || ttsState == ToySpeechState.SPEAKING
+    val canInteract = (ttsState == ToySpeechState.READY || ttsState == ToySpeechState.SPEAKING) && settingsLoaded
 
     Column(
         modifier = Modifier
