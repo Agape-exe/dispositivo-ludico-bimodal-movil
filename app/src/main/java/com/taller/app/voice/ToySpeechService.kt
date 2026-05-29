@@ -12,7 +12,10 @@ class ToySpeechService(private val context: Context) {
     private var state: ToySpeechState = ToySpeechState.UNINITIALIZED
     private var onStateChange: ((ToySpeechState) -> Unit)? = null
 
-    fun initialize(onStateChange: (ToySpeechState) -> Unit) {
+    fun initialize(
+        initialSettings: ToyVoiceSettings = ToyVoiceSettings(),
+        onStateChange: (ToySpeechState) -> Unit
+    ) {
         if (state != ToySpeechState.UNINITIALIZED) return
 
         this.onStateChange = onStateChange
@@ -20,22 +23,53 @@ class ToySpeechService(private val context: Context) {
 
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val locale = selectLocale()
-                if (locale != null) {
-                    tts?.language = locale
-                    tts?.setSpeechRate(0.9f)
-                    tts?.setPitch(1.0f)
-                    tts?.setOnUtteranceProgressListener(buildUtteranceListener())
-                    updateState(ToySpeechState.READY)
-                } else {
-                    Log.e(TAG, "Ningún idioma español disponible en este dispositivo")
-                    updateState(ToySpeechState.ERROR)
-                }
+                tts?.setOnUtteranceProgressListener(buildUtteranceListener())
+                applySettingsInternal(initialSettings)
+                updateState(ToySpeechState.READY)
             } else {
                 Log.e(TAG, "Fallo al inicializar TTS, status=$status")
                 updateState(ToySpeechState.ERROR)
             }
         }
+    }
+
+    fun applySettings(settings: ToyVoiceSettings) {
+        if (state == ToySpeechState.READY || state == ToySpeechState.SPEAKING) {
+            applySettingsInternal(settings)
+        }
+    }
+
+    fun getAvailableVoices(): List<ToyVoiceInfo> {
+        val instance = tts ?: return emptyList()
+        val voices = try {
+            instance.voices ?: emptySet()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudieron obtener las voces disponibles", e)
+            return emptyList()
+        }
+
+        val spanishPrefixes = listOf("es-PE", "es-ES", "es-US", "es-MX", "es")
+
+        val allInfos = voices
+            .filter { voice ->
+                voice.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true
+            }
+            .map { voice ->
+                ToyVoiceInfo(
+                    name = voice.name,
+                    locale = voice.locale.toLanguageTag(),
+                    isNetworkRequired = voice.isNetworkConnectionRequired,
+                    quality = voice.quality
+                )
+            }
+
+        val spanishVoices = allInfos.filter { info ->
+            spanishPrefixes.any { prefix ->
+                info.locale.startsWith(prefix, ignoreCase = true)
+            }
+        }.sortedByDescending { it.quality }
+
+        return if (spanishVoices.isNotEmpty()) spanishVoices else allInfos.sortedByDescending { it.quality }
     }
 
     fun speak(phrase: ToySpeechPhrase) {
@@ -72,34 +106,64 @@ class ToySpeechService(private val context: Context) {
 
     fun getState(): ToySpeechState = state
 
-    private fun selectLocale(): Locale? {
-        val candidates = listOf("es-PE", "es-ES", "es").map { Locale.forLanguageTag(it) }
+    private fun applySettingsInternal(settings: ToyVoiceSettings) {
+        val instance = tts ?: return
+
+        if (settings.selectedVoiceName != null) {
+            val target = try {
+                instance.voices?.find { it.name == settings.selectedVoiceName }
+            } catch (e: Exception) {
+                null
+            }
+            if (target != null) {
+                try {
+                    instance.setVoice(target)
+                    Log.d(TAG, "Voz aplicada: ${settings.selectedVoiceName}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "No se pudo aplicar la voz '${settings.selectedVoiceName}', usando idioma de respaldo")
+                    applyFallbackLocale(instance, settings.localeTag)
+                }
+            } else {
+                Log.w(TAG, "Voz '${settings.selectedVoiceName}' no encontrada, usando idioma de respaldo")
+                applyFallbackLocale(instance, settings.localeTag)
+            }
+        } else {
+            applyFallbackLocale(instance, settings.localeTag)
+        }
+
+        instance.setSpeechRate(settings.speechRate)
+        instance.setPitch(settings.pitch)
+    }
+
+    private fun applyFallbackLocale(instance: TextToSpeech, localeTag: String?) {
+        val candidates = buildList {
+            if (!localeTag.isNullOrBlank()) add(Locale.forLanguageTag(localeTag))
+            add(Locale.forLanguageTag("es-PE"))
+            add(Locale.forLanguageTag("es-ES"))
+            add(Locale.forLanguageTag("es"))
+        }
         for (locale in candidates) {
-            val result = tts?.isLanguageAvailable(locale)
+            val result = instance.isLanguageAvailable(locale)
             if (result == TextToSpeech.LANG_AVAILABLE ||
                 result == TextToSpeech.LANG_COUNTRY_AVAILABLE ||
                 result == TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE
             ) {
-                Log.d(TAG, "Idioma seleccionado: $locale")
-                return locale
+                instance.language = locale
+                Log.d(TAG, "Idioma de respaldo aplicado: $locale")
+                return
             }
         }
-        return null
+        Log.e(TAG, "No se encontró ningún idioma español disponible en este dispositivo")
     }
 
     private fun buildUtteranceListener(): UtteranceProgressListener {
         return object : UtteranceProgressListener() {
-
             override fun onStart(utteranceId: String?) {
-                if (state != ToySpeechState.SPEAKING) {
-                    updateState(ToySpeechState.SPEAKING)
-                }
+                if (state != ToySpeechState.SPEAKING) updateState(ToySpeechState.SPEAKING)
             }
 
             override fun onDone(utteranceId: String?) {
-                if (state == ToySpeechState.SPEAKING) {
-                    updateState(ToySpeechState.READY)
-                }
+                if (state == ToySpeechState.SPEAKING) updateState(ToySpeechState.READY)
             }
 
             @Deprecated("Deprecated in API 21")
