@@ -57,6 +57,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionState
+import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
 import com.taller.app.data.local.AppDatabase
@@ -79,10 +80,11 @@ import kotlinx.coroutines.launch
  * Pantalla inicial del modo bimodal inteligente.
  *
  * Permite seleccionar una actividad con preguntas, cargarla en el orquestador de
- * estados y avanzar por el flujo avanzado. La presencia facial (camara) y la
- * captura de voz (reconocimiento de voz) son reales y alimentan al orquestador;
- * la evaluacion semantica y la voz del juguete siguen simuladas mediante los
- * controles tecnicos. Sirve como banco de pruebas del comportamiento del flujo.
+ * estados y avanzar por el flujo avanzado. La presencia facial (camara), la
+ * captura de voz (reconocimiento de voz) y la evaluacion semantica de la
+ * respuesta son reales y alimentan al orquestador; solo la voz del juguete sigue
+ * pendiente. Conserva controles tecnicos de simulacion, claramente separados del
+ * flujo real, para validar el comportamiento del orquestador.
  *
  * @param activityId si es distinto de 0 se carga directamente esa actividad; si
  *        es 0 se muestra un selector con las actividades disponibles.
@@ -279,12 +281,22 @@ private fun BimodalSession(
     // Una sola instancia del orquestador por actividad cargada.
     val orchestrator = remember(activity) { BimodalFlowOrchestrator() }
 
+    // Adaptador puro que conecta el evaluador semantico local con el protocolo
+    // del orquestador. Una sola instancia por actividad cargada.
+    val semanticAdapter = remember(activity) { SemanticEvaluationAdapter() }
+
     // El orquestador es una maquina de estados plana; reflejamos sus valores en
     // estado Compose y los sincronizamos despues de cada evento.
     var state by remember(activity) { mutableStateOf(orchestrator.state) }
     var progress by remember(activity) { mutableStateOf(orchestrator.progress) }
     var lastResult by remember(activity) { mutableStateOf(orchestrator.lastResult) }
     var errorMessage by remember(activity) { mutableStateOf(orchestrator.errorMessage) }
+
+    // Origen del ultimo resultado semantico mostrado (evaluacion real vs. control
+    // tecnico de simulacion) y latencia aproximada de la evaluacion real, para
+    // diferenciar claramente en la UI lo real de lo simulado.
+    var semanticSource by remember(activity) { mutableStateOf<SemanticSource?>(null) }
+    var semanticLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
 
     fun sync() {
         state = orchestrator.state
@@ -414,11 +426,14 @@ private fun BimodalSession(
         }
     }
 
-    // Limpia la transcripcion mostrada al (re)iniciar una pregunta o intento.
+    // Limpia la transcripcion y el resultado semantico mostrados al (re)iniciar
+    // una pregunta o intento.
     LaunchedEffect(progress?.currentQuestionIndex, progress?.currentAttempt) {
         sttPartial = ""
         sttFinal = ""
         sttError = ""
+        semanticSource = null
+        semanticLatencyMs = null
     }
 
     // Tope de tiempo simple: si la pregunta define maxTimeSeconds, detiene la
@@ -462,6 +477,24 @@ private fun BimodalSession(
 
     val currentQuestion: LearningQuestion? =
         progress?.let { activity.questions.getOrNull(it.currentQuestionIndex) }
+
+    // Evaluacion semantica real: cuando una captura de voz real deja el flujo en
+    // EVALUATING, toma la transcripcion final registrada en el orquestador y la
+    // pregunta actual, invoca el evaluador semantico local (con medicion de
+    // latencia) y entrega el resultado al orquestador. Los controles de
+    // simulacion no pasan por aqui: resuelven EVALUATING en el mismo evento, por
+    // lo que el estado nunca queda asentado en EVALUATING para este efecto.
+    LaunchedEffect(state) {
+        if (state != BimodalInteractionState.EVALUATING) return@LaunchedEffect
+        val transcription = orchestrator.progress?.lastTranscription
+        val question = currentQuestion
+        if (transcription == null || question == null) return@LaunchedEffect
+
+        val outcome = semanticAdapter.evaluate(transcription, question)
+        semanticSource = SemanticSource.REAL
+        semanticLatencyMs = outcome.latencyMillis
+        dispatch { orchestrator.onEvent(outcome.toEvent()) }
+    }
 
     Column(
         modifier = Modifier
@@ -533,6 +566,14 @@ private fun BimodalSession(
                 )
                 Text(
                     text = "Respuesta esperada: ${currentQuestion?.expectedAnswer ?: "—"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Palabras clave: " +
+                        (currentQuestion?.keywords
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.joinToString(", ") ?: "—"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -662,9 +703,15 @@ private fun BimodalSession(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Transcripcion registrada en el orquestador y resultado semantico simulado.
+        // Evaluacion semantica: muestra la transcripcion final, la respuesta
+        // esperada, las palabras clave, el resultado semantico y, cuando proviene
+        // de la evaluacion real, su latencia aproximada y un distintivo de origen.
+        val isEvaluating = state == BimodalInteractionState.EVALUATING
         Card(
             modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+            ),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
             Column(
@@ -673,11 +720,90 @@ private fun BimodalSession(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                InfoRow("Transcripción en el orquestador", progress?.lastTranscription ?: "—")
-                InfoRow(
-                    "Último resultado semántico (simulado)",
-                    lastResult?.semanticResult?.let { resultLabel(it) } ?: "—"
+                Text(
+                    text = "Evaluación semántica",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
+                InfoRow(
+                    "Transcripción final",
+                    progress?.lastTranscription ?: sttFinal.ifBlank { "—" }
+                )
+                InfoRow("Respuesta esperada", currentQuestion?.expectedAnswer ?: "—")
+                InfoRow(
+                    "Palabras clave",
+                    currentQuestion?.keywords
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.joinToString(", ") ?: "—"
+                )
+                InfoRow(
+                    "Resultado semántico",
+                    when {
+                        isEvaluating -> "Evaluando…"
+                        lastResult?.semanticResult != null ->
+                            resultLabel(lastResult!!.semanticResult!!) +
+                                (semanticSource?.let { " (${it.label})" } ?: "")
+                        else -> "—"
+                    }
+                )
+                InfoRow(
+                    "Latencia semántica",
+                    semanticLatencyMs
+                        ?.takeIf { semanticSource == SemanticSource.REAL }
+                        ?.let { "≈ $it ms" }
+                        ?: "—"
+                )
+            }
+        }
+
+        // Acciones del flujo real ante la retroalimentacion: delega siempre en el
+        // orquestador (intentos y avance). El boton de reintento solo aparece si
+        // el orquestador permite reintentar la pregunta actual.
+        val isFeedbackState = state == BimodalInteractionState.FEEDBACK_CORRECT ||
+            state == BimodalInteractionState.FEEDBACK_INCORRECT ||
+            state == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ||
+            state == BimodalInteractionState.FEEDBACK_NO_RESPONSE
+        if (isFeedbackState || state == BimodalInteractionState.TIME_EXPIRED) {
+            Spacer(modifier = Modifier.height(8.dp))
+            val canRetry = lastResult?.canRetry == true
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Retroalimentación",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = feedbackMessage(state, canRetry),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (canRetry) {
+                        Button(
+                            onClick = { dispatch { orchestrator.retryQuestion() } },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Escuchar de nuevo")
+                        }
+                    }
+                    Button(
+                        onClick = { dispatch { orchestrator.moveToNextQuestion() } },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (lastResult?.isLastQuestion == true) "Finalizar actividad"
+                            else "Avanzar a la siguiente"
+                        )
+                    }
+                }
             }
         }
 
@@ -693,10 +819,11 @@ private fun BimodalSession(
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "Botones temporales para simular el flujo. La presencia facial y la " +
-                "captura de voz ya son reales; la evaluación semántica sigue simulada. " +
-                "Los botones de evaluación también permiten completar el paso tras una " +
-                "captura de voz real.",
+            text = "Botones temporales para simular el flujo. La presencia facial, la " +
+                "captura de voz y la evaluación semántica ya son reales: tras una " +
+                "captura de voz el resultado semántico se calcula automáticamente. " +
+                "Estos botones forzan un resultado concreto y se marcan como " +
+                "“simulada” para distinguirlos de la evaluación real.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.outline
         )
@@ -748,6 +875,8 @@ private fun BimodalSession(
             label = "Evaluar como correcta (simulado)",
             enabled = canSimulateEval
         ) {
+            semanticSource = SemanticSource.SIMULATED
+            semanticLatencyMs = null
             dispatch {
                 // En LISTENING captura una transcripcion simulada; en EVALUATING (tras
                 // una captura real) este paso es inocuo y conserva la transcripcion real.
@@ -759,6 +888,8 @@ private fun BimodalSession(
             label = "Evaluar como incorrecta (simulado)",
             enabled = canSimulateEval
         ) {
+            semanticSource = SemanticSource.SIMULATED
+            semanticLatencyMs = null
             dispatch {
                 orchestrator.onSpeechCaptured("respuesta incorrecta simulada")
                 orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
@@ -768,6 +899,8 @@ private fun BimodalSession(
             label = "Evaluar como no interpretable (simulado)",
             enabled = canSimulateEval
         ) {
+            semanticSource = SemanticSource.SIMULATED
+            semanticLatencyMs = null
             dispatch {
                 orchestrator.onSpeechCaptured("mmm")
                 orchestrator.onSemanticEvaluated(SemanticResult.NOT_INTERPRETABLE)
@@ -777,6 +910,8 @@ private fun BimodalSession(
             label = "Simular sin respuesta",
             enabled = canMarkNoResponse
         ) {
+            semanticSource = SemanticSource.SIMULATED
+            semanticLatencyMs = null
             dispatch { orchestrator.onNoResponse() }
         }
         ControlButton(
@@ -1094,13 +1229,41 @@ private fun sttStatusLabel(state: SttState): String = when (state) {
     SttState.ERROR -> "Error de reconocimiento"
 }
 
-/** Etiqueta legible para el resultado semantico simulado. */
+/** Etiqueta legible para el resultado semantico. */
 private fun resultLabel(result: SemanticResult): String = when (result) {
     SemanticResult.CORRECT -> "Correcta"
     SemanticResult.INCORRECT -> "Incorrecta"
     SemanticResult.NOT_INTERPRETABLE -> "No interpretable"
     SemanticResult.NO_RESPONSE -> "Sin respuesta"
 }
+
+/** Origen del ultimo resultado semantico mostrado en la pantalla. */
+private enum class SemanticSource(val label: String) {
+    /** Calculado por el evaluador semantico local a partir de la respuesta real. */
+    REAL("real"),
+
+    /** Forzado desde los controles tecnicos de simulacion. */
+    SIMULATED("simulada")
+}
+
+/** Mensaje de retroalimentacion segun el estado de feedback y si se puede reintentar. */
+private fun feedbackMessage(state: BimodalInteractionState, canRetry: Boolean): String =
+    when (state) {
+        BimodalInteractionState.FEEDBACK_CORRECT ->
+            "¡Respuesta correcta! Puedes avanzar a la siguiente pregunta."
+        BimodalInteractionState.FEEDBACK_INCORRECT ->
+            if (canRetry) "Respuesta incorrecta. Aún quedan intentos: escucha de nuevo."
+            else "Respuesta incorrecta. Sin intentos restantes: avanza a la siguiente."
+        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ->
+            if (canRetry) "No se entendió la respuesta. Inténtalo otra vez."
+            else "No se entendió la respuesta. Sin intentos restantes: avanza."
+        BimodalInteractionState.FEEDBACK_NO_RESPONSE ->
+            if (canRetry) "No se recibió respuesta. Escucha de nuevo."
+            else "No se recibió respuesta. Sin intentos restantes: avanza."
+        BimodalInteractionState.TIME_EXPIRED ->
+            "Se agotó el tiempo para responder. Avanza a la siguiente pregunta."
+        else -> ""
+    }
 
 /** Actividad de respaldo en memoria usada solo cuando no hay actividades en la base. */
 private fun sampleActivity(): LearningActivity = LearningActivity(
