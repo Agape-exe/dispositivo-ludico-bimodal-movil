@@ -56,6 +56,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.taller.app.bimodal.BimodalFlowOrchestrator
+import com.taller.app.bimodal.BimodalInteractionResult
 import com.taller.app.bimodal.BimodalInteractionState
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
@@ -71,20 +72,36 @@ import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
 import com.taller.app.vision.FaceAnalyzer
 import com.taller.app.vision.FacePresenceTracker
+import com.taller.app.voice.LocalToyVoiceProvider
+import com.taller.app.voice.ToySpeechPhrase
+import com.taller.app.voice.ToySpeechService
+import com.taller.app.voice.ToySpeechState
+import com.taller.app.voice.ToyVoiceFallback
+import com.taller.app.voice.ToyVoiceProviderType
+import com.taller.app.voice.ToyVoiceSettings
+import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.neural.AzureSpeechConfig
+import com.taller.app.voice.neural.AzureSpeechVoiceProvider
+import com.taller.app.voice.neural.ElevenLabsConfig
+import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
  * Pantalla inicial del modo bimodal inteligente.
  *
  * Permite seleccionar una actividad con preguntas, cargarla en el orquestador de
- * estados y avanzar por el flujo avanzado. La presencia facial (camara), la
- * captura de voz (reconocimiento de voz) y la evaluacion semantica de la
- * respuesta son reales y alimentan al orquestador; solo la voz del juguete sigue
- * pendiente. Conserva controles tecnicos de simulacion, claramente separados del
- * flujo real, para validar el comportamiento del orquestador.
+ * estados y recorrer el flujo automatico real: la presencia facial (camara)
+ * dispara la pregunta, la voz del juguete la lee, la captura de voz transcribe la
+ * respuesta y la evaluacion semantica produce el resultado sin intervencion
+ * manual. El docente solo inicia la interaccion y decide reintentar o avanzar.
+ *
+ * Los controles tecnicos de simulacion se conservan en una seccion plegable,
+ * colapsada por defecto y claramente separada del flujo real, para depurar el
+ * orquestador sin recurrir a sensores.
  *
  * @param activityId si es distinto de 0 se carga directamente esa actividad; si
  *        es 0 se muestra un selector con las actividades disponibles.
@@ -496,6 +513,95 @@ private fun BimodalSession(
         dispatch { orchestrator.onEvent(outcome.toEvent()) }
     }
 
+    // ----- Voz del juguete -----------------------------------------------------
+    // El juguete lee la pregunta usando el mismo servicio de voz de la app: el
+    // proveedor neural si esta configurado, con respaldo automatico a la voz local.
+    // Reutiliza el motor TTS local (LocalToyVoiceProvider) para no duplicar
+    // instancias. Los proveedores se liberan al salir de la pantalla.
+    val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
+    val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
+    val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
+    val toySpeechService = remember { ToySpeechService(context) }
+    val localVoiceProvider = remember {
+        LocalToyVoiceProvider(toySpeechService, ttsStateFlow) { voiceSettings }
+    }
+    val azureVoiceProvider = remember {
+        AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(voiceSettings.azureVoiceName) }
+    }
+    val elevenLabsVoiceProvider = remember {
+        ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(voiceSettings.neuralVoiceId) }
+    }
+
+    DisposableEffect(Unit) {
+        toySpeechService.initialize { newState -> ttsStateFlow.value = newState }
+        onDispose {
+            toySpeechService.shutdown()
+            azureVoiceProvider.release()
+            elevenLabsVoiceProvider.release()
+        }
+    }
+
+    // Indica si el juguete esta leyendo la pregunta en este momento (para la UI).
+    var toyVoiceSpeaking by remember(activity) { mutableStateOf(false) }
+
+    // Cuando el flujo presenta una pregunta, el juguete la lee y, al terminar,
+    // abre automaticamente la escucha si hay permiso de microfono. La clave cambia
+    // en cada (re)presentacion (incluido un reintento) para releer la pregunta.
+    val presentationKey = if (state == BimodalInteractionState.PRESENTING_QUESTION) {
+        progress?.let { "${it.currentQuestionIndex}:${it.currentAttempt}" }
+    } else {
+        null
+    }
+    LaunchedEffect(presentationKey) {
+        if (presentationKey == null) return@LaunchedEffect
+        val questionText = currentQuestion?.questionText ?: return@LaunchedEffect
+        val neuralProvider = when (voiceSettings.provider) {
+            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
+            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
+            ToyVoiceProviderType.LOCAL -> localVoiceProvider
+        }
+        toyVoiceSpeaking = true
+        try {
+            // Si la voz no esta disponible no se interrumpe el flujo: el resultado
+            // se ignora y la interaccion continua sin audio (nunca crashea).
+            runCatching {
+                ToyVoiceFallback.speak(
+                    text = "${ToySpeechPhrase.QUESTION_INTRO.text} $questionText",
+                    useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
+                    allowFallback = voiceSettings.fallbackToLocal,
+                    neural = neuralProvider,
+                    local = localVoiceProvider
+                )
+            }
+            // Tras la lectura, abre la escucha si seguimos en la misma pregunta y
+            // hay permiso de microfono. Sin permiso, el docente usa el boton.
+            if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
+                startVoiceCapture()
+            }
+        } finally {
+            // Si el efecto se cancela (cambio de estado/pregunta) corta el audio
+            // pendiente para no solaparlo con la escucha o la siguiente pregunta.
+            azureVoiceProvider.stop()
+            elevenLabsVoiceProvider.stop()
+            toySpeechService.stop()
+            toyVoiceSpeaking = false
+        }
+    }
+
+    // Inicia la interaccion real en un solo paso: carga la actividad en el
+    // orquestador, la confirma y arranca la sesion hasta quedar esperando rostro.
+    fun startInteraction() {
+        dispatch {
+            orchestrator.loadActivity(activity)
+            orchestrator.markActivityLoaded()
+            orchestrator.startSession()
+        }
+    }
+
+    // Controla la visibilidad de la seccion tecnica de simulacion (colapsada por
+    // defecto para no confundirla con el flujo real).
+    var showTechnical by remember(activity) { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -564,19 +670,20 @@ private fun BimodalSession(
                     text = progress?.currentQuestionText ?: "—",
                     style = MaterialTheme.typography.bodyLarge
                 )
-                Text(
-                    text = "Respuesta esperada: ${currentQuestion?.expectedAnswer ?: "—"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "Palabras clave: " +
-                        (currentQuestion?.keywords
-                            ?.takeIf { it.isNotEmpty() }
-                            ?.joinToString(", ") ?: "—"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (toyVoiceSpeaking) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "El juguete está leyendo la pregunta…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
             }
         }
 
@@ -681,23 +788,6 @@ private fun BimodalSession(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-
-                Button(
-                    onClick = { startVoiceCapture() },
-                    enabled = audioGranted &&
-                        state == BimodalInteractionState.PRESENTING_QUESTION &&
-                        !isListeningVoice && !isStoppingVoice,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Escuchar respuesta")
-                }
-                OutlinedButton(
-                    onClick = { stopVoiceCapture() },
-                    enabled = isListeningVoice,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Detener captura")
-                }
             }
         }
 
@@ -757,6 +847,135 @@ private fun BimodalSession(
             }
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Accion principal del flujo automatico: un unico control que cambia segun
+        // el estado. El docente solo inicia la interaccion; el rostro dispara la
+        // pregunta, el juguete la lee, la escucha se abre sola y la evaluacion es
+        // automatica. Los estados de retroalimentacion los atiende la tarjeta de
+        // mas abajo (reintentar / continuar).
+        val sessionTerminal = state == BimodalInteractionState.SESSION_COMPLETED ||
+            state == BimodalInteractionState.SESSION_CANCELLED ||
+            state == BimodalInteractionState.ERROR
+        val sessionActive = state != BimodalInteractionState.IDLE && !sessionTerminal
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Interacción",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                when (state) {
+                    BimodalInteractionState.IDLE,
+                    BimodalInteractionState.READY -> {
+                        Button(
+                            onClick = { startInteraction() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Iniciar interacción")
+                        }
+                    }
+
+                    BimodalInteractionState.SESSION_COMPLETED,
+                    BimodalInteractionState.SESSION_CANCELLED,
+                    BimodalInteractionState.ERROR -> {
+                        Text(
+                            text = if (state == BimodalInteractionState.SESSION_COMPLETED) {
+                                "La actividad terminó."
+                            } else if (state == BimodalInteractionState.SESSION_CANCELLED) {
+                                "La interacción se canceló."
+                            } else {
+                                "La interacción se detuvo por un error."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Button(
+                            onClick = { startInteraction() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Iniciar de nuevo")
+                        }
+                    }
+
+                    BimodalInteractionState.WAITING_FOR_FACE -> {
+                        StatusLine("Esperando que el niño se ubique frente a la cámara…")
+                    }
+
+                    BimodalInteractionState.FACE_DETECTED,
+                    BimodalInteractionState.PRESENTING_QUESTION -> {
+                        when {
+                            !audioGranted -> {
+                                Text(
+                                    text = "Concede el permiso de micrófono para escuchar la " +
+                                        "respuesta del niño.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Button(
+                                    onClick = { startVoiceCapture() },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Conceder micrófono")
+                                }
+                            }
+                            toyVoiceSpeaking -> StatusLine("Preparando la pregunta…")
+                            else -> {
+                                Button(
+                                    onClick = { startVoiceCapture() },
+                                    enabled = state == BimodalInteractionState.PRESENTING_QUESTION &&
+                                        !isListeningVoice && !isStoppingVoice,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Escuchar respuesta")
+                                }
+                            }
+                        }
+                    }
+
+                    BimodalInteractionState.WAITING_FOR_RESPONSE,
+                    BimodalInteractionState.LISTENING -> {
+                        StatusLine("Escuchando la respuesta del niño…")
+                        OutlinedButton(
+                            onClick = { stopVoiceCapture() },
+                            enabled = isListeningVoice,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Detener captura")
+                        }
+                    }
+
+                    BimodalInteractionState.TRANSCRIBING,
+                    BimodalInteractionState.EVALUATING -> {
+                        StatusLine("Evaluando la respuesta…")
+                    }
+
+                    else -> Unit
+                }
+
+                if (sessionActive) {
+                    OutlinedButton(
+                        onClick = { dispatch { orchestrator.cancelSession() } },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancelar interacción")
+                    }
+                }
+            }
+        }
+
         // Acciones del flujo real ante la retroalimentacion: delega siempre en el
         // orquestador (intentos y avance). El boton de reintento solo aparece si
         // el orquestador permite reintentar la pregunta actual.
@@ -813,130 +1032,45 @@ private fun BimodalSession(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Controles técnicos / Simulación",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Botones temporales para simular el flujo. La presencia facial, la " +
-                "captura de voz y la evaluación semántica ya son reales: tras una " +
-                "captura de voz el resultado semántico se calcula automáticamente. " +
-                "Estos botones forzan un resultado concreto y se marcan como " +
-                "“simulada” para distinguirlos de la evaluación real.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline
-        )
+        HorizontalDivider()
         Spacer(modifier = Modifier.height(8.dp))
 
-        val isTerminal = state == BimodalInteractionState.SESSION_COMPLETED ||
-            state == BimodalInteractionState.SESSION_CANCELLED ||
-            state == BimodalInteractionState.ERROR
-        val isFeedback = state == BimodalInteractionState.FEEDBACK_CORRECT ||
-            state == BimodalInteractionState.FEEDBACK_INCORRECT ||
-            state == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ||
-            state == BimodalInteractionState.FEEDBACK_NO_RESPONSE
-        val canAnswer = state == BimodalInteractionState.LISTENING
-        // La evaluacion simulada tambien aplica tras una captura de voz real, que
-        // deja el flujo en EVALUATING a la espera del resultado semantico.
-        val canSimulateEval = canAnswer || state == BimodalInteractionState.EVALUATING
-        val canMarkNoResponse = state == BimodalInteractionState.PRESENTING_QUESTION ||
-            state == BimodalInteractionState.WAITING_FOR_RESPONSE ||
-            state == BimodalInteractionState.LISTENING
+        // Seccion tecnica de simulacion: separada del flujo real y colapsada por
+        // defecto. Permite forzar transiciones del orquestador sin sensores; no
+        // forma parte de la interaccion real (la evaluacion ya es automatica).
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showTechnical = !showTechnical }
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Controles técnicos de prueba",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = if (showTechnical) "Ocultar ▲" else "Mostrar ▼",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
 
-        ControlButton(
-            label = "Iniciar sesión",
-            enabled = state == BimodalInteractionState.IDLE || isTerminal
-        ) {
-            dispatch {
-                orchestrator.loadActivity(activity)
-                orchestrator.markActivityLoaded()
-            }
-        }
-        ControlButton(
-            label = "Iniciar pregunta",
-            enabled = state == BimodalInteractionState.READY
-        ) {
-            dispatch { orchestrator.startSession() }
-        }
-        ControlButton(
-            label = "Rostro detectado (simulado)",
-            enabled = state == BimodalInteractionState.WAITING_FOR_FACE
-        ) {
-            dispatch { orchestrator.onFaceDetected() }
-        }
-        ControlButton(
-            label = "Iniciar escucha (simulada)",
-            enabled = state == BimodalInteractionState.PRESENTING_QUESTION
-        ) {
-            dispatch { orchestrator.startListening() }
-        }
-        ControlButton(
-            label = "Evaluar como correcta (simulado)",
-            enabled = canSimulateEval
-        ) {
-            semanticSource = SemanticSource.SIMULATED
-            semanticLatencyMs = null
-            dispatch {
-                // En LISTENING captura una transcripcion simulada; en EVALUATING (tras
-                // una captura real) este paso es inocuo y conserva la transcripcion real.
-                orchestrator.onSpeechCaptured(currentQuestion?.expectedAnswer ?: "respuesta correcta")
-                orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
-            }
-        }
-        ControlButton(
-            label = "Evaluar como incorrecta (simulado)",
-            enabled = canSimulateEval
-        ) {
-            semanticSource = SemanticSource.SIMULATED
-            semanticLatencyMs = null
-            dispatch {
-                orchestrator.onSpeechCaptured("respuesta incorrecta simulada")
-                orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
-            }
-        }
-        ControlButton(
-            label = "Evaluar como no interpretable (simulado)",
-            enabled = canSimulateEval
-        ) {
-            semanticSource = SemanticSource.SIMULATED
-            semanticLatencyMs = null
-            dispatch {
-                orchestrator.onSpeechCaptured("mmm")
-                orchestrator.onSemanticEvaluated(SemanticResult.NOT_INTERPRETABLE)
-            }
-        }
-        ControlButton(
-            label = "Simular sin respuesta",
-            enabled = canMarkNoResponse
-        ) {
-            semanticSource = SemanticSource.SIMULATED
-            semanticLatencyMs = null
-            dispatch { orchestrator.onNoResponse() }
-        }
-        ControlButton(
-            label = "Reintentar pregunta",
-            enabled = isFeedback && lastResult?.canRetry == true
-        ) {
-            dispatch { orchestrator.retryQuestion() }
-        }
-        ControlButton(
-            label = "Siguiente pregunta",
-            enabled = isFeedback || state == BimodalInteractionState.TIME_EXPIRED
-        ) {
-            dispatch { orchestrator.moveToNextQuestion() }
-        }
-        ControlButton(
-            label = "Finalizar sesión",
-            enabled = !isTerminal && state != BimodalInteractionState.IDLE
-        ) {
-            dispatch { orchestrator.completeSession() }
-        }
-        ControlButton(
-            label = "Cancelar sesión",
-            enabled = !isTerminal
-        ) {
-            dispatch { orchestrator.cancelSession() }
+        if (showTechnical) {
+            TechnicalSimulationControls(
+                state = state,
+                orchestrator = orchestrator,
+                activity = activity,
+                currentQuestion = currentQuestion,
+                lastResult = lastResult,
+                dispatch = { action -> dispatch(action) },
+                onSimulatedResult = {
+                    semanticSource = SemanticSource.SIMULATED
+                    semanticLatencyMs = null
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -962,6 +1096,157 @@ private fun ControlButton(label: String, enabled: Boolean, onClick: () -> Unit) 
             .padding(vertical = 2.dp)
     ) {
         Text(label)
+    }
+}
+
+/** Linea de estado con indicador de progreso, para los pasos automaticos del flujo. */
+@Composable
+private fun StatusLine(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(18.dp),
+            strokeWidth = 2.dp
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+    }
+}
+
+/**
+ * Controles tecnicos de simulacion del orquestador, separados del flujo real.
+ *
+ * Fuerzan transiciones del [BimodalFlowOrchestrator] sin sensores para depurar la
+ * maquina de estados. La evaluacion semantica real ya es automatica tras la
+ * transcripcion; estos botones solo existen para pruebas y marcan su resultado
+ * como simulado a traves de [onSimulatedResult].
+ */
+@Composable
+private fun TechnicalSimulationControls(
+    state: BimodalInteractionState,
+    orchestrator: BimodalFlowOrchestrator,
+    activity: LearningActivity,
+    currentQuestion: LearningQuestion?,
+    lastResult: BimodalInteractionResult?,
+    dispatch: (() -> Unit) -> Unit,
+    onSimulatedResult: () -> Unit
+) {
+    val isTerminal = state == BimodalInteractionState.SESSION_COMPLETED ||
+        state == BimodalInteractionState.SESSION_CANCELLED ||
+        state == BimodalInteractionState.ERROR
+    val isFeedback = state == BimodalInteractionState.FEEDBACK_CORRECT ||
+        state == BimodalInteractionState.FEEDBACK_INCORRECT ||
+        state == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ||
+        state == BimodalInteractionState.FEEDBACK_NO_RESPONSE
+    val canAnswer = state == BimodalInteractionState.LISTENING
+    // La evaluacion simulada tambien aplica tras una captura de voz real, que deja
+    // el flujo en EVALUATING a la espera del resultado semantico.
+    val canSimulateEval = canAnswer || state == BimodalInteractionState.EVALUATING
+    val canMarkNoResponse = state == BimodalInteractionState.PRESENTING_QUESTION ||
+        state == BimodalInteractionState.WAITING_FOR_RESPONSE ||
+        state == BimodalInteractionState.LISTENING
+
+    Text(
+        text = "Botones de simulación para depurar el orquestador sin sensores. " +
+            "Fuerzan un resultado concreto y se marcan como “simulada”; la " +
+            "evaluación semántica real ya es automática tras la transcripción.",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+
+    ControlButton(
+        label = "Iniciar sesión",
+        enabled = state == BimodalInteractionState.IDLE || isTerminal
+    ) {
+        dispatch {
+            orchestrator.loadActivity(activity)
+            orchestrator.markActivityLoaded()
+        }
+    }
+    ControlButton(
+        label = "Iniciar pregunta",
+        enabled = state == BimodalInteractionState.READY
+    ) {
+        dispatch { orchestrator.startSession() }
+    }
+    ControlButton(
+        label = "Rostro detectado (simulado)",
+        enabled = state == BimodalInteractionState.WAITING_FOR_FACE
+    ) {
+        dispatch { orchestrator.onFaceDetected() }
+    }
+    ControlButton(
+        label = "Iniciar escucha (simulada)",
+        enabled = state == BimodalInteractionState.PRESENTING_QUESTION
+    ) {
+        dispatch { orchestrator.startListening() }
+    }
+    ControlButton(
+        label = "Evaluar como correcta (simulado)",
+        enabled = canSimulateEval
+    ) {
+        onSimulatedResult()
+        dispatch {
+            // En LISTENING captura una transcripcion simulada; en EVALUATING (tras
+            // una captura real) este paso es inocuo y conserva la transcripcion real.
+            orchestrator.onSpeechCaptured(currentQuestion?.expectedAnswer ?: "respuesta correcta")
+            orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+        }
+    }
+    ControlButton(
+        label = "Evaluar como incorrecta (simulado)",
+        enabled = canSimulateEval
+    ) {
+        onSimulatedResult()
+        dispatch {
+            orchestrator.onSpeechCaptured("respuesta incorrecta simulada")
+            orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+        }
+    }
+    ControlButton(
+        label = "Evaluar como no interpretable (simulado)",
+        enabled = canSimulateEval
+    ) {
+        onSimulatedResult()
+        dispatch {
+            orchestrator.onSpeechCaptured("mmm")
+            orchestrator.onSemanticEvaluated(SemanticResult.NOT_INTERPRETABLE)
+        }
+    }
+    ControlButton(
+        label = "Simular sin respuesta",
+        enabled = canMarkNoResponse
+    ) {
+        onSimulatedResult()
+        dispatch { orchestrator.onNoResponse() }
+    }
+    ControlButton(
+        label = "Reintentar pregunta",
+        enabled = isFeedback && lastResult?.canRetry == true
+    ) {
+        dispatch { orchestrator.retryQuestion() }
+    }
+    ControlButton(
+        label = "Siguiente pregunta",
+        enabled = isFeedback || state == BimodalInteractionState.TIME_EXPIRED
+    ) {
+        dispatch { orchestrator.moveToNextQuestion() }
+    }
+    ControlButton(
+        label = "Finalizar sesión",
+        enabled = !isTerminal && state != BimodalInteractionState.IDLE
+    ) {
+        dispatch { orchestrator.completeSession() }
+    }
+    ControlButton(
+        label = "Cancelar sesión",
+        enabled = !isTerminal
+    ) {
+        dispatch { orchestrator.cancelSession() }
     }
 }
 
