@@ -7,6 +7,7 @@ data class ToyVoiceSettings(
     val localeTag: String? = null,
     val provider: ToyVoiceProviderType = ToyVoiceProviderType.LOCAL,
     val neuralVoiceId: String? = null,
+    val azureVoiceName: String? = null,
     val fallbackToLocal: Boolean = true,
     val updatedAt: Long = 0L
 )

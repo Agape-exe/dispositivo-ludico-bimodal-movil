@@ -45,6 +45,21 @@ android {
             "ELEVENLABS_VOICE_ID",
             "\"${localSecret("ELEVENLABS_VOICE_ID")}\""
         )
+        buildConfigField(
+            "String",
+            "AZURE_SPEECH_KEY",
+            "\"${localSecret("AZURE_SPEECH_KEY")}\""
+        )
+        buildConfigField(
+            "String",
+            "AZURE_SPEECH_REGION",
+            "\"${localSecret("AZURE_SPEECH_REGION")}\""
+        )
+        buildConfigField(
+            "String",
+            "AZURE_SPEECH_VOICE",
+            "\"${localSecret("AZURE_SPEECH_VOICE")}\""
+        )
     }
 
     buildTypes {

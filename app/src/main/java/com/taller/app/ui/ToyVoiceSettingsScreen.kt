@@ -44,6 +44,8 @@ import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceOutcome
+import com.taller.app.voice.neural.AzureSpeechConfig
+import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,6 +79,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     var providerType by remember { mutableStateOf(ToyVoiceProviderType.LOCAL) }
     var neuralVoiceId by remember { mutableStateOf("") }
+    var azureVoiceName by remember { mutableStateOf("") }
     var fallbackEnabled by remember { mutableStateOf(true) }
 
     var fieldsLoaded by remember { mutableStateOf(false) }
@@ -93,26 +96,35 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         pitch = pitch,
         provider = providerType,
         neuralVoiceId = neuralVoiceId.takeIf { it.isNotBlank() },
+        azureVoiceName = azureVoiceName.takeIf { it.isNotBlank() },
         fallbackToLocal = fallbackEnabled
     )
 
     val localProvider = remember {
         LocalToyVoiceProvider(service, ttsStateFlow) { buildCurrentSettings() }
     }
-    val neuralProvider = remember {
+    val azureProvider = remember {
+        AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(azureVoiceName) }
+    }
+    val elevenLabsProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
     }
 
-    val apiKeyPresent = remember { ElevenLabsConfig.apiKeyFromBuild().isNotBlank() }
-    val defaultVoiceId = remember { ElevenLabsConfig.defaultVoiceIdFromBuild() }
-    val effectiveVoiceId = neuralVoiceId.ifBlank { defaultVoiceId }
-    val neuralConfigured = apiKeyPresent && effectiveVoiceId.isNotBlank()
+    val azureKeyPresent = remember { AzureSpeechConfig.keyFromBuild().isNotBlank() }
+    val azureRegionPresent = remember { AzureSpeechConfig.regionFromBuild().isNotBlank() }
+    val azureConfigured = azureKeyPresent && azureRegionPresent
+
+    val elevenLabsApiKeyPresent = remember { ElevenLabsConfig.apiKeyFromBuild().isNotBlank() }
+    val elevenLabsDefaultVoiceId = remember { ElevenLabsConfig.defaultVoiceIdFromBuild() }
+    val effectiveElevenLabsVoiceId = neuralVoiceId.ifBlank { elevenLabsDefaultVoiceId }
+    val elevenLabsConfigured = elevenLabsApiKeyPresent && effectiveElevenLabsVoiceId.isNotBlank()
 
     DisposableEffect(Unit) {
         service.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
             service.shutdown()
-            neuralProvider.release()
+            azureProvider.release()
+            elevenLabsProvider.release()
         }
     }
 
@@ -123,6 +135,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             pitch = savedSettings.pitch
             providerType = savedSettings.provider
             neuralVoiceId = savedSettings.neuralVoiceId ?: ""
+            azureVoiceName = savedSettings.azureVoiceName ?: ""
             fallbackEnabled = savedSettings.fallbackToLocal
             fieldsLoaded = true
         }
@@ -144,14 +157,19 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     fun playPhrase(text: String) {
         if (playbackUi != PlaybackUi.IDLE) return
+        val selectedNeural = when (providerType) {
+            ToyVoiceProviderType.AZURE_NEURAL -> azureProvider
+            ToyVoiceProviderType.ELEVENLABS -> elevenLabsProvider
+            ToyVoiceProviderType.LOCAL -> localProvider
+        }
         scope.launch {
             playbackUi = PlaybackUi.GENERATING
             lastOutcome = null
             val outcome = ToyVoiceFallback.speak(
                 text = text,
-                useNeural = providerType == ToyVoiceProviderType.NEURAL,
+                useNeural = providerType != ToyVoiceProviderType.LOCAL,
                 allowFallback = fallbackEnabled,
-                neural = neuralProvider,
+                neural = selectedNeural,
                 local = localProvider,
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
@@ -161,7 +179,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     }
 
     fun stopPlayback() {
-        neuralProvider.stop()
+        azureProvider.stop()
+        elevenLabsProvider.stop()
         service.stop()
         playbackUi = PlaybackUi.IDLE
     }
@@ -203,6 +222,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
         ProviderSelectionSection(
             selected = providerType,
+            azureConfigured = azureConfigured,
             onSelected = {
                 providerType = it
                 applyAndSave()
@@ -211,21 +231,39 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        NeuralConfigSection(
-            apiKeyPresent = apiKeyPresent,
-            configured = neuralConfigured,
-            voiceId = neuralVoiceId,
-            defaultVoiceId = defaultVoiceId,
-            fallbackEnabled = fallbackEnabled,
-            onVoiceIdChange = { neuralVoiceId = it },
-            onVoiceIdCommit = { applyAndSave() },
-            onFallbackChange = {
-                fallbackEnabled = it
-                applyAndSave()
-            }
-        )
+        when (providerType) {
+            ToyVoiceProviderType.AZURE_NEURAL -> AzureConfigSection(
+                keyPresent = azureKeyPresent,
+                regionPresent = azureRegionPresent,
+                configured = azureConfigured,
+                voiceName = azureVoiceName,
+                fallbackEnabled = fallbackEnabled,
+                onVoiceNameChange = { azureVoiceName = it },
+                onVoiceNameCommit = { applyAndSave() },
+                onFallbackChange = {
+                    fallbackEnabled = it
+                    applyAndSave()
+                }
+            )
+            ToyVoiceProviderType.ELEVENLABS -> ElevenLabsConfigSection(
+                apiKeyPresent = elevenLabsApiKeyPresent,
+                configured = elevenLabsConfigured,
+                voiceId = neuralVoiceId,
+                defaultVoiceId = elevenLabsDefaultVoiceId,
+                fallbackEnabled = fallbackEnabled,
+                onVoiceIdChange = { neuralVoiceId = it },
+                onVoiceIdCommit = { applyAndSave() },
+                onFallbackChange = {
+                    fallbackEnabled = it
+                    applyAndSave()
+                }
+            )
+            ToyVoiceProviderType.LOCAL -> Unit
+        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        if (providerType != ToyVoiceProviderType.LOCAL) {
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         PlaybackStatusCard(
             providerType = providerType,
@@ -237,7 +275,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(16.dp))
 
         TestPhrasesSection(
-            enabled = playbackUi == PlaybackUi.IDLE && (providerType == ToyVoiceProviderType.NEURAL || localReady),
+            enabled = playbackUi == PlaybackUi.IDLE && (providerType != ToyVoiceProviderType.LOCAL || localReady),
             isPlaying = playbackUi != PlaybackUi.IDLE,
             onSpeak = { text -> playPhrase(text) },
             onStop = { stopPlayback() }
@@ -315,6 +353,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun ProviderSelectionSection(
     selected: ToyVoiceProviderType,
+    azureConfigured: Boolean,
     onSelected: (ToyVoiceProviderType) -> Unit
 ) {
     Card(
@@ -340,10 +379,19 @@ private fun ProviderSelectionSection(
             Spacer(modifier = Modifier.height(4.dp))
 
             ProviderOption(
-                title = "Voz neural (más natural)",
-                description = "Genera audio más expresivo por internet. Requiere configuración.",
-                isSelected = selected == ToyVoiceProviderType.NEURAL,
-                onClick = { onSelected(ToyVoiceProviderType.NEURAL) }
+                title = "Azure Neural" + if (azureConfigured) " (recomendado)" else " — sin configurar",
+                description = "Microsoft Azure Cognitive Services. Voz neural en español, alta calidad.",
+                isSelected = selected == ToyVoiceProviderType.AZURE_NEURAL,
+                onClick = { onSelected(ToyVoiceProviderType.AZURE_NEURAL) }
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            ProviderOption(
+                title = "ElevenLabs (opcional)",
+                description = "Requiere suscripción activa con créditos disponibles.",
+                isSelected = selected == ToyVoiceProviderType.ELEVENLABS,
+                onClick = { onSelected(ToyVoiceProviderType.ELEVENLABS) }
             )
         }
     }
@@ -400,7 +448,98 @@ private fun ProviderOption(
 }
 
 @Composable
-private fun NeuralConfigSection(
+private fun AzureConfigSection(
+    keyPresent: Boolean,
+    regionPresent: Boolean,
+    configured: Boolean,
+    voiceName: String,
+    fallbackEnabled: Boolean,
+    onVoiceNameChange: (String) -> Unit,
+    onVoiceNameCommit: () -> Unit,
+    onFallbackChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Configuración de Azure Speech",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val statusColor = if (configured) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            }
+            Text(
+                text = if (configured) "Configurado correctamente." else "Faltan credenciales.",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = statusColor
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = if (keyPresent) "Clave detectada en la configuración local." else "Falta AZURE_SPEECH_KEY en local.properties.",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (keyPresent) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = if (regionPresent) "Región detectada en la configuración local." else "Falta AZURE_SPEECH_REGION en local.properties.",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (regionPresent) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+            )
+
+            if (!configured) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Agrega las credenciales en local.properties y recompila. Sin credenciales se usará la voz local como respaldo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = voiceName,
+                onValueChange = onVoiceNameChange,
+                label = { Text("Nombre de voz (opcional)") },
+                placeholder = { Text("es-PE-AlexNeural") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "Déjalo vacío para usar el valor de AZURE_SPEECH_VOICE o es-PE-AlexNeural por defecto.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onVoiceNameCommit,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guardar nombre de voz")
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            FallbackSwitch(enabled = fallbackEnabled, onChanged = onFallbackChange)
+        }
+    }
+}
+
+@Composable
+private fun ElevenLabsConfigSection(
     apiKeyPresent: Boolean,
     configured: Boolean,
     voiceId: String,
@@ -416,21 +555,20 @@ private fun NeuralConfigSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Configuración de voz neural",
+                text = "Configuración de ElevenLabs",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            val statusLabel = if (configured) "Configurado" else "No configurado"
             val statusColor = if (configured) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.error
             }
             Text(
-                text = "Estado del proveedor neural: $statusLabel",
+                text = if (configured) "Configurado." else "No configurado.",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = statusColor
@@ -440,9 +578,9 @@ private fun NeuralConfigSection(
 
             Text(
                 text = if (apiKeyPresent) {
-                    "Credencial detectada en la configuración local."
+                    "Credencial detectada. Asegúrate de tener créditos disponibles."
                 } else {
-                    "Falta la credencial. Configúrala localmente (local.properties o variable de entorno) y vuelve a compilar."
+                    "Falta ELEVENLABS_API_KEY en local.properties."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -481,25 +619,30 @@ private fun NeuralConfigSection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Respaldo automático a voz local",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "Si la voz neural falla, se usa la voz local.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(checked = fallbackEnabled, onCheckedChange = onFallbackChange)
-            }
+            FallbackSwitch(enabled = fallbackEnabled, onChanged = onFallbackChange)
         }
+    }
+}
+
+@Composable
+private fun FallbackSwitch(enabled: Boolean, onChanged: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Respaldo automático a voz local",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "Si la voz neural falla, se usa la voz local.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = enabled, onCheckedChange = onChanged)
     }
 }
 
@@ -512,7 +655,8 @@ private fun PlaybackStatusCard(
 ) {
     val providerLabel = when (providerType) {
         ToyVoiceProviderType.LOCAL -> "Voz local"
-        ToyVoiceProviderType.NEURAL -> "Voz neural"
+        ToyVoiceProviderType.AZURE_NEURAL -> "Azure Neural"
+        ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
     }
 
     val (statusLine, statusColor) = when (playbackUi) {
