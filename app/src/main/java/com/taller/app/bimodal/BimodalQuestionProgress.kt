@@ -3,6 +3,16 @@ package com.taller.app.bimodal
 import com.taller.app.semantic.SemanticResult
 
 /**
+ * Tiempo maximo de respuesta seguro por defecto (segundos), usado cuando la
+ * pregunta no define un [LearningQuestion.maxTimeSeconds] valido. Evita dejar la
+ * ventana de respuesta abierta indefinidamente.
+ */
+const val DEFAULT_MAX_TIME_SECONDS: Int = 20
+
+/** Rango aceptado de tiempo maximo de respuesta (segundos). */
+val VALID_MAX_TIME_RANGE: IntRange = 1..600
+
+/**
  * Instantanea del progreso de la sesion bimodal.
  *
  * Describe la actividad en curso, la pregunta actual, el intento vigente y los
@@ -32,4 +42,12 @@ data class BimodalQuestionProgress(
 
     /** Indica si todavia quedan intentos disponibles en la pregunta actual. */
     val hasAttemptsLeft: Boolean get() = currentAttempt < maxAttempts
+
+    /**
+     * Tiempo maximo efectivo para responder esta pregunta: usa
+     * [maxTimeSeconds] si esta dentro de [VALID_MAX_TIME_RANGE]; de lo contrario
+     * recurre a [DEFAULT_MAX_TIME_SECONDS]. Garantiza un temporizador acotado.
+     */
+    val effectiveMaxTimeSeconds: Int
+        get() = if (maxTimeSeconds in VALID_MAX_TIME_RANGE) maxTimeSeconds else DEFAULT_MAX_TIME_SECONDS
 }

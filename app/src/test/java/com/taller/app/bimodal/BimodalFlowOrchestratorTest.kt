@@ -191,4 +191,173 @@ class BimodalFlowOrchestratorTest {
         assertEquals(BimodalInteractionState.FEEDBACK_NO_RESPONSE, orchestrator.state)
         assertEquals(SemanticResult.NO_RESPONSE, orchestrator.lastResult?.semanticResult)
     }
+
+    @Test
+    fun notInterpretableWithoutAttemptsLeft_advancesToNextQuestion() {
+        load(activity(question("q1", maxAttempts = 1), question("q2")))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("mmm")
+        orchestrator.onSemanticEvaluated(SemanticResult.NOT_INTERPRETABLE)
+
+        assertEquals(BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE, orchestrator.state)
+        assertFalse(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.WAITING_FOR_FACE, orchestrator.state)
+        assertEquals(1, orchestrator.progress?.currentQuestionIndex)
+    }
+
+    @Test
+    fun noResponseWithAttemptsLeft_allowsRetry() {
+        load(activity(question("q1", maxAttempts = 2)))
+
+        reachListening()
+        orchestrator.onNoResponse()
+
+        assertEquals(BimodalInteractionState.FEEDBACK_NO_RESPONSE, orchestrator.state)
+        assertTrue(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.retryQuestion()
+        assertEquals(BimodalInteractionState.PRESENTING_QUESTION, orchestrator.state)
+        assertEquals(2, orchestrator.progress?.currentAttempt)
+    }
+
+    @Test
+    fun noResponseWithoutAttemptsLeft_advancesToNextQuestion() {
+        load(activity(question("q1", maxAttempts = 1), question("q2")))
+
+        reachListening()
+        orchestrator.onNoResponse()
+
+        assertEquals(BimodalInteractionState.FEEDBACK_NO_RESPONSE, orchestrator.state)
+        assertFalse(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.WAITING_FOR_FACE, orchestrator.state)
+        assertEquals(1, orchestrator.progress?.currentQuestionIndex)
+    }
+
+    @Test
+    fun timeExpiredWithAttemptsLeft_allowsRetry() {
+        load(activity(question("q1", maxAttempts = 2)))
+
+        reachListening()
+        orchestrator.onTimeExpired()
+
+        assertEquals(BimodalInteractionState.TIME_EXPIRED, orchestrator.state)
+        assertTrue(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.retryQuestion()
+        assertEquals(BimodalInteractionState.PRESENTING_QUESTION, orchestrator.state)
+        assertEquals(2, orchestrator.progress?.currentAttempt)
+    }
+
+    @Test
+    fun timeExpiredWithoutAttemptsLeft_advancesToNextQuestion() {
+        load(activity(question("q1", maxAttempts = 1), question("q2")))
+
+        reachListening()
+        orchestrator.onTimeExpired()
+
+        assertEquals(BimodalInteractionState.TIME_EXPIRED, orchestrator.state)
+        assertFalse(orchestrator.lastResult!!.canRetry)
+
+        // Sin intentos, el reintento desde tiempo agotado no debe tener efecto.
+        orchestrator.retryQuestion()
+        assertEquals(BimodalInteractionState.TIME_EXPIRED, orchestrator.state)
+
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.WAITING_FOR_FACE, orchestrator.state)
+        assertEquals(1, orchestrator.progress?.currentQuestionIndex)
+    }
+
+    @Test
+    fun technicalError_isNotClassifiedAsIncorrect_andAllowsRetry() {
+        load(activity(question("q1", maxAttempts = 2)))
+
+        reachListening()
+        orchestrator.reportRecoverableError("fallo de voz")
+
+        assertEquals(BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR, orchestrator.state)
+        // No es la respuesta del nino: sin resultado semantico y nunca incorrecta.
+        assertNull(orchestrator.lastResult!!.semanticResult)
+        assertEquals("fallo de voz", orchestrator.errorMessage)
+        assertTrue(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.retryQuestion()
+        assertEquals(BimodalInteractionState.PRESENTING_QUESTION, orchestrator.state)
+        assertEquals(2, orchestrator.progress?.currentAttempt)
+        // El mensaje de error se limpia al reintentar.
+        assertNull(orchestrator.errorMessage)
+    }
+
+    @Test
+    fun technicalErrorWithoutAttemptsLeft_advancesToNextQuestion() {
+        load(activity(question("q1", maxAttempts = 1), question("q2")))
+
+        reachListening()
+        orchestrator.reportRecoverableError("fallo de voz")
+
+        assertEquals(BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR, orchestrator.state)
+        assertFalse(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.WAITING_FOR_FACE, orchestrator.state)
+        assertEquals(1, orchestrator.progress?.currentQuestionIndex)
+        assertNull(orchestrator.errorMessage)
+    }
+
+    @Test
+    fun speechFailed_whileListening_producesTechnicalError() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechFailed("reconocedor ocupado")
+
+        assertEquals(BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR, orchestrator.state)
+        assertNull(orchestrator.lastResult!!.semanticResult)
+    }
+
+    @Test
+    fun sessionSummary_countsOutcomesAndAttempts() {
+        load(activity(question("q1", maxAttempts = 2), question("q2", maxAttempts = 1)))
+
+        // q1: incorrecta (intento 1) -> reintento -> correcta (intento 2).
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+        orchestrator.retryQuestion()
+        orchestrator.startListening()
+        orchestrator.onSpeechCaptured("respuesta")
+        orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+        orchestrator.moveToNextQuestion()
+
+        // q2: sin respuesta (intento 1, sin mas intentos) -> avanza y finaliza.
+        orchestrator.onFaceDetected()
+        orchestrator.startListening()
+        orchestrator.onNoResponse()
+        orchestrator.moveToNextQuestion()
+
+        assertEquals(BimodalInteractionState.SESSION_COMPLETED, orchestrator.state)
+        val summary = orchestrator.summary
+        assertEquals(2, summary.resolvedQuestions)
+        assertEquals(1, summary.correct)
+        assertEquals(0, summary.incorrect)
+        assertEquals(1, summary.noResponse)
+        // q1 consumio 2 intentos, q2 consumio 1.
+        assertEquals(3, summary.totalAttempts)
+    }
+
+    @Test
+    fun progress_resolvesEffectiveMaxTimeWithSafeDefault() {
+        // maxTimeSeconds invalido (0) -> usa el valor seguro por defecto.
+        load(activity(question("q1", maxTimeSeconds = 0)))
+        assertEquals(DEFAULT_MAX_TIME_SECONDS, orchestrator.progress?.effectiveMaxTimeSeconds)
+
+        // maxTimeSeconds valido -> se respeta.
+        setUp()
+        load(activity(question("q2", maxTimeSeconds = 25)))
+        assertEquals(25, orchestrator.progress?.effectiveMaxTimeSeconds)
+    }
 }
