@@ -42,7 +42,8 @@ fun MainScreen(
     onNavigateToSpeechTest: () -> Unit,
     onNavigateToSemanticTest: () -> Unit,
     onNavigateToTeacherActivities: () -> Unit,
-    onNavigateToToyVoiceSettings: () -> Unit
+    onNavigateToToyVoiceSettings: () -> Unit,
+    onNavigateToBimodal: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -189,9 +190,18 @@ fun MainScreen(
 
         Button(
             onClick = onNavigateToToyVoiceSettings,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
         ) {
             Text("Configurar voz del juguete")
+        }
+
+        Button(
+            onClick = onNavigateToBimodal,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Modo bimodal inteligente")
         }
     }
 }

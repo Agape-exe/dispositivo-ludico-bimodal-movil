@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.taller.app.ui.BimodalInteractionScreen
 import com.taller.app.ui.FaceDetectionScreen
 import com.taller.app.ui.MainScreen
 import com.taller.app.ui.Screen
@@ -31,7 +32,11 @@ class MainActivity : ComponentActivity() {
                         onNavigateToSpeechTest = { currentScreen = Screen.SPEECH_TEST },
                         onNavigateToSemanticTest = { currentScreen = Screen.SEMANTIC_TEST },
                         onNavigateToTeacherActivities = { currentScreen = Screen.TEACHER_ACTIVITIES },
-                        onNavigateToToyVoiceSettings = { currentScreen = Screen.TOY_VOICE_SETTINGS }
+                        onNavigateToToyVoiceSettings = { currentScreen = Screen.TOY_VOICE_SETTINGS },
+                        onNavigateToBimodal = {
+                            selectedActivityId = 0L
+                            currentScreen = Screen.BIMODAL_INTERACTION
+                        }
                     )
                     Screen.FACE_DETECTION -> FaceDetectionScreen(
                         onBack = { currentScreen = Screen.MAIN }
@@ -54,6 +59,10 @@ class MainActivity : ComponentActivity() {
                         onBack = { currentScreen = Screen.TEACHER_ACTIVITIES }
                     )
                     Screen.TOY_VOICE_SETTINGS -> ToyVoiceSettingsScreen(
+                        onBack = { currentScreen = Screen.MAIN }
+                    )
+                    Screen.BIMODAL_INTERACTION -> BimodalInteractionScreen(
+                        activityId = selectedActivityId,
                         onBack = { currentScreen = Screen.MAIN }
                     )
                 }
