@@ -52,6 +52,15 @@ enum class BimodalInteractionState {
     /** Retroalimentacion: no hubo respuesta. */
     FEEDBACK_NO_RESPONSE,
 
+    /**
+     * Retroalimentacion: error tecnico recuperable durante la pregunta (fallo de
+     * reconocimiento de voz, de evaluacion semantica o de la voz del juguete).
+     *
+     * A diferencia de [ERROR] no es terminal: la respuesta del nino no se clasifica
+     * como incorrecta y, si quedan intentos, la pregunta puede reintentarse.
+     */
+    FEEDBACK_TECHNICAL_ERROR,
+
     /** Se agoto el tiempo maximo para responder. */
     TIME_EXPIRED,
 

@@ -58,6 +58,14 @@ sealed class BimodalInteractionEvent {
     /** Cancela la sesion en curso. */
     object CancelSession : BimodalInteractionEvent()
 
-    /** Reporta un error tecnico que interrumpe el flujo. */
+    /** Reporta un error tecnico fatal que interrumpe el flujo (estado terminal). */
     data class TechnicalError(val message: String) : BimodalInteractionEvent()
+
+    /**
+     * Reporta un error tecnico recuperable ocurrido durante la pregunta actual
+     * (fallo de voz, de evaluacion semantica o de la voz del juguete). No clasifica
+     * la respuesta como incorrecta ni cancela la sesion: permite reintentar si
+     * quedan intentos o avanzar en caso contrario.
+     */
+    data class RecoverableError(val message: String) : BimodalInteractionEvent()
 }

@@ -30,8 +30,16 @@ class BimodalFlowOrchestrator(
     var lastResult: BimodalInteractionResult? = null
         private set
 
-    /** Mensaje asociado al estado [BimodalInteractionState.ERROR], si lo hay. */
+    /**
+     * Mensaje asociado a un estado de error: terminal
+     * ([BimodalInteractionState.ERROR]) o recuperable
+     * ([BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR]).
+     */
     var errorMessage: String? = null
+        private set
+
+    /** Resumen tecnico en memoria de la sesion en curso. */
+    var summary: BimodalSessionSummary = BimodalSessionSummary()
         private set
 
     /** Listener opcional que recibe cada estado por el que pasa el flujo. */
@@ -58,7 +66,7 @@ class BimodalFlowOrchestrator(
             BimodalInteractionEvent.FaceLost -> handleFaceLost()
             BimodalInteractionEvent.StartListening -> handleStartListening()
             is BimodalInteractionEvent.SpeechCaptured -> handleSpeechCaptured(event.transcription)
-            is BimodalInteractionEvent.SpeechFailed -> handleSpeechFailed()
+            is BimodalInteractionEvent.SpeechFailed -> handleSpeechFailed(event.reason)
             BimodalInteractionEvent.NoResponse -> handleNoResponse()
             BimodalInteractionEvent.TimeExpired -> handleTimeExpired()
             is BimodalInteractionEvent.SemanticEvaluated -> handleSemanticEvaluated(event.result)
@@ -67,6 +75,7 @@ class BimodalFlowOrchestrator(
             BimodalInteractionEvent.CompleteSession -> handleCompleteSession()
             BimodalInteractionEvent.CancelSession -> handleCancelSession()
             is BimodalInteractionEvent.TechnicalError -> handleTechnicalError(event.message)
+            is BimodalInteractionEvent.RecoverableError -> handleRecoverableError(event.message)
         }
     }
 
@@ -108,6 +117,9 @@ class BimodalFlowOrchestrator(
 
     fun reportTechnicalError(message: String) =
         onEvent(BimodalInteractionEvent.TechnicalError(message))
+
+    fun reportRecoverableError(message: String) =
+        onEvent(BimodalInteractionEvent.RecoverableError(message))
 
     // ----- Event handlers ------------------------------------------------------
 
@@ -177,9 +189,11 @@ class BimodalFlowOrchestrator(
         transition(BimodalInteractionState.EVALUATING)
     }
 
-    private fun handleSpeechFailed() {
+    private fun handleSpeechFailed(reason: String?) {
         if (state != BimodalInteractionState.LISTENING) return
-        applyResponseResult(SemanticResult.NOT_INTERPRETABLE)
+        // Un fallo del reconocedor es un problema tecnico, no una respuesta del
+        // nino: no se clasifica como incorrecta ni como no interpretable.
+        applyRecoverableError(reason ?: "No se pudo procesar la voz.")
     }
 
     private fun handleNoResponse() {
@@ -213,15 +227,19 @@ class BimodalFlowOrchestrator(
 
     private fun handleRetryQuestion() {
         val result = lastResult
-        if (!isFeedbackState(state) || result == null || !result.canRetry) return
+        if (!isResolvedQuestionState(state) || result == null || !result.canRetry) return
         currentAttempt += 1
         lastTranscription = null
+        lastSemanticResult = null
+        errorMessage = null
         updateProgress()
         presentCurrentQuestion()
     }
 
     private fun handleMoveToNextQuestion() {
-        if (!isFeedbackState(state) && state != BimodalInteractionState.TIME_EXPIRED) return
+        if (!isResolvedQuestionState(state)) return
+        recordCurrentQuestionOutcome()
+        errorMessage = null
         transition(BimodalInteractionState.NEXT_QUESTION)
         if (currentIndex >= questions.lastIndex) {
             transition(BimodalInteractionState.SESSION_COMPLETED)
@@ -250,6 +268,20 @@ class BimodalFlowOrchestrator(
         fail(message)
     }
 
+    private fun handleRecoverableError(message: String) {
+        // Solo tiene sentido durante una pregunta en curso; en cualquier otro
+        // estado se ignora para no corromper el flujo.
+        when (state) {
+            BimodalInteractionState.FACE_DETECTED,
+            BimodalInteractionState.PRESENTING_QUESTION,
+            BimodalInteractionState.WAITING_FOR_RESPONSE,
+            BimodalInteractionState.LISTENING,
+            BimodalInteractionState.TRANSCRIBING,
+            BimodalInteractionState.EVALUATING -> applyRecoverableError(message)
+            else -> Unit
+        }
+    }
+
     // ----- Internal logic ------------------------------------------------------
 
     private fun presentCurrentQuestion() {
@@ -266,7 +298,16 @@ class BimodalFlowOrchestrator(
         transition(feedbackState)
     }
 
-    private fun buildResult(result: SemanticResult, feedbackState: BimodalInteractionState) {
+    private fun applyRecoverableError(message: String) {
+        // No es la respuesta del nino: el resultado semantico queda nulo. La
+        // pregunta puede reintentarse si aun quedan intentos disponibles.
+        errorMessage = message
+        buildResult(result = null, feedbackState = BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR)
+        updateProgress()
+        transition(BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR)
+    }
+
+    private fun buildResult(result: SemanticResult?, feedbackState: BimodalInteractionState) {
         val question = currentQuestion() ?: return
         val canRetry = result != SemanticResult.CORRECT &&
             currentAttempt < question.maxAttempts
@@ -308,6 +349,27 @@ class BimodalFlowOrchestrator(
         progress = null
         lastResult = null
         errorMessage = null
+        summary = BimodalSessionSummary()
+    }
+
+    /**
+     * Registra en el resumen el desenlace final de la pregunta actual segun el
+     * estado resuelto vigente, sumando los intentos consumidos. Se invoca una sola
+     * vez por pregunta, justo antes de avanzar o finalizar.
+     */
+    private fun recordCurrentQuestionOutcome() {
+        val category = when (state) {
+            BimodalInteractionState.FEEDBACK_CORRECT -> BimodalOutcomeCategory.CORRECT
+            BimodalInteractionState.FEEDBACK_INCORRECT -> BimodalOutcomeCategory.INCORRECT
+            BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ->
+                BimodalOutcomeCategory.NOT_INTERPRETABLE
+            BimodalInteractionState.FEEDBACK_NO_RESPONSE -> BimodalOutcomeCategory.NO_RESPONSE
+            BimodalInteractionState.TIME_EXPIRED -> BimodalOutcomeCategory.TIME_EXPIRED
+            BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR ->
+                BimodalOutcomeCategory.TECHNICAL_ERROR
+            else -> return
+        }
+        summary = summary.recording(category, attemptsUsed = currentAttempt)
     }
 
     private fun currentQuestion(): LearningQuestion? = questions.getOrNull(currentIndex)
@@ -341,7 +403,16 @@ class BimodalFlowOrchestrator(
         value == BimodalInteractionState.FEEDBACK_CORRECT ||
             value == BimodalInteractionState.FEEDBACK_INCORRECT ||
             value == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ||
-            value == BimodalInteractionState.FEEDBACK_NO_RESPONSE
+            value == BimodalInteractionState.FEEDBACK_NO_RESPONSE ||
+            value == BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR
+
+    /**
+     * Estados en los que la pregunta actual ya tiene un desenlace y admite
+     * reintentar (si quedan intentos) o avanzar: retroalimentaciones y tiempo
+     * agotado.
+     */
+    private fun isResolvedQuestionState(value: BimodalInteractionState): Boolean =
+        isFeedbackState(value) || value == BimodalInteractionState.TIME_EXPIRED
 
     private fun isTerminal(value: BimodalInteractionState): Boolean =
         value == BimodalInteractionState.SESSION_COMPLETED ||

@@ -58,6 +58,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionResult
 import com.taller.app.bimodal.BimodalInteractionState
+import com.taller.app.bimodal.BimodalSessionSummary
+import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
@@ -308,6 +310,7 @@ private fun BimodalSession(
     var progress by remember(activity) { mutableStateOf(orchestrator.progress) }
     var lastResult by remember(activity) { mutableStateOf(orchestrator.lastResult) }
     var errorMessage by remember(activity) { mutableStateOf(orchestrator.errorMessage) }
+    var summary by remember(activity) { mutableStateOf(orchestrator.summary) }
 
     // Origen del ultimo resultado semantico mostrado (evaluacion real vs. control
     // tecnico de simulacion) y latencia aproximada de la evaluacion real, para
@@ -320,6 +323,7 @@ private fun BimodalSession(
         progress = orchestrator.progress
         lastResult = orchestrator.lastResult
         errorMessage = orchestrator.errorMessage
+        summary = orchestrator.summary
     }
 
     fun dispatch(action: () -> Unit) {
@@ -453,16 +457,24 @@ private fun BimodalSession(
         semanticLatencyMs = null
     }
 
-    // Tope de tiempo simple: si la pregunta define maxTimeSeconds, detiene la
-    // escucha al cumplirse para no dejar el microfono abierto indefinidamente.
-    // El efecto se cancela solo al cambiar sttState (incluido el fin de la escucha).
+    // Tope de tiempo de respuesta: arranca al comenzar la escucha y usa el tiempo
+    // maximo efectivo de la pregunta (con valor seguro por defecto si no define uno
+    // valido). Al cumplirse, suprime el desenlace de captura, detiene la escucha y
+    // marca TIME_EXPIRED en el orquestador, que decidira reintento o avance segun
+    // los intentos disponibles. Un unico efecto por ventana de escucha: se re-lanza
+    // al cambiar sttState (incluido cada reintento) y se cancela al salir de
+    // LISTENING, al cambiar de pregunta o al abandonar la pantalla, evitando
+    // temporizadores duplicados o colgados.
     LaunchedEffect(sttState) {
-        if (sttState == SttState.LISTENING) {
-            val seconds = progress?.maxTimeSeconds ?: 0
-            if (seconds in 1..600) {
-                delay(seconds * 1000L)
-                speechService.stopListening()
-            }
+        if (sttState != SttState.LISTENING) return@LaunchedEffect
+        val seconds = progress?.effectiveMaxTimeSeconds ?: DEFAULT_MAX_TIME_SECONDS
+        delay(seconds * 1000L)
+        // Evita que el desenlace de captura (onStopped/onError) tambien resuelva el
+        // intento: el tiempo agotado tiene prioridad y se trata como tal.
+        outcomeDelivered.value = true
+        speechService.stopListening()
+        if (orchestrator.state == BimodalInteractionState.LISTENING) {
+            dispatch { orchestrator.onTimeExpired() }
         }
     }
 
@@ -507,7 +519,14 @@ private fun BimodalSession(
         val question = currentQuestion
         if (transcription == null || question == null) return@LaunchedEffect
 
-        val outcome = semanticAdapter.evaluate(transcription, question)
+        // Si el evaluador semantico fallara, no se cancela la sesion ni se marca la
+        // respuesta como incorrecta: se reporta como error tecnico recuperable.
+        val outcome = runCatching { semanticAdapter.evaluate(transcription, question) }
+            .getOrNull()
+        if (outcome == null) {
+            dispatch { orchestrator.reportRecoverableError("No se pudo evaluar la respuesta.") }
+            return@LaunchedEffect
+        }
         semanticSource = SemanticSource.REAL
         semanticLatencyMs = outcome.latencyMillis
         dispatch { orchestrator.onEvent(outcome.toEvent()) }
@@ -982,7 +1001,8 @@ private fun BimodalSession(
         val isFeedbackState = state == BimodalInteractionState.FEEDBACK_CORRECT ||
             state == BimodalInteractionState.FEEDBACK_INCORRECT ||
             state == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ||
-            state == BimodalInteractionState.FEEDBACK_NO_RESPONSE
+            state == BimodalInteractionState.FEEDBACK_NO_RESPONSE ||
+            state == BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR
         if (isFeedbackState || state == BimodalInteractionState.TIME_EXPIRED) {
             Spacer(modifier = Modifier.height(8.dp))
             val canRetry = lastResult?.canRetry == true
@@ -1005,6 +1025,15 @@ private fun BimodalSession(
                         text = feedbackMessage(state, canRetry),
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    if (state == BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR &&
+                        !errorMessage.isNullOrBlank()
+                    ) {
+                        Text(
+                            text = "Detalle técnico: $errorMessage",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     if (canRetry) {
                         Button(
                             onClick = { dispatch { orchestrator.retryQuestion() } },
@@ -1029,6 +1058,16 @@ private fun BimodalSession(
         if (state == BimodalInteractionState.ERROR && errorMessage != null) {
             Spacer(modifier = Modifier.height(8.dp))
             InfoBanner("Error: $errorMessage")
+        }
+
+        // Resumen tecnico de la sesion al finalizar (solo conteos, sin datos del
+        // nino ni multimedia). Se muestra al completar o cancelar la interaccion.
+        if ((state == BimodalInteractionState.SESSION_COMPLETED ||
+                state == BimodalInteractionState.SESSION_CANCELLED) &&
+            summary.resolvedQuestions > 0
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+            SessionSummaryCard(summary)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -1223,6 +1262,20 @@ private fun TechnicalSimulationControls(
     ) {
         onSimulatedResult()
         dispatch { orchestrator.onNoResponse() }
+    }
+    ControlButton(
+        label = "Simular tiempo agotado",
+        enabled = canMarkNoResponse
+    ) {
+        onSimulatedResult()
+        dispatch { orchestrator.onTimeExpired() }
+    }
+    ControlButton(
+        label = "Simular error técnico",
+        enabled = canMarkNoResponse || state == BimodalInteractionState.EVALUATING
+    ) {
+        onSimulatedResult()
+        dispatch { orchestrator.reportRecoverableError("Error técnico simulado.") }
     }
     ControlButton(
         label = "Reintentar pregunta",
@@ -1464,6 +1517,40 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+/**
+ * Tarjeta con el resumen tecnico de la sesion (conteos por categoria de
+ * desenlace y total de intentos). No muestra transcripciones, audios ni datos
+ * del nino: solo metricas tecnicas del flujo.
+ */
+@Composable
+private fun SessionSummaryCard(summary: BimodalSessionSummary) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "Resumen de la sesión",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+            InfoRow("Preguntas resueltas", summary.resolvedQuestions.toString())
+            InfoRow("Correctas", summary.correct.toString())
+            InfoRow("Incorrectas", summary.incorrect.toString())
+            InfoRow("No interpretables", summary.notInterpretable.toString())
+            InfoRow("Sin respuesta", summary.noResponse.toString())
+            InfoRow("Tiempos agotados", summary.timeExpired.toString())
+            InfoRow("Errores técnicos", summary.technicalErrors.toString())
+            InfoRow("Intentos usados", summary.totalAttempts.toString())
+        }
+    }
+}
+
 @Composable
 private fun InfoBanner(message: String) {
     Card(
@@ -1497,6 +1584,7 @@ private fun stateLabel(state: BimodalInteractionState): String = when (state) {
     BimodalInteractionState.FEEDBACK_INCORRECT -> "Respuesta incorrecta"
     BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE -> "Respuesta no interpretable"
     BimodalInteractionState.FEEDBACK_NO_RESPONSE -> "Sin respuesta"
+    BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR -> "Error técnico"
     BimodalInteractionState.TIME_EXPIRED -> "Tiempo agotado"
     BimodalInteractionState.NEXT_QUESTION -> "Siguiente pregunta"
     BimodalInteractionState.SESSION_COMPLETED -> "Sesión finalizada"
@@ -1545,8 +1633,14 @@ private fun feedbackMessage(state: BimodalInteractionState, canRetry: Boolean): 
         BimodalInteractionState.FEEDBACK_NO_RESPONSE ->
             if (canRetry) "No se recibió respuesta. Escucha de nuevo."
             else "No se recibió respuesta. Sin intentos restantes: avanza."
+        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR ->
+            if (canRetry) "Ocurrió un problema técnico al procesar la respuesta. " +
+                "No cuenta como error del niño: inténtalo de nuevo."
+            else "Ocurrió un problema técnico al procesar la respuesta. " +
+                "Sin intentos restantes: avanza a la siguiente."
         BimodalInteractionState.TIME_EXPIRED ->
-            "Se agotó el tiempo para responder. Avanza a la siguiente pregunta."
+            if (canRetry) "Se agotó el tiempo para responder. Aún quedan intentos: escucha de nuevo."
+            else "Se agotó el tiempo para responder. Sin intentos restantes: avanza."
         else -> ""
     }
 
