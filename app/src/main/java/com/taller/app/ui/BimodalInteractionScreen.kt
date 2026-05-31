@@ -59,6 +59,7 @@ import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionResult
 import com.taller.app.bimodal.BimodalInteractionState
 import com.taller.app.bimodal.BimodalSessionSummary
+import com.taller.app.bimodal.BimodalVoiceFeedback
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
@@ -560,8 +561,15 @@ private fun BimodalSession(
         }
     }
 
-    // Indica si el juguete esta leyendo la pregunta en este momento (para la UI).
+    // Indica si el juguete esta reproduciendo voz en este momento (para la UI).
     var toyVoiceSpeaking by remember(activity) { mutableStateOf(false) }
+
+    // Ultima frase reproducida por el juguete (para mostrarla en la UI).
+    var lastSpokenPhrase by remember(activity) { mutableStateOf<String?>(null) }
+
+    // Guarda los indices de pregunta para los que ya se anuncio WAITING_FOR_FACE,
+    // evitando repetir la frase si el rostro se pierde y vuelve en la misma pregunta.
+    val lastAnnouncedWaitingFaceIndex = remember(activity) { intArrayOf(-1) }
 
     // Cuando el flujo presenta una pregunta, el juguete la lee y, al terminar,
     // abre automaticamente la escucha si hay permiso de microfono. La clave cambia
@@ -579,6 +587,7 @@ private fun BimodalSession(
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
             ToyVoiceProviderType.LOCAL -> localVoiceProvider
         }
+        lastSpokenPhrase = "${ToySpeechPhrase.QUESTION_INTRO.text} $questionText"
         toyVoiceSpeaking = true
         try {
             // Si la voz no esta disponible no se interrumpe el flujo: el resultado
@@ -600,6 +609,69 @@ private fun BimodalSession(
         } finally {
             // Si el efecto se cancela (cambio de estado/pregunta) corta el audio
             // pendiente para no solaparlo con la escucha o la siguiente pregunta.
+            azureVoiceProvider.stop()
+            elevenLabsVoiceProvider.stop()
+            toySpeechService.stop()
+            toyVoiceSpeaking = false
+        }
+    }
+
+    // ----- Retroalimentacion auditiva del flujo -----------------------------------
+    // Reproduce una frase predefinida al entrar en cada estado de feedback, al
+    // inicio de sesion y al completarla. PRESENTING_QUESTION ya tiene su propio
+    // efecto (presentationKey) que lee la pregunta; este bloque atiende el resto.
+    //
+    // La clave combina estado + indice de pregunta + intento para que LaunchedEffect
+    // dispare exactamente una vez por evento real, aunque Compose recomponga varias
+    // veces en el mismo estado.
+    val feedbackVoiceKey: String? = when (state) {
+        BimodalInteractionState.WAITING_FOR_FACE,
+        BimodalInteractionState.FEEDBACK_CORRECT,
+        BimodalInteractionState.FEEDBACK_INCORRECT,
+        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
+        BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR,
+        BimodalInteractionState.TIME_EXPIRED,
+        BimodalInteractionState.SESSION_COMPLETED ->
+            "${state.name}:${progress?.currentQuestionIndex ?: 0}:${progress?.currentAttempt ?: 0}"
+        else -> null
+    }
+
+    LaunchedEffect(feedbackVoiceKey) {
+        if (feedbackVoiceKey == null) return@LaunchedEffect
+        val qi = progress?.currentQuestionIndex ?: 0
+        val canRetry = lastResult?.canRetry ?: false
+
+        // Para WAITING_FOR_FACE: solo anunciar una vez por indice de pregunta.
+        // Si el rostro se pierde y reaparece en la misma pregunta, no se repite.
+        if (state == BimodalInteractionState.WAITING_FOR_FACE) {
+            if (lastAnnouncedWaitingFaceIndex[0] == qi) return@LaunchedEffect
+            lastAnnouncedWaitingFaceIndex[0] = qi
+        }
+
+        val phrase = BimodalVoiceFeedback.phraseFor(state, canRetry, qi)
+            ?: return@LaunchedEffect
+
+        val neuralProvider = when (voiceSettings.provider) {
+            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
+            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
+            ToyVoiceProviderType.LOCAL -> localVoiceProvider
+        }
+        lastSpokenPhrase = phrase.text
+        toyVoiceSpeaking = true
+        try {
+            // Si la voz falla no se interrumpe el flujo: el error se ignora y la
+            // interaccion continua visualmente (nunca cancela la sesion por audio).
+            runCatching {
+                ToyVoiceFallback.speak(
+                    text = phrase.text,
+                    useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
+                    allowFallback = voiceSettings.fallbackToLocal,
+                    neural = neuralProvider,
+                    local = localVoiceProvider
+                )
+            }
+        } finally {
             azureVoiceProvider.stop()
             elevenLabsVoiceProvider.stop()
             toySpeechService.stop()
@@ -697,11 +769,18 @@ private fun BimodalSession(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "El juguete está leyendo la pregunta…",
+                            text = "El juguete está hablando…",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+                } else if (lastSpokenPhrase != null) {
+                    Text(
+                        text = "Última frase: $lastSpokenPhrase",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2
+                    )
                 }
             }
         }
