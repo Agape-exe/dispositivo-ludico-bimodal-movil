@@ -26,6 +26,7 @@ class ToyVoiceSettingsRepository(private val context: Context) {
         val LOCALE_TAG = stringPreferencesKey("locale_tag")
         val PROVIDER = stringPreferencesKey("voice_provider")
         val NEURAL_VOICE_ID = stringPreferencesKey("neural_voice_id")
+        val AZURE_VOICE_NAME = stringPreferencesKey("azure_voice_name")
         val FALLBACK_TO_LOCAL = booleanPreferencesKey("fallback_to_local")
         val UPDATED_AT = longPreferencesKey("updated_at")
     }
@@ -40,6 +41,7 @@ class ToyVoiceSettingsRepository(private val context: Context) {
                 runCatching { ToyVoiceProviderType.valueOf(name) }.getOrNull()
             } ?: ToyVoiceProviderType.LOCAL,
             neuralVoiceId = prefs[Keys.NEURAL_VOICE_ID],
+            azureVoiceName = prefs[Keys.AZURE_VOICE_NAME],
             fallbackToLocal = prefs[Keys.FALLBACK_TO_LOCAL] ?: true,
             updatedAt = prefs[Keys.UPDATED_AT] ?: 0L
         )
@@ -66,6 +68,11 @@ class ToyVoiceSettingsRepository(private val context: Context) {
                 prefs[Keys.NEURAL_VOICE_ID] = settings.neuralVoiceId
             } else {
                 prefs.remove(Keys.NEURAL_VOICE_ID)
+            }
+            if (settings.azureVoiceName != null) {
+                prefs[Keys.AZURE_VOICE_NAME] = settings.azureVoiceName
+            } else {
+                prefs.remove(Keys.AZURE_VOICE_NAME)
             }
             prefs[Keys.FALLBACK_TO_LOCAL] = settings.fallbackToLocal
             prefs[Keys.UPDATED_AT] = System.currentTimeMillis()

@@ -1,10 +1,12 @@
 package com.taller.app.voice
 
-/** Proveedor de voz seleccionado por el usuario. */
 enum class ToyVoiceProviderType {
     /** Text-to-Speech local del dispositivo. Funciona sin conexión. */
     LOCAL,
 
-    /** Proveedor neural por red, con voz más natural. Requiere configuración e internet. */
-    NEURAL
+    /** Microsoft Azure Cognitive Services Speech. Proveedor neural principal. */
+    AZURE_NEURAL,
+
+    /** ElevenLabs Text-to-Speech. Proveedor neural opcional. Requiere suscripción activa. */
+    ELEVENLABS
 }
