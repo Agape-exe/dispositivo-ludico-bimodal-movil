@@ -3,11 +3,14 @@ package com.taller.app.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +22,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -44,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -51,6 +57,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionState
+import com.taller.app.bimodal.SpeechCaptureEventMapper
+import com.taller.app.bimodal.SpeechCaptureOutcome
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
@@ -58,19 +66,23 @@ import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
 import com.taller.app.model.OperationMode
 import com.taller.app.semantic.SemanticResult
+import com.taller.app.speech.SpeechToTextService
+import com.taller.app.speech.SttState
 import com.taller.app.vision.FaceAnalyzer
 import com.taller.app.vision.FacePresenceTracker
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
  * Pantalla inicial del modo bimodal inteligente.
  *
  * Permite seleccionar una actividad con preguntas, cargarla en el orquestador de
- * estados y simular los eventos del flujo avanzado sin sensores reales (camara,
- * reconocimiento de voz, evaluacion semantica o voz del juguete). Sirve como
- * banco de pruebas tecnico para validar el comportamiento del orquestador.
+ * estados y avanzar por el flujo avanzado. La presencia facial (camara) y la
+ * captura de voz (reconocimiento de voz) son reales y alimentan al orquestador;
+ * la evaluacion semantica y la voz del juguete siguen simuladas mediante los
+ * controles tecnicos. Sirve como banco de pruebas del comportamiento del flujo.
  *
  * @param activityId si es distinto de 0 se carga directamente esa actividad; si
  *        es 0 se muestra un selector con las actividades disponibles.
@@ -293,6 +305,135 @@ private fun BimodalSession(
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    // ----- Captura de voz real -------------------------------------------------
+    // Reutiliza el servicio existente de reconocimiento de voz. Una sola instancia
+    // por sesion; se libera al salir de la pantalla en el DisposableEffect.
+    val speechService = remember { SpeechToTextService(context) }
+
+    var audioGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> audioGranted = granted }
+
+    var sttState by remember(activity) { mutableStateOf(SttState.IDLE) }
+    var sttPartial by remember(activity) { mutableStateOf("") }
+    var sttFinal by remember(activity) { mutableStateOf("") }
+    var sttError by remember(activity) { mutableStateOf("") }
+
+    // Banderas internas del intento de captura en curso (no dirigen la UI).
+    val capturedAnyText = remember(activity) { mutableStateOf(false) }
+    val outcomeDelivered = remember(activity) { mutableStateOf(false) }
+
+    // Traduce el resultado bruto de la captura al evento del orquestador. Solo se
+    // entrega una vez por intento y solo si el flujo sigue en LISTENING (evita
+    // eventos espurios si la presencia se perdio o el intento ya se resolvio).
+    fun deliverCaptureOutcome(outcome: SpeechCaptureOutcome) {
+        if (outcomeDelivered.value) return
+        outcomeDelivered.value = true
+        if (orchestrator.state == BimodalInteractionState.LISTENING) {
+            dispatch { orchestrator.onEvent(SpeechCaptureEventMapper.toEvent(outcome)) }
+        }
+    }
+
+    fun startVoiceCapture() {
+        // No iniciar sin permiso de microfono ni fuera del momento de respuesta.
+        if (!audioGranted) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (orchestrator.state != BimodalInteractionState.PRESENTING_QUESTION) return
+        if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) return
+
+        sttPartial = ""
+        sttFinal = ""
+        sttError = ""
+        capturedAnyText.value = false
+        outcomeDelivered.value = false
+
+        // Abre la ventana de escucha en el orquestador antes de encender el microfono.
+        dispatch { orchestrator.startListening() }
+
+        speechService.startListening(
+            onStateChange = { newState -> sttState = newState },
+            onReady = {},
+            onPartialResult = { text ->
+                sttPartial = text
+                capturedAnyText.value = true
+            },
+            onFinalResult = { text ->
+                sttFinal = text
+                sttPartial = ""
+                deliverCaptureOutcome(
+                    if (text.isBlank()) SpeechCaptureOutcome.NoSpeech
+                    else SpeechCaptureOutcome.Transcribed(text)
+                )
+            },
+            onStopped = { textAtStop ->
+                if (textAtStop.isNotBlank()) {
+                    sttFinal = textAtStop
+                    sttPartial = ""
+                    deliverCaptureOutcome(SpeechCaptureOutcome.Transcribed(textAtStop))
+                } else {
+                    deliverCaptureOutcome(SpeechCaptureOutcome.NoSpeech)
+                }
+            },
+            onError = { message ->
+                sttError = message
+                // Sin texto previo lo tratamos como ausencia de voz (sin respuesta);
+                // con texto previo, como fallo no interpretable. Nunca como incorrecta.
+                deliverCaptureOutcome(
+                    if (capturedAnyText.value) SpeechCaptureOutcome.Failed(message)
+                    else SpeechCaptureOutcome.NoSpeech
+                )
+            }
+        )
+    }
+
+    fun stopVoiceCapture() {
+        speechService.stopListening()
+    }
+
+    // Libera el reconocedor al salir de la pantalla (evita fugas y multiples
+    // instancias). BimodalSession abandona la composicion al cambiar de actividad
+    // o volver, por lo que un solo DisposableEffect basta.
+    DisposableEffect(Unit) {
+        onDispose { speechService.destroy() }
+    }
+
+    // Detiene el microfono si el flujo abandona LISTENING por otra via (p. ej. se
+    // pierde la presencia facial) mientras la captura sigue activa.
+    LaunchedEffect(state) {
+        if (state != BimodalInteractionState.LISTENING && sttState == SttState.LISTENING) {
+            speechService.stopListening()
+        }
+    }
+
+    // Limpia la transcripcion mostrada al (re)iniciar una pregunta o intento.
+    LaunchedEffect(progress?.currentQuestionIndex, progress?.currentAttempt) {
+        sttPartial = ""
+        sttFinal = ""
+        sttError = ""
+    }
+
+    // Tope de tiempo simple: si la pregunta define maxTimeSeconds, detiene la
+    // escucha al cumplirse para no dejar el microfono abierto indefinidamente.
+    // El efecto se cancela solo al cambiar sttState (incluido el fin de la escucha).
+    LaunchedEffect(sttState) {
+        if (sttState == SttState.LISTENING) {
+            val seconds = progress?.maxTimeSeconds ?: 0
+            if (seconds in 1..600) {
+                delay(seconds * 1000L)
+                speechService.stopListening()
+            }
+        }
+    }
+
     // Presencia facial confirmada que reporta la camara (con debounce aplicado).
     var facePresent by remember(activity) { mutableStateOf(false) }
 
@@ -409,7 +550,119 @@ private fun BimodalSession(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Datos simulados de captura y evaluacion.
+        // Captura de voz real del nino mediante reconocimiento de voz.
+        val isListeningVoice = sttState == SttState.LISTENING
+        val isStoppingVoice = sttState == SttState.STOPPING
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Captura de voz",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                if (!audioGranted) {
+                    Text(
+                        text = "Permiso de micrófono no concedido. Concédelo para capturar la " +
+                            "respuesta hablada del niño.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Conceder micrófono")
+                    }
+                }
+
+                // Estado visual de la escucha.
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isListeningVoice) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isListeningVoice) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(
+                            text = sttStatusLabel(sttState),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                AnimatedVisibility(visible = sttPartial.isNotBlank()) {
+                    Text(
+                        text = "Parcial: $sttPartial",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontStyle = FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                AnimatedVisibility(visible = sttFinal.isNotBlank()) {
+                    Text(
+                        text = "Transcripción: $sttFinal",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                AnimatedVisibility(visible = sttError.isNotBlank()) {
+                    Text(
+                        text = "Error de voz: $sttError",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Button(
+                    onClick = { startVoiceCapture() },
+                    enabled = audioGranted &&
+                        state == BimodalInteractionState.PRESENTING_QUESTION &&
+                        !isListeningVoice && !isStoppingVoice,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Escuchar respuesta")
+                }
+                OutlinedButton(
+                    onClick = { stopVoiceCapture() },
+                    enabled = isListeningVoice,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Detener captura")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Transcripcion registrada en el orquestador y resultado semantico simulado.
         Card(
             modifier = Modifier.fillMaxWidth(),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -420,9 +673,9 @@ private fun BimodalSession(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                InfoRow("Última transcripción simulada", progress?.lastTranscription ?: "—")
+                InfoRow("Transcripción en el orquestador", progress?.lastTranscription ?: "—")
                 InfoRow(
-                    "Último resultado semántico simulado",
+                    "Último resultado semántico (simulado)",
                     lastResult?.semanticResult?.let { resultLabel(it) } ?: "—"
                 )
             }
@@ -440,8 +693,10 @@ private fun BimodalSession(
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "Botones temporales para simular el flujo. La presencia facial ya " +
-                "proviene de la cámara real; los demás sensores siguen simulados.",
+            text = "Botones temporales para simular el flujo. La presencia facial y la " +
+                "captura de voz ya son reales; la evaluación semántica sigue simulada. " +
+                "Los botones de evaluación también permiten completar el paso tras una " +
+                "captura de voz real.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.outline
         )
@@ -455,6 +710,9 @@ private fun BimodalSession(
             state == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ||
             state == BimodalInteractionState.FEEDBACK_NO_RESPONSE
         val canAnswer = state == BimodalInteractionState.LISTENING
+        // La evaluacion simulada tambien aplica tras una captura de voz real, que
+        // deja el flujo en EVALUATING a la espera del resultado semantico.
+        val canSimulateEval = canAnswer || state == BimodalInteractionState.EVALUATING
         val canMarkNoResponse = state == BimodalInteractionState.PRESENTING_QUESTION ||
             state == BimodalInteractionState.WAITING_FOR_RESPONSE ||
             state == BimodalInteractionState.LISTENING
@@ -481,23 +739,25 @@ private fun BimodalSession(
             dispatch { orchestrator.onFaceDetected() }
         }
         ControlButton(
-            label = "Iniciar escucha",
+            label = "Iniciar escucha (simulada)",
             enabled = state == BimodalInteractionState.PRESENTING_QUESTION
         ) {
             dispatch { orchestrator.startListening() }
         }
         ControlButton(
-            label = "Simular respuesta correcta",
-            enabled = canAnswer
+            label = "Evaluar como correcta (simulado)",
+            enabled = canSimulateEval
         ) {
             dispatch {
+                // En LISTENING captura una transcripcion simulada; en EVALUATING (tras
+                // una captura real) este paso es inocuo y conserva la transcripcion real.
                 orchestrator.onSpeechCaptured(currentQuestion?.expectedAnswer ?: "respuesta correcta")
                 orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
             }
         }
         ControlButton(
-            label = "Simular respuesta incorrecta",
-            enabled = canAnswer
+            label = "Evaluar como incorrecta (simulado)",
+            enabled = canSimulateEval
         ) {
             dispatch {
                 orchestrator.onSpeechCaptured("respuesta incorrecta simulada")
@@ -505,8 +765,8 @@ private fun BimodalSession(
             }
         }
         ControlButton(
-            label = "Simular respuesta no interpretable",
-            enabled = canAnswer
+            label = "Evaluar como no interpretable (simulado)",
+            enabled = canSimulateEval
         ) {
             dispatch {
                 orchestrator.onSpeechCaptured("mmm")
@@ -822,6 +1082,16 @@ private fun stateLabel(state: BimodalInteractionState): String = when (state) {
     BimodalInteractionState.SESSION_COMPLETED -> "Sesión finalizada"
     BimodalInteractionState.SESSION_CANCELLED -> "Sesión cancelada"
     BimodalInteractionState.ERROR -> "Error"
+}
+
+/** Etiqueta legible para el estado de la captura de voz. */
+private fun sttStatusLabel(state: SttState): String = when (state) {
+    SttState.IDLE -> "Listo para escuchar"
+    SttState.LISTENING -> "Escuchando…"
+    SttState.STOPPING -> "Deteniendo captura…"
+    SttState.SUCCESS -> "Transcripción obtenida"
+    SttState.STOPPED -> "Captura detenida"
+    SttState.ERROR -> "Error de reconocimiento"
 }
 
 /** Etiqueta legible para el resultado semantico simulado. */
