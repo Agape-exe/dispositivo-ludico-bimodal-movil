@@ -17,7 +17,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -33,12 +35,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.taller.app.voice.ToyVoiceInfo
-import com.taller.app.voice.ToyVoiceSettings
-import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
+import com.taller.app.voice.ToyVoiceFallback
+import com.taller.app.voice.ToyVoiceInfo
+import com.taller.app.voice.ToyVoiceProviderType
+import com.taller.app.voice.ToyVoiceSettings
+import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.VoiceOutcome
+import com.taller.app.voice.neural.ElevenLabsConfig
+import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+
+private enum class PlaybackUi { IDLE, GENERATING, PLAYING }
+
+private val TEST_PHRASES = listOf(
+    "Saludo inicial" to "¡Hola! Vamos a jugar y aprender juntos.",
+    "Atención" to "Escucha con atención esta pregunta.",
+    "Tiempo agotado" to "Se terminó el tiempo. Pasemos a la siguiente pregunta.",
+    "Fin de actividad" to "Terminamos la actividad. Gracias por participar."
+)
 
 @Composable
 fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
@@ -49,37 +67,74 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     val service = remember { ToySpeechService(context) }
     val repository = remember { ToyVoiceSettingsRepository(context) }
 
-    var ttsState by remember { mutableStateOf(ToySpeechState.UNINITIALIZED) }
+    val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
+    val ttsState by ttsStateFlow.collectAsState()
     var availableVoices by remember { mutableStateOf<List<ToyVoiceInfo>>(emptyList()) }
 
     var selectedVoiceName by remember { mutableStateOf<String?>(null) }
     var speechRate by remember { mutableStateOf(0.92f) }
     var pitch by remember { mutableStateOf(1.12f) }
-    var settingsLoaded by remember { mutableStateOf(false) }
+
+    var providerType by remember { mutableStateOf(ToyVoiceProviderType.LOCAL) }
+    var neuralVoiceId by remember { mutableStateOf("") }
+    var fallbackEnabled by remember { mutableStateOf(true) }
+
+    var fieldsLoaded by remember { mutableStateOf(false) }
+    var voicesLoaded by remember { mutableStateOf(false) }
+
+    var playbackUi by remember { mutableStateOf(PlaybackUi.IDLE) }
+    var lastOutcome by remember { mutableStateOf<VoiceOutcome?>(null) }
 
     val savedSettings by repository.settings.collectAsState(initial = ToyVoiceSettings())
-
-    DisposableEffect(Unit) {
-        service.initialize { newState -> ttsState = newState }
-        onDispose { service.shutdown() }
-    }
-
-    LaunchedEffect(ttsState, savedSettings) {
-        if (ttsState == ToySpeechState.READY && !settingsLoaded) {
-            selectedVoiceName = savedSettings.selectedVoiceName
-            speechRate = savedSettings.speechRate
-            pitch = savedSettings.pitch
-            service.applySettings(savedSettings)
-            availableVoices = service.getAvailableVoices()
-            settingsLoaded = true
-        }
-    }
 
     fun buildCurrentSettings() = ToyVoiceSettings(
         selectedVoiceName = selectedVoiceName,
         speechRate = speechRate,
-        pitch = pitch
+        pitch = pitch,
+        provider = providerType,
+        neuralVoiceId = neuralVoiceId.takeIf { it.isNotBlank() },
+        fallbackToLocal = fallbackEnabled
     )
+
+    val localProvider = remember {
+        LocalToyVoiceProvider(service, ttsStateFlow) { buildCurrentSettings() }
+    }
+    val neuralProvider = remember {
+        ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
+    }
+
+    val apiKeyPresent = remember { ElevenLabsConfig.apiKeyFromBuild().isNotBlank() }
+    val defaultVoiceId = remember { ElevenLabsConfig.defaultVoiceIdFromBuild() }
+    val effectiveVoiceId = neuralVoiceId.ifBlank { defaultVoiceId }
+    val neuralConfigured = apiKeyPresent && effectiveVoiceId.isNotBlank()
+
+    DisposableEffect(Unit) {
+        service.initialize { newState -> ttsStateFlow.value = newState }
+        onDispose {
+            service.shutdown()
+            neuralProvider.release()
+        }
+    }
+
+    LaunchedEffect(savedSettings) {
+        if (!fieldsLoaded) {
+            selectedVoiceName = savedSettings.selectedVoiceName
+            speechRate = savedSettings.speechRate
+            pitch = savedSettings.pitch
+            providerType = savedSettings.provider
+            neuralVoiceId = savedSettings.neuralVoiceId ?: ""
+            fallbackEnabled = savedSettings.fallbackToLocal
+            fieldsLoaded = true
+        }
+    }
+
+    LaunchedEffect(ttsState, fieldsLoaded) {
+        if (ttsState == ToySpeechState.READY && fieldsLoaded && !voicesLoaded) {
+            service.applySettings(buildCurrentSettings())
+            availableVoices = service.getAvailableVoices()
+            voicesLoaded = true
+        }
+    }
 
     fun applyAndSave() {
         val s = buildCurrentSettings()
@@ -87,7 +142,31 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         scope.launch { repository.save(s) }
     }
 
-    val canInteract = (ttsState == ToySpeechState.READY || ttsState == ToySpeechState.SPEAKING) && settingsLoaded
+    fun playPhrase(text: String) {
+        if (playbackUi != PlaybackUi.IDLE) return
+        scope.launch {
+            playbackUi = PlaybackUi.GENERATING
+            lastOutcome = null
+            val outcome = ToyVoiceFallback.speak(
+                text = text,
+                useNeural = providerType == ToyVoiceProviderType.NEURAL,
+                allowFallback = fallbackEnabled,
+                neural = neuralProvider,
+                local = localProvider,
+                onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
+            )
+            playbackUi = PlaybackUi.IDLE
+            lastOutcome = outcome
+        }
+    }
+
+    fun stopPlayback() {
+        neuralProvider.stop()
+        service.stop()
+        playbackUi = PlaybackUi.IDLE
+    }
+
+    val localReady = ttsState == ToySpeechState.READY || ttsState == ToySpeechState.SPEAKING
 
     Column(
         modifier = Modifier
@@ -115,17 +194,68 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Ajusta la voz local para que el juguete suene más amigable.",
+            text = "Elige el proveedor de voz y ajústalo para que el juguete suene más amigable.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        TtsStatusCard(ttsState = ttsState)
+        ProviderSelectionSection(
+            selected = providerType,
+            onSelected = {
+                providerType = it
+                applyAndSave()
+            }
+        )
 
-        if (canInteract) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        NeuralConfigSection(
+            apiKeyPresent = apiKeyPresent,
+            configured = neuralConfigured,
+            voiceId = neuralVoiceId,
+            defaultVoiceId = defaultVoiceId,
+            fallbackEnabled = fallbackEnabled,
+            onVoiceIdChange = { neuralVoiceId = it },
+            onVoiceIdCommit = { applyAndSave() },
+            onFallbackChange = {
+                fallbackEnabled = it
+                applyAndSave()
+            }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        PlaybackStatusCard(
+            providerType = providerType,
+            playbackUi = playbackUi,
+            outcome = lastOutcome,
+            localState = ttsState
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        TestPhrasesSection(
+            enabled = playbackUi == PlaybackUi.IDLE && (providerType == ToyVoiceProviderType.NEURAL || localReady),
+            isPlaying = playbackUi != PlaybackUi.IDLE,
+            onSpeak = { text -> playPhrase(text) },
+            onStop = { stopPlayback() }
+        )
+
+        if (localReady && voicesLoaded) {
             Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Ajustes de la voz local",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             VoiceSelectionSection(
                 availableVoices = availableVoices,
@@ -155,32 +285,24 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            TestPhrasesSection(
-                ttsState = ttsState,
-                onSpeak = { text -> service.speak(text) },
-                onStop = { service.stop() }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             OutlinedButton(
                 onClick = {
                     val defaults = ToyVoiceSettings()
                     selectedVoiceName = defaults.selectedVoiceName
                     speechRate = defaults.speechRate
                     pitch = defaults.pitch
-                    service.applySettings(defaults)
-                    scope.launch { repository.reset() }
+                    service.applySettings(buildCurrentSettings())
+                    scope.launch { repository.save(buildCurrentSettings()) }
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Restaurar valores recomendados")
+                Text("Restaurar valores recomendados de la voz local")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Las voces disponibles dependen del motor TTS instalado en el dispositivo.",
+                text = "Las voces locales disponibles dependen del motor TTS instalado en el dispositivo.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -191,32 +313,315 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun TtsStatusCard(ttsState: ToySpeechState) {
-    val statusLabel = when (ttsState) {
-        ToySpeechState.UNINITIALIZED -> "No inicializado"
-        ToySpeechState.INITIALIZING -> "Inicializando motor de voz..."
-        ToySpeechState.READY -> "Motor listo"
-        ToySpeechState.SPEAKING -> "Reproduciendo..."
-        ToySpeechState.ERROR -> "Error al inicializar la voz"
+private fun ProviderSelectionSection(
+    selected: ToyVoiceProviderType,
+    onSelected: (ToyVoiceProviderType) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Proveedor de voz",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ProviderOption(
+                title = "Voz local (sin conexión)",
+                description = "Usa el motor de voz del dispositivo. Funciona siempre, sin internet.",
+                isSelected = selected == ToyVoiceProviderType.LOCAL,
+                onClick = { onSelected(ToyVoiceProviderType.LOCAL) }
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            ProviderOption(
+                title = "Voz neural (más natural)",
+                description = "Genera audio más expresivo por internet. Requiere configuración.",
+                isSelected = selected == ToyVoiceProviderType.NEURAL,
+                onClick = { onSelected(ToyVoiceProviderType.NEURAL) }
+            )
+        }
     }
-    val statusColor = when (ttsState) {
-        ToySpeechState.READY -> MaterialTheme.colorScheme.primary
-        ToySpeechState.SPEAKING -> MaterialTheme.colorScheme.tertiary
-        ToySpeechState.ERROR -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+@Composable
+private fun ProviderOption(
+    title: String,
+    description: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = backgroundColor)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (isSelected) {
+                Text(
+                    text = "✓",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NeuralConfigSection(
+    apiKeyPresent: Boolean,
+    configured: Boolean,
+    voiceId: String,
+    defaultVoiceId: String,
+    fallbackEnabled: Boolean,
+    onVoiceIdChange: (String) -> Unit,
+    onVoiceIdCommit: () -> Unit,
+    onFallbackChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Configuración de voz neural",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val statusLabel = if (configured) "Configurado" else "No configurado"
+            val statusColor = if (configured) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            }
+            Text(
+                text = "Estado del proveedor neural: $statusLabel",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = statusColor
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = if (apiKeyPresent) {
+                    "Credencial detectada en la configuración local."
+                } else {
+                    "Falta la credencial. Configúrala localmente (local.properties o variable de entorno) y vuelve a compilar."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = voiceId,
+                onValueChange = onVoiceIdChange,
+                label = { Text("Identificador de voz (voiceId)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            val helperText = if (defaultVoiceId.isNotBlank() && voiceId.isBlank()) {
+                "Se usará el voiceId por defecto de la configuración local."
+            } else {
+                "Déjalo vacío para usar el valor por defecto de la configuración local."
+            }
+            Text(
+                text = helperText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onVoiceIdCommit,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guardar identificador de voz")
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Respaldo automático a voz local",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Si la voz neural falla, se usa la voz local.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = fallbackEnabled, onCheckedChange = onFallbackChange)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackStatusCard(
+    providerType: ToyVoiceProviderType,
+    playbackUi: PlaybackUi,
+    outcome: VoiceOutcome?,
+    localState: ToySpeechState
+) {
+    val providerLabel = when (providerType) {
+        ToyVoiceProviderType.LOCAL -> "Voz local"
+        ToyVoiceProviderType.NEURAL -> "Voz neural"
+    }
+
+    val (statusLine, statusColor) = when (playbackUi) {
+        PlaybackUi.GENERATING -> "Generando audio..." to MaterialTheme.colorScheme.tertiary
+        PlaybackUi.PLAYING -> "Reproduciendo..." to MaterialTheme.colorScheme.tertiary
+        PlaybackUi.IDLE -> when (outcome) {
+            is VoiceOutcome.NeuralSuccess ->
+                "Reproducido con voz neural." to MaterialTheme.colorScheme.primary
+            is VoiceOutcome.LocalSuccess ->
+                "Reproducido con voz local." to MaterialTheme.colorScheme.primary
+            is VoiceOutcome.FallbackUsed ->
+                "Se usó la voz local como respaldo. (${outcome.reason})" to MaterialTheme.colorScheme.tertiary
+            is VoiceOutcome.Failed ->
+                "No se pudo reproducir. (${outcome.reason})" to MaterialTheme.colorScheme.error
+            null -> "Listo para probar." to MaterialTheme.colorScheme.onSurfaceVariant
+        }
     }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Text(
-            text = "Estado: $statusLabel",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = statusColor,
-            modifier = Modifier.padding(16.dp)
-        )
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Proveedor activo: $providerLabel",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = statusLine,
+                style = MaterialTheme.typography.bodyMedium,
+                color = statusColor
+            )
+            if (localState == ToySpeechState.ERROR) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "El motor de voz local reportó un error en este dispositivo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TestPhrasesSection(
+    enabled: Boolean,
+    isPlaying: Boolean,
+    onSpeak: (String) -> Unit,
+    onStop: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Probar frases del juguete",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            TEST_PHRASES.forEach { (label, phrase) ->
+                TestPhraseButton(
+                    label = label,
+                    phrase = phrase,
+                    enabled = enabled,
+                    onClick = { onSpeak(phrase) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            OutlinedButton(
+                onClick = onStop,
+                enabled = isPlaying,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Detener")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TestPhraseButton(
+    label: String,
+    phrase: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = label, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "\"$phrase\"",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
     }
 }
 
@@ -232,7 +637,7 @@ private fun VoiceSelectionSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Voz disponible",
+                text = "Voz local disponible",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -343,7 +748,7 @@ private fun SpeechAdjustmentSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Ajuste de voz",
+                text = "Ajuste de la voz local",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -374,92 +779,6 @@ private fun SpeechAdjustmentSection(
                 onValueChangeFinished = onPitchChangeFinished,
                 valueRange = 0.85f..1.35f,
                 modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-}
-
-@Composable
-private fun TestPhrasesSection(
-    ttsState: ToySpeechState,
-    onSpeak: (String) -> Unit,
-    onStop: () -> Unit
-) {
-    val buttonsEnabled = ttsState == ToySpeechState.READY
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Probar voz",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            TestPhraseButton(
-                label = "Saludo inicial",
-                phrase = "¡Hola! Vamos a jugar y aprender juntos.",
-                enabled = buttonsEnabled,
-                onClick = { onSpeak("¡Hola! Vamos a jugar y aprender juntos.") }
-            )
-
-            TestPhraseButton(
-                label = "Atención",
-                phrase = "Escucha con atención.",
-                enabled = buttonsEnabled,
-                onClick = { onSpeak("Escucha con atención.") }
-            )
-
-            TestPhraseButton(
-                label = "Tiempo agotado",
-                phrase = "Se terminó el tiempo. Pasemos a la siguiente pregunta.",
-                enabled = buttonsEnabled,
-                onClick = { onSpeak("Se terminó el tiempo. Pasemos a la siguiente pregunta.") }
-            )
-
-            TestPhraseButton(
-                label = "Fin de actividad",
-                phrase = "Terminamos la actividad. Gracias por participar.",
-                enabled = buttonsEnabled,
-                onClick = { onSpeak("Terminamos la actividad. Gracias por participar.") }
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            OutlinedButton(
-                onClick = onStop,
-                enabled = ttsState == ToySpeechState.SPEAKING,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Detener")
-            }
-        }
-    }
-}
-
-@Composable
-private fun TestPhraseButton(
-    label: String,
-    phrase: String,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp)
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = label, fontWeight = FontWeight.SemiBold)
-            Text(
-                text = "\"$phrase\"",
-                style = MaterialTheme.typography.bodySmall
             )
         }
     }
