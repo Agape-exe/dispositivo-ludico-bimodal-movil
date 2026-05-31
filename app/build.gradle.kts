@@ -1,9 +1,24 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
+
+// Credenciales del proveedor neural. Se leen de una fuente local NO versionada
+// (local.properties o variable de entorno) y se inyectan en BuildConfig.
+// Nunca se hardcodean valores reales ni se suben al repositorio.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun localSecret(name: String): String =
+    (localProperties.getProperty(name) ?: System.getenv(name) ?: "").trim()
 
 android {
     namespace = "com.taller.app"
@@ -19,6 +34,17 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField(
+            "String",
+            "ELEVENLABS_API_KEY",
+            "\"${localSecret("ELEVENLABS_API_KEY")}\""
+        )
+        buildConfigField(
+            "String",
+            "ELEVENLABS_VOICE_ID",
+            "\"${localSecret("ELEVENLABS_VOICE_ID")}\""
+        )
     }
 
     buildTypes {
@@ -39,6 +65,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -65,6 +92,8 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     // DataStore — preferencias de configuración local
     implementation(libs.androidx.datastore.preferences)
+    // OkHttp — cliente HTTP para el proveedor de voz neural
+    implementation(libs.okhttp)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
