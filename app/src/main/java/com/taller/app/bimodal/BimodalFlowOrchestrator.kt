@@ -56,6 +56,13 @@ class BimodalFlowOrchestrator(
     private var sessionStartedAt: Long = 0L
     private var questionStartedAt: Long? = null
 
+    /**
+     * Indice de la ultima pregunta cuyo desenlace ya se contabilizo en el resumen.
+     * Garantiza que cada pregunta se cuente una sola vez, sin importar si la sesion
+     * avanza, se completa o se cancela estando la pregunta ya resuelta.
+     */
+    private var lastRecordedIndex: Int = -1
+
     /** Procesa un evento del flujo y aplica la transicion correspondiente. */
     fun onEvent(event: BimodalInteractionEvent) {
         when (event) {
@@ -256,11 +263,15 @@ class BimodalFlowOrchestrator(
 
     private fun handleCompleteSession() {
         if (isTerminal(state)) return
+        // Si la pregunta en curso ya tiene un desenlace pero aun no se avanzo, se
+        // contabiliza antes de cerrar para que el resumen no pierda ese evento.
+        recordCurrentQuestionOutcome()
         transition(BimodalInteractionState.SESSION_COMPLETED)
     }
 
     private fun handleCancelSession() {
         if (isTerminal(state)) return
+        recordCurrentQuestionOutcome()
         transition(BimodalInteractionState.SESSION_CANCELLED)
     }
 
@@ -346,10 +357,30 @@ class BimodalFlowOrchestrator(
         lastSemanticResult = null
         sessionStartedAt = 0L
         questionStartedAt = null
+        lastRecordedIndex = -1
         progress = null
         lastResult = null
         errorMessage = null
         summary = BimodalSessionSummary()
+    }
+
+    /**
+     * Decide la accion automatica que corresponde al desenlace actual de la
+     * pregunta, segun las reglas del flujo: si quedan intentos y procede reintentar
+     * se reintenta; si era la ultima pregunta se finaliza; en otro caso se avanza.
+     * Devuelve [BimodalAutoAction.NONE] si el estado no admite progresion automatica.
+     *
+     * Es logica pura: la capa de UI decide cuando dispararla (tras una pausa breve)
+     * y la traduce en [retryQuestion] / [moveToNextQuestion].
+     */
+    fun resolveAutoAction(): BimodalAutoAction {
+        if (!isResolvedQuestionState(state)) return BimodalAutoAction.NONE
+        val result = lastResult ?: return BimodalAutoAction.NONE
+        return when {
+            result.canRetry -> BimodalAutoAction.RETRY
+            result.isLastQuestion -> BimodalAutoAction.COMPLETE
+            else -> BimodalAutoAction.ADVANCE
+        }
     }
 
     /**
@@ -358,6 +389,9 @@ class BimodalFlowOrchestrator(
      * vez por pregunta, justo antes de avanzar o finalizar.
      */
     private fun recordCurrentQuestionOutcome() {
+        // Una pregunta se contabiliza una sola vez: si ya se registro su indice
+        // (p. ej. se avanzo y luego se completa/cancela la sesion) no se repite.
+        if (lastRecordedIndex == currentIndex) return
         val category = when (state) {
             BimodalInteractionState.FEEDBACK_CORRECT -> BimodalOutcomeCategory.CORRECT
             BimodalInteractionState.FEEDBACK_INCORRECT -> BimodalOutcomeCategory.INCORRECT
@@ -370,6 +404,7 @@ class BimodalFlowOrchestrator(
             else -> return
         }
         summary = summary.recording(category, attemptsUsed = currentAttempt)
+        lastRecordedIndex = currentIndex
     }
 
     private fun currentQuestion(): LearningQuestion? = questions.getOrNull(currentIndex)
