@@ -350,6 +350,107 @@ class BimodalFlowOrchestratorTest {
     }
 
     @Test
+    fun resolveAutoAction_retriesWhenAttemptsRemain() {
+        load(activity(question("q1", maxAttempts = 2)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        assertEquals(BimodalAutoAction.RETRY, orchestrator.resolveAutoAction())
+    }
+
+    @Test
+    fun resolveAutoAction_advancesWhenNoAttemptsAndNotLast() {
+        load(activity(question("q1", maxAttempts = 1), question("q2")))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        assertEquals(BimodalAutoAction.ADVANCE, orchestrator.resolveAutoAction())
+    }
+
+    @Test
+    fun resolveAutoAction_completesOnLastQuestion() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("respuesta")
+        orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+
+        assertEquals(BimodalAutoAction.COMPLETE, orchestrator.resolveAutoAction())
+    }
+
+    @Test
+    fun resolveAutoAction_isNoneWhenNotResolved() {
+        load(activity(question("q1")))
+        reachListening()
+
+        assertEquals(BimodalAutoAction.NONE, orchestrator.resolveAutoAction())
+    }
+
+    @Test
+    fun completeSession_recordsPendingOutcome() {
+        // Reproduce el caso reportado: la voz no se reconoce (sin respuesta) y la
+        // sesion se finaliza sin avanzar manualmente. El desenlace debe contarse.
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onNoResponse()
+        assertEquals(BimodalInteractionState.FEEDBACK_NO_RESPONSE, orchestrator.state)
+
+        orchestrator.completeSession()
+
+        assertEquals(BimodalInteractionState.SESSION_COMPLETED, orchestrator.state)
+        assertEquals(1, orchestrator.summary.noResponse)
+        assertEquals(1, orchestrator.summary.resolvedQuestions)
+        assertEquals(1, orchestrator.summary.totalAttempts)
+    }
+
+    @Test
+    fun cancelSession_recordsPendingOutcome() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        orchestrator.cancelSession()
+
+        assertEquals(BimodalInteractionState.SESSION_CANCELLED, orchestrator.state)
+        assertEquals(1, orchestrator.summary.incorrect)
+        assertEquals(1, orchestrator.summary.resolvedQuestions)
+    }
+
+    @Test
+    fun advanceThenComplete_doesNotDoubleCountOutcome() {
+        // Avanzar contabiliza la pregunta; completar despues no debe volver a contarla.
+        load(activity(question("q1", maxAttempts = 1), question("q2", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("respuesta")
+        orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+        orchestrator.moveToNextQuestion() // cuenta q1, queda esperando rostro en q2
+
+        orchestrator.completeSession() // q2 no tiene desenlace: no agrega conteos
+
+        assertEquals(1, orchestrator.summary.correct)
+        assertEquals(1, orchestrator.summary.resolvedQuestions)
+        assertEquals(1, orchestrator.summary.totalAttempts)
+    }
+
+    @Test
+    fun cancelWithoutResolvedQuestion_recordsNothing() {
+        load(activity(question("q1")))
+        orchestrator.startSession() // WAITING_FOR_FACE, sin desenlace
+
+        orchestrator.cancelSession()
+
+        assertEquals(0, orchestrator.summary.resolvedQuestions)
+    }
+
+    @Test
     fun progress_resolvesEffectiveMaxTimeWithSafeDefault() {
         // maxTimeSeconds invalido (0) -> usa el valor seguro por defecto.
         load(activity(question("q1", maxTimeSeconds = 0)))

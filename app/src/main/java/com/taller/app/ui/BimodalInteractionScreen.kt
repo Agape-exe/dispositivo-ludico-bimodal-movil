@@ -2,6 +2,7 @@ package com.taller.app.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -55,9 +56,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.taller.app.bimodal.BimodalAutoAction
 import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionResult
 import com.taller.app.bimodal.BimodalInteractionState
+import com.taller.app.bimodal.BimodalLatencyStats
+import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
 import com.taller.app.bimodal.BimodalVoiceFeedback
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
@@ -92,6 +96,18 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+
+/** Etiqueta de logs internos de latencia (solo numeros, sin datos del nino). */
+private const val BIMODAL_LATENCY_TAG = "BimodalLatency"
+
+/** Pausa minima de retroalimentacion antes de aplicar el avance automatico. */
+private const val AUTO_ADVANCE_MIN_PAUSE_MS = 900L
+
+/** Tope de espera a que termine la voz de retroalimentacion antes de avanzar. */
+private const val AUTO_ADVANCE_MAX_VOICE_WAIT_MS = 4_000L
+
+/** Intervalo de sondeo mientras se espera a que termine la voz. */
+private const val AUTO_ADVANCE_POLL_MS = 100L
 
 /**
  * Pantalla inicial del modo bimodal inteligente.
@@ -319,6 +335,13 @@ private fun BimodalSession(
     var semanticSource by remember(activity) { mutableStateOf<SemanticSource?>(null) }
     var semanticLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
 
+    // Tracker de latencia de la sesion: mide cada ciclo de respuesta real (desde la
+    // transcripcion disponible hasta la respuesta logica y el inicio del feedback) y
+    // expone un resumen agregado para mostrarlo en pantalla y validar el objetivo
+    // tecnico del charter (< 1.5 s). Solo guarda marcas de tiempo, nunca datos del nino.
+    val latencyTracker = remember(activity) { BimodalLatencyTracker() }
+    var latencyStats by remember(activity) { mutableStateOf(BimodalLatencyStats()) }
+
     fun sync() {
         state = orchestrator.state
         progress = orchestrator.progress
@@ -392,6 +415,9 @@ private fun BimodalSession(
 
         // Abre la ventana de escucha en el orquestador antes de encender el microfono.
         dispatch { orchestrator.startListening() }
+
+        // Inicia un nuevo ciclo de medicion de latencia al encender el microfono.
+        latencyTracker.beginCapture()
 
         speechService.startListening(
             onStateChange = { newState -> sttState = newState },
@@ -520,10 +546,16 @@ private fun BimodalSession(
         val question = currentQuestion
         if (transcription == null || question == null) return@LaunchedEffect
 
+        // La transcripcion ya esta disponible: punto de partida del objetivo de
+        // latencia del charter (desde la transcripcion hasta la respuesta logica).
+        latencyTracker.markSttFinal()
+
         // Si el evaluador semantico fallara, no se cancela la sesion ni se marca la
         // respuesta como incorrecta: se reporta como error tecnico recuperable.
+        latencyTracker.markSemanticStart()
         val outcome = runCatching { semanticAdapter.evaluate(transcription, question) }
             .getOrNull()
+        latencyTracker.markSemanticEnd()
         if (outcome == null) {
             dispatch { orchestrator.reportRecoverableError("No se pudo evaluar la respuesta.") }
             return@LaunchedEffect
@@ -679,9 +711,67 @@ private fun BimodalSession(
         }
     }
 
+    // ----- Avance automatico del flujo + cierre de la medicion de latencia --------
+    // Cuando la pregunta llega a un desenlace (feedback o tiempo agotado), este
+    // efecto: 1) cierra la medicion de latencia del ciclo y actualiza el resumen;
+    // 2) espera una pausa breve (y a que termine la voz de retroalimentacion, con
+    // tope) para que el nino la escuche; 3) aplica la accion automatica que decide
+    // el orquestador: reintentar, avanzar o finalizar. La clave dispara el efecto
+    // una sola vez por desenlace real (estado + pregunta + intento).
+    val currentToyVoiceSpeaking by rememberUpdatedState(toyVoiceSpeaking)
+    val autoFlowKey: String? = when (state) {
+        BimodalInteractionState.FEEDBACK_CORRECT,
+        BimodalInteractionState.FEEDBACK_INCORRECT,
+        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
+        BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR,
+        BimodalInteractionState.TIME_EXPIRED ->
+            "${state.name}:${progress?.currentQuestionIndex ?: 0}:${progress?.currentAttempt ?: 0}"
+        else -> null
+    }
+    LaunchedEffect(autoFlowKey) {
+        if (autoFlowKey == null) return@LaunchedEffect
+
+        // Cierra la medicion de este ciclo: marca la respuesta logica y el inicio
+        // del feedback, consolida la muestra (descarta las no validas) y actualiza
+        // el resumen agregado. Solo se registran marcas de tiempo, nunca datos del
+        // nino. Un log interno permite revisar latencias sin exponer transcripciones.
+        latencyTracker.markLogicalResponse()
+        latencyTracker.markFeedbackStart()
+        latencyStats = latencyTracker.commit()
+        Log.d(
+            BIMODAL_LATENCY_TAG,
+            "ciclo: respuestaMs=${latencyStats.lastResponseLatencyMs} " +
+                "feedbackMs=${latencyStats.lastFeedbackLatencyMs} " +
+                "promedioMs=${latencyStats.averageResponseLatencyMs} " +
+                "muestras=${latencyStats.validSamples} cumpleObjetivo=${latencyStats.meetsTarget}"
+        )
+
+        // Pausa breve para que se escuche la retroalimentacion; si la voz sigue
+        // sonando se espera a que termine, con un tope para no demorar el avance.
+        delay(AUTO_ADVANCE_MIN_PAUSE_MS)
+        var waited = 0L
+        while (currentToyVoiceSpeaking && waited < AUTO_ADVANCE_MAX_VOICE_WAIT_MS) {
+            delay(AUTO_ADVANCE_POLL_MS)
+            waited += AUTO_ADVANCE_POLL_MS
+        }
+
+        // Aplica la accion automatica. Si el estado ya cambio (p. ej. el docente
+        // pulso un boton manual), resolveAutoAction devuelve NONE y no se hace nada.
+        when (orchestrator.resolveAutoAction()) {
+            BimodalAutoAction.RETRY -> dispatch { orchestrator.retryQuestion() }
+            BimodalAutoAction.ADVANCE,
+            BimodalAutoAction.COMPLETE -> dispatch { orchestrator.moveToNextQuestion() }
+            BimodalAutoAction.NONE -> Unit
+        }
+    }
+
     // Inicia la interaccion real en un solo paso: carga la actividad en el
     // orquestador, la confirma y arranca la sesion hasta quedar esperando rostro.
     fun startInteraction() {
+        // Empieza una sesion limpia: descarta las latencias de una corrida anterior.
+        latencyTracker.reset()
+        latencyStats = BimodalLatencyStats()
         dispatch {
             orchestrator.loadActivity(activity)
             orchestrator.markActivityLoaded()
@@ -946,6 +1036,15 @@ private fun BimodalSession(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
+
+        // Metricas de latencia del sistema: se muestran en cuanto hay alguna
+        // medicion valida o mientras la sesion esta activa, para validar el objetivo
+        // tecnico (< 1.5 s) sin esperar al resumen final.
+        val sessionStarted = state != BimodalInteractionState.IDLE
+        if (sessionStarted || latencyStats.hasData) {
+            LatencyMetricsCard(latencyStats)
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
         // Accion principal del flujo automatico: un unico control que cambia segun
         // el estado. El docente solo inicia la interaccion; el rostro dispara la
@@ -1626,6 +1725,60 @@ private fun SessionSummaryCard(summary: BimodalSessionSummary) {
             InfoRow("Tiempos agotados", summary.timeExpired.toString())
             InfoRow("Errores técnicos", summary.technicalErrors.toString())
             InfoRow("Intentos usados", summary.totalAttempts.toString())
+        }
+    }
+}
+
+/**
+ * Tarjeta con las metricas de latencia del sistema en la sesion actual: ultima
+ * latencia de respuesta logica, ultima latencia hasta el inicio del feedback,
+ * promedio de la sesion, cantidad de mediciones validas e indicador de
+ * cumplimiento del objetivo tecnico del charter. Solo refleja marcas de tiempo:
+ * no contiene transcripciones, audios ni datos del nino.
+ */
+@Composable
+private fun LatencyMetricsCard(stats: BimodalLatencyStats) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "Latencia del sistema",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            InfoRow(
+                "Última respuesta lógica",
+                stats.lastResponseLatencyMs?.let { "$it ms" } ?: "—"
+            )
+            InfoRow(
+                "Última hasta feedback",
+                stats.lastFeedbackLatencyMs?.let { "$it ms" } ?: "—"
+            )
+            InfoRow(
+                "Promedio de respuesta",
+                stats.averageResponseLatencyMs?.let { "$it ms" } ?: "—"
+            )
+            InfoRow("Mediciones válidas", stats.validSamples.toString())
+            val targetLabel = "Objetivo < ${stats.targetMs} ms"
+            InfoRow(
+                targetLabel,
+                when {
+                    !stats.hasData -> "Sin mediciones aún"
+                    stats.meetsTarget -> "Cumple ✓"
+                    else -> "No cumple ✗"
+                }
+            )
         }
     }
 }
