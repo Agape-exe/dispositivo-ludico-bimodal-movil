@@ -87,6 +87,7 @@ import com.taller.app.voice.ToyVoiceFallback
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
@@ -99,6 +100,12 @@ import kotlinx.coroutines.launch
 
 /** Etiqueta de logs internos de latencia (solo numeros, sin datos del nino). */
 private const val BIMODAL_LATENCY_TAG = "BimodalLatency"
+
+/** Etiqueta de logs de la evaluacion semantica (solo resultado, sin transcripcion). */
+private const val BIMODAL_SEMANTIC_TAG = "BimodalSemantic"
+
+/** Etiqueta de logs de la voz del juguete (solo proveedor, nunca claves ni texto). */
+private const val BIMODAL_VOICE_TAG = "BimodalVoice"
 
 /** Pausa minima de retroalimentacion antes de aplicar el avance automatico. */
 private const val AUTO_ADVANCE_MIN_PAUSE_MS = 900L
@@ -562,7 +569,21 @@ private fun BimodalSession(
         }
         semanticSource = SemanticSource.REAL
         semanticLatencyMs = outcome.latencyMillis
+        // Log seguro: solo el resultado semantico y la latencia, nunca la
+        // transcripcion ni datos del nino.
+        Log.d(
+            BIMODAL_SEMANTIC_TAG,
+            "evaluacion: resultadoCrudo=${outcome.result} latenciaMs=${outcome.latencyMillis}"
+        )
         dispatch { orchestrator.onEvent(outcome.toEvent()) }
+        Log.d(
+            BIMODAL_SEMANTIC_TAG,
+            "mapeo: estado=${orchestrator.state} " +
+                "resultadoMapeado=${orchestrator.lastResult?.semanticResult} " +
+                "resumen[correctas=${orchestrator.summary.correct} " +
+                "incorrectas=${orchestrator.summary.incorrect} " +
+                "noInterpretables=${orchestrator.summary.notInterpretable}]"
+        )
     }
 
     // ----- Voz del juguete -----------------------------------------------------
@@ -599,6 +620,45 @@ private fun BimodalSession(
     // Ultima frase reproducida por el juguete (para mostrarla en la UI).
     var lastSpokenPhrase by remember(activity) { mutableStateOf<String?>(null) }
 
+    // Diagnostico de voz: proveedor que realmente atendio la ultima reproduccion y
+    // si hubo respaldo a la voz local. Permiten verificar en pantalla que el flujo
+    // bimodal usa el proveedor seleccionado (p. ej. Azure) y no solo la voz local.
+    var lastVoiceProviderUsed by remember(activity) { mutableStateOf<String?>(null) }
+    var lastVoiceFallbackUsed by remember(activity) { mutableStateOf<Boolean?>(null) }
+
+    // Registra que proveedor termino reproduciendo la frase y si hubo fallback,
+    // tanto en la UI como en un log seguro (solo nombres de proveedor, nunca
+    // claves, tokens ni el texto reproducido).
+    fun recordVoiceUsage(selected: ToyVoiceProviderType, outcome: VoiceOutcome?) {
+        val selectedLabel = providerLabel(selected)
+        val usedLabel: String
+        val fallback: Boolean
+        when (outcome) {
+            is VoiceOutcome.NeuralSuccess -> {
+                usedLabel = selectedLabel
+                fallback = false
+            }
+            is VoiceOutcome.LocalSuccess -> {
+                usedLabel = providerLabel(ToyVoiceProviderType.LOCAL)
+                fallback = selected != ToyVoiceProviderType.LOCAL
+            }
+            is VoiceOutcome.FallbackUsed -> {
+                usedLabel = providerLabel(ToyVoiceProviderType.LOCAL)
+                fallback = true
+            }
+            is VoiceOutcome.Failed, null -> {
+                usedLabel = "Ninguno"
+                fallback = false
+            }
+        }
+        lastVoiceProviderUsed = usedLabel
+        lastVoiceFallbackUsed = fallback
+        Log.d(
+            BIMODAL_VOICE_TAG,
+            "reproduccion: seleccionado=$selectedLabel usado=$usedLabel fallback=$fallback"
+        )
+    }
+
     // Guarda los indices de pregunta para los que ya se anuncio WAITING_FOR_FACE,
     // evitando repetir la frase si el rostro se pierde y vuelve en la misma pregunta.
     val lastAnnouncedWaitingFaceIndex = remember(activity) { intArrayOf(-1) }
@@ -623,8 +683,9 @@ private fun BimodalSession(
         toyVoiceSpeaking = true
         try {
             // Si la voz no esta disponible no se interrumpe el flujo: el resultado
-            // se ignora y la interaccion continua sin audio (nunca crashea).
-            runCatching {
+            // se ignora y la interaccion continua sin audio (nunca crashea). Se
+            // registra que proveedor atendio realmente la reproduccion.
+            val outcome = runCatching {
                 ToyVoiceFallback.speak(
                     text = "${ToySpeechPhrase.QUESTION_INTRO.text} $questionText",
                     useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
@@ -632,7 +693,8 @@ private fun BimodalSession(
                     neural = neuralProvider,
                     local = localVoiceProvider
                 )
-            }
+            }.getOrNull()
+            recordVoiceUsage(voiceSettings.provider, outcome)
             // Tras la lectura, abre la escucha si seguimos en la misma pregunta y
             // hay permiso de microfono. Sin permiso, el docente usa el boton.
             if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
@@ -694,7 +756,7 @@ private fun BimodalSession(
         try {
             // Si la voz falla no se interrumpe el flujo: el error se ignora y la
             // interaccion continua visualmente (nunca cancela la sesion por audio).
-            runCatching {
+            val outcome = runCatching {
                 ToyVoiceFallback.speak(
                     text = phrase.text,
                     useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
@@ -702,7 +764,8 @@ private fun BimodalSession(
                     neural = neuralProvider,
                     local = localVoiceProvider
                 )
-            }
+            }.getOrNull()
+            recordVoiceUsage(voiceSettings.provider, outcome)
         } finally {
             azureVoiceProvider.stop()
             elevenLabsVoiceProvider.stop()
@@ -872,6 +935,40 @@ private fun BimodalSession(
                         maxLines = 2
                     )
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Diagnostico tecnico de la voz del juguete: deja claro que proveedor esta
+        // seleccionado y cual atendio realmente la ultima reproduccion, y si hubo
+        // respaldo a la voz local. Permite verificar que el flujo bimodal usa Azure
+        // cuando esta seleccionado y configurado.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "Voz del juguete",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                InfoRow("Proveedor seleccionado", providerLabel(voiceSettings.provider))
+                InfoRow("Última reproducción", lastVoiceProviderUsed ?: "—")
+                InfoRow(
+                    "Fallback usado",
+                    when (lastVoiceFallbackUsed) {
+                        true -> "Sí"
+                        false -> "No"
+                        null -> "—"
+                    }
+                )
             }
         }
 
@@ -1832,6 +1929,13 @@ private fun sttStatusLabel(state: SttState): String = when (state) {
     SttState.SUCCESS -> "Transcripción obtenida"
     SttState.STOPPED -> "Captura detenida"
     SttState.ERROR -> "Error de reconocimiento"
+}
+
+/** Etiqueta legible y corta para un proveedor de voz. */
+private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
+    ToyVoiceProviderType.LOCAL -> "Voz local"
+    ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
+    ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
 /** Etiqueta legible para el resultado semantico. */

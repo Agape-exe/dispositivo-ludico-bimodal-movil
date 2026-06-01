@@ -39,15 +39,31 @@ class SemanticEvaluator {
         }
 
         val normalizedExpected = normalize(expectedAnswer)
-        if (normalized.contains(normalizedExpected)) {
+        if (normalizedExpected.isNotBlank() && containsWholeWord(normalized, normalizedExpected)) {
             return SemanticResult.CORRECT
         }
 
         val hasKeyword = keywords.any { keyword ->
-            normalized.contains(normalize(keyword))
+            val normalizedKeyword = normalize(keyword)
+            normalizedKeyword.isNotBlank() && containsWholeWord(normalized, normalizedKeyword)
         }
 
         return if (hasKeyword) SemanticResult.CORRECT else SemanticResult.INCORRECT
+    }
+
+    /**
+     * Indica si [haystack] contiene [needle] como palabra o frase completa, no como
+     * subcadena. Evita falsos positivos del tipo "azulejo" para la respuesta "azul"
+     * o "ninguno" para la palabra clave "uno". El acolchado con espacios obliga a
+     * que la coincidencia respete los limites de palabra; ambos textos ya vienen
+     * normalizados (minusculas, sin acentos y con espacios simples).
+     *
+     * Un [needle] en blanco nunca coincide: una respuesta esperada o palabra clave
+     * vacia no debe convertir cualquier transcripcion en correcta.
+     */
+    private fun containsWholeWord(haystack: String, needle: String): Boolean {
+        if (needle.isBlank()) return false
+        return " $haystack ".contains(" $needle ")
     }
 
     private fun normalize(text: String): String {
