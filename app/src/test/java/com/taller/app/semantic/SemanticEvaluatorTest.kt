@@ -61,4 +61,57 @@ class SemanticEvaluatorTest {
 
     @Test fun extraSpaces_returnsCorrect() =
         assertEquals(SemanticResult.CORRECT, eval("   el    gato   "))
+
+    // ----- Regresion: coincidencia por palabra completa, no por subcadena --------
+
+    @Test fun expectedAsSubstringOfLongerWord_returnsIncorrect() {
+        // "gato" es subcadena de "gatoplancton" pero no la palabra "gato".
+        assertEquals(SemanticResult.INCORRECT, eval("gatoplancton"))
+    }
+
+    @Test fun keywordAsSubstringOfLongerWord_returnsIncorrect() {
+        val e = SemanticEvaluator()
+        // La palabra clave "uno" no debe coincidir dentro de "ninguno".
+        assertEquals(
+            SemanticResult.INCORRECT,
+            e.evaluate("ninguno", expectedAnswer = "uno", keywords = listOf("uno"))
+        )
+    }
+
+    @Test fun colorAsSubstring_returnsIncorrect() {
+        val e = SemanticEvaluator()
+        // "azul" no debe coincidir dentro de "azulejo".
+        assertEquals(
+            SemanticResult.INCORRECT,
+            e.evaluate("azulejo", expectedAnswer = "azul", keywords = listOf("azul", "celeste"))
+        )
+    }
+
+    // ----- Regresion: respuesta esperada / palabras clave en blanco --------------
+
+    @Test fun blankExpectedAnswer_doesNotMakeEverythingCorrect() {
+        val e = SemanticEvaluator()
+        // Con respuesta esperada vacia y sin palabras clave utiles, una respuesta
+        // cualquiera NO debe contarse como correcta (antes contains("") == true).
+        assertEquals(
+            SemanticResult.INCORRECT,
+            e.evaluate("cualquier cosa", expectedAnswer = "", keywords = emptyList())
+        )
+    }
+
+    @Test fun blankKeyword_doesNotMakeEverythingCorrect() {
+        val e = SemanticEvaluator()
+        assertEquals(
+            SemanticResult.INCORRECT,
+            e.evaluate("cualquier cosa", expectedAnswer = "perro", keywords = listOf("", "  "))
+        )
+    }
+
+    @Test fun blankExpectedButValidKeyword_matchesByKeyword() {
+        val e = SemanticEvaluator()
+        assertEquals(
+            SemanticResult.CORRECT,
+            e.evaluate("es un gato", expectedAnswer = "", keywords = listOf("gato"))
+        )
+    }
 }
