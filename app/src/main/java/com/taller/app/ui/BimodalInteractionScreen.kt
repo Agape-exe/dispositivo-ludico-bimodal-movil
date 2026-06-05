@@ -2022,15 +2022,7 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
-/** Etiqueta legible para el resultado semantico. */
-private fun resultLabel(result: SemanticResult): String = when (result) {
-    SemanticResult.CORRECT -> "Correcta"
-    SemanticResult.INCORRECT -> "Incorrecta"
-    SemanticResult.NOT_INTERPRETABLE -> "No interpretable"
-    SemanticResult.NO_RESPONSE -> "Sin respuesta"
-}
-
-/** Etiqueta legible para la categoria de retroalimentacion general tipo profesor. */
+/** Etiqueta legible para la categoria de retroalimentacion general. */
 private fun feedbackTypeLabel(type: GeneralTeacherFeedbackType): String = when (type) {
     GeneralTeacherFeedbackType.CORRECT -> "Correcta"
     GeneralTeacherFeedbackType.INCORRECT_RETRY -> "Incorrecta (reintento)"
@@ -2047,6 +2039,15 @@ private fun feedbackTypeLabel(type: GeneralTeacherFeedbackType): String = when (
     GeneralTeacherFeedbackType.QUESTION_INTRO -> "Presentación de pregunta"
     GeneralTeacherFeedbackType.SESSION_COMPLETED -> "Sesión completada"
 }
+
+/** Etiqueta legible para el resultado semantico. */
+private fun resultLabel(result: SemanticResult): String = when (result) {
+    SemanticResult.CORRECT -> "Correcta"
+    SemanticResult.INCORRECT -> "Incorrecta"
+    SemanticResult.NOT_INTERPRETABLE -> "No interpretable"
+    SemanticResult.NO_RESPONSE -> "Sin respuesta"
+}
+
 
 /** Origen del ultimo resultado semantico mostrado en la pantalla. */
 private enum class SemanticSource(val label: String) {
