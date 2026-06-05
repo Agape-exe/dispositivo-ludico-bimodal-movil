@@ -30,6 +30,7 @@ class GeneralTeacherFeedbackGeneratorTest {
         questionIndex: Int = 0,
         currentAttempt: Int = 1,
         maxAttempts: Int = 3,
+        isLastQuestion: Boolean = false,
         semanticResult: SemanticResult? = null,
         expectedAnswer: String? = null
     ) = GeneralTeacherFeedbackContext(
@@ -38,6 +39,7 @@ class GeneralTeacherFeedbackGeneratorTest {
         currentAttempt = currentAttempt,
         maxAttempts = maxAttempts,
         canRetry = canRetry,
+        isLastQuestion = isLastQuestion,
         semanticResult = semanticResult,
         expectedAnswer = expectedAnswer
     )
@@ -134,6 +136,70 @@ class GeneralTeacherFeedbackGeneratorTest {
             GeneralTeacherFeedbackType.QUESTION_INTRO,
             generator.feedbackTypeFor(contextFor(BimodalInteractionState.WAITING_FOR_FACE, questionIndex = 2))
         )
+    }
+
+    @Test
+    fun lastQuestion_terminalOutcome_doesNotUseContinuityPhrase() {
+        val generator = newGenerator()
+        // En la ultima pregunta, el desenlace terminal (sin reintento) no produce
+        // frase: el cierre lo da SESSION_COMPLETED, por lo que nunca suena una frase
+        // de continuidad ("continuemos", "pasemos a la siguiente").
+        val terminalStates = listOf(
+            BimodalInteractionState.FEEDBACK_CORRECT,
+            BimodalInteractionState.FEEDBACK_INCORRECT,
+            BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
+            BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+            BimodalInteractionState.TIME_EXPIRED,
+            BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR
+        )
+        for (state in terminalStates) {
+            assertNull(
+                "El estado $state en la ultima pregunta no debe producir frase de continuidad",
+                generator.feedbackTypeFor(
+                    contextFor(state, canRetry = false, isLastQuestion = true)
+                )
+            )
+            assertNull(
+                generator.generate(contextFor(state, canRetry = false, isLastQuestion = true))
+            )
+        }
+        // El cierre de la actividad si produce una frase de la categoria de cierre.
+        assertEquals(
+            GeneralTeacherFeedbackType.SESSION_COMPLETED,
+            generator.feedbackTypeFor(
+                contextFor(BimodalInteractionState.SESSION_COMPLETED, isLastQuestion = true)
+            )
+        )
+    }
+
+    @Test
+    fun lastQuestion_retryStillAnnounced() {
+        val generator = newGenerator()
+        // Un reintento invita a repetir la misma pregunta (sin continuidad), por lo
+        // que se anuncia aunque sea la ultima pregunta.
+        assertEquals(
+            GeneralTeacherFeedbackType.INCORRECT_RETRY,
+            generator.feedbackTypeFor(
+                contextFor(
+                    BimodalInteractionState.FEEDBACK_INCORRECT,
+                    canRetry = true,
+                    isLastQuestion = true
+                )
+            )
+        )
+    }
+
+    @Test
+    fun sessionCompleted_usesClosingPhrases() {
+        val generator = newGenerator()
+        val closingMarkers = listOf("termin", "final", "gracias", "complet", "buen trabajo")
+        repeat(40) {
+            val text = normalize(generator.message(GeneralTeacherFeedbackType.SESSION_COMPLETED).text)
+            assertTrue(
+                "Frase de cierre sin tono de cierre: $text",
+                closingMarkers.any { text.contains(it) }
+            )
+        }
     }
 
     @Test

@@ -57,11 +57,19 @@ class BimodalFlowOrchestrator(
     private var questionStartedAt: Long? = null
 
     /**
-     * Indice de la ultima pregunta cuyo desenlace ya se contabilizo en el resumen.
+     * Indice de la ultima pregunta ya contabilizada como resuelta en el resumen.
      * Garantiza que cada pregunta se cuente una sola vez, sin importar si la sesion
      * avanza, se completa o se cancela estando la pregunta ya resuelta.
      */
     private var lastRecordedIndex: Int = -1
+
+    /**
+     * Claves estables de los intentos ya contabilizados en el resumen. Cada intento
+     * tiene un unico desenlace; la clave (pregunta + numero de intento + categoria)
+     * evita contar dos veces el mismo intento ante eventos o recomposiciones
+     * duplicadas.
+     */
+    private val countedAttemptKeys = mutableSetOf<String>()
 
     /** Procesa un evento del flujo y aplica la transicion correspondiente. */
     fun onEvent(event: BimodalInteractionEvent) {
@@ -199,8 +207,12 @@ class BimodalFlowOrchestrator(
     private fun handleSpeechFailed(reason: String?) {
         if (state != BimodalInteractionState.LISTENING) return
         // Un fallo del reconocedor es un problema tecnico, no una respuesta del
-        // nino: no se clasifica como incorrecta ni como no interpretable.
-        applyRecoverableError(reason ?: "No se pudo procesar la voz.")
+        // nino: no se clasifica como incorrecta ni como no interpretable. Se
+        // contabiliza como error de reconocimiento de voz (STT).
+        applyRecoverableError(
+            reason ?: "No se pudo procesar la voz.",
+            BimodalOutcomeCategory.STT_ERROR
+        )
     }
 
     private fun handleNoResponse() {
@@ -220,6 +232,7 @@ class BimodalFlowOrchestrator(
             BimodalInteractionState.LISTENING -> {
                 lastSemanticResult = SemanticResult.NO_RESPONSE
                 buildResult(SemanticResult.NO_RESPONSE, BimodalInteractionState.TIME_EXPIRED)
+                recordAttemptOutcome(BimodalOutcomeCategory.TIME_EXPIRED)
                 updateProgress()
                 transition(BimodalInteractionState.TIME_EXPIRED)
             }
@@ -245,7 +258,7 @@ class BimodalFlowOrchestrator(
 
     private fun handleMoveToNextQuestion() {
         if (!isResolvedQuestionState(state)) return
-        recordCurrentQuestionOutcome()
+        recordResolvedQuestion()
         errorMessage = null
         transition(BimodalInteractionState.NEXT_QUESTION)
         if (currentIndex >= questions.lastIndex) {
@@ -264,14 +277,15 @@ class BimodalFlowOrchestrator(
     private fun handleCompleteSession() {
         if (isTerminal(state)) return
         // Si la pregunta en curso ya tiene un desenlace pero aun no se avanzo, se
-        // contabiliza antes de cerrar para que el resumen no pierda ese evento.
-        recordCurrentQuestionOutcome()
+        // contabiliza como resuelta antes de cerrar (los intentos ya se contaron al
+        // producirse su desenlace).
+        recordResolvedQuestion()
         transition(BimodalInteractionState.SESSION_COMPLETED)
     }
 
     private fun handleCancelSession() {
         if (isTerminal(state)) return
-        recordCurrentQuestionOutcome()
+        recordResolvedQuestion()
         transition(BimodalInteractionState.SESSION_CANCELLED)
     }
 
@@ -288,7 +302,8 @@ class BimodalFlowOrchestrator(
             BimodalInteractionState.WAITING_FOR_RESPONSE,
             BimodalInteractionState.LISTENING,
             BimodalInteractionState.TRANSCRIBING,
-            BimodalInteractionState.EVALUATING -> applyRecoverableError(message)
+            BimodalInteractionState.EVALUATING ->
+                applyRecoverableError(message, BimodalOutcomeCategory.TECHNICAL_ERROR)
             else -> Unit
         }
     }
@@ -305,15 +320,20 @@ class BimodalFlowOrchestrator(
         lastSemanticResult = result
         val feedbackState = feedbackStateFor(result)
         buildResult(result, feedbackState)
+        // Cada intento se contabiliza en cuanto se resuelve, aunque queden intentos
+        // disponibles: los intentos solo deciden reintento/avance, no el conteo.
+        recordAttemptOutcome(categoryFor(result))
         updateProgress()
         transition(feedbackState)
     }
 
-    private fun applyRecoverableError(message: String) {
+    private fun applyRecoverableError(message: String, category: BimodalOutcomeCategory) {
         // No es la respuesta del nino: el resultado semantico queda nulo. La
-        // pregunta puede reintentarse si aun quedan intentos disponibles.
+        // pregunta puede reintentarse si aun quedan intentos disponibles. El intento
+        // se contabiliza en su categoria de error (STT o tecnico), nunca incorrecta.
         errorMessage = message
         buildResult(result = null, feedbackState = BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR)
+        recordAttemptOutcome(category)
         updateProgress()
         transition(BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR)
     }
@@ -358,6 +378,7 @@ class BimodalFlowOrchestrator(
         sessionStartedAt = 0L
         questionStartedAt = null
         lastRecordedIndex = -1
+        countedAttemptKeys.clear()
         progress = null
         lastResult = null
         errorMessage = null
@@ -384,28 +405,40 @@ class BimodalFlowOrchestrator(
     }
 
     /**
-     * Registra en el resumen el desenlace final de la pregunta actual segun el
-     * estado resuelto vigente, sumando los intentos consumidos. Se invoca una sola
-     * vez por pregunta, justo antes de avanzar o finalizar.
+     * Contabiliza en el resumen el desenlace del intento actual en su categoria.
+     * Se llama en cuanto el intento se resuelve (respuesta evaluada, tiempo agotado
+     * o error recuperable), independientemente de si la pregunta admite reintento.
+     *
+     * Protege contra el doble conteo del mismo intento ante eventos o
+     * recomposiciones duplicadas mediante una clave estable por intento.
      */
-    private fun recordCurrentQuestionOutcome() {
-        // Una pregunta se contabiliza una sola vez: si ya se registro su indice
-        // (p. ej. se avanzo y luego se completa/cancela la sesion) no se repite.
+    private fun recordAttemptOutcome(category: BimodalOutcomeCategory) {
+        val question = currentQuestion() ?: return
+        val key = "${question.id}:$currentAttempt:${category.name}"
+        if (!countedAttemptKeys.add(key)) return
+        summary = summary.recordingAttempt(category)
+    }
+
+    /**
+     * Contabiliza la pregunta actual como resuelta (una sola vez por indice), justo
+     * antes de avanzar o cerrar la sesion. Solo aplica si la pregunta tiene un
+     * desenlace; los conteos por intento ya se registraron al producirse.
+     */
+    private fun recordResolvedQuestion() {
         if (lastRecordedIndex == currentIndex) return
-        val category = when (state) {
-            BimodalInteractionState.FEEDBACK_CORRECT -> BimodalOutcomeCategory.CORRECT
-            BimodalInteractionState.FEEDBACK_INCORRECT -> BimodalOutcomeCategory.INCORRECT
-            BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ->
-                BimodalOutcomeCategory.NOT_INTERPRETABLE
-            BimodalInteractionState.FEEDBACK_NO_RESPONSE -> BimodalOutcomeCategory.NO_RESPONSE
-            BimodalInteractionState.TIME_EXPIRED -> BimodalOutcomeCategory.TIME_EXPIRED
-            BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR ->
-                BimodalOutcomeCategory.TECHNICAL_ERROR
-            else -> return
-        }
-        summary = summary.recording(category, attemptsUsed = currentAttempt)
+        if (!isResolvedQuestionState(state)) return
+        summary = summary.recordingResolvedQuestion()
         lastRecordedIndex = currentIndex
     }
+
+    /** Categoria de conteo correspondiente a un resultado semantico. */
+    private fun categoryFor(result: SemanticResult): BimodalOutcomeCategory =
+        when (result) {
+            SemanticResult.CORRECT -> BimodalOutcomeCategory.CORRECT
+            SemanticResult.INCORRECT -> BimodalOutcomeCategory.INCORRECT
+            SemanticResult.NOT_INTERPRETABLE -> BimodalOutcomeCategory.NOT_INTERPRETABLE
+            SemanticResult.NO_RESPONSE -> BimodalOutcomeCategory.NO_RESPONSE
+        }
 
     private fun currentQuestion(): LearningQuestion? = questions.getOrNull(currentIndex)
 

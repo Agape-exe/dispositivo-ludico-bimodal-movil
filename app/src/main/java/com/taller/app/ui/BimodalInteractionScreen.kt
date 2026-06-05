@@ -71,6 +71,7 @@ import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackContext
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackGenerator
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackMessage
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackType
+import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
@@ -754,6 +755,7 @@ private fun BimodalSession(
         if (feedbackVoiceKey == null) return@LaunchedEffect
         val qi = progress?.currentQuestionIndex ?: 0
         val canRetry = lastResult?.canRetry ?: false
+        val isLast = lastResult?.isLastQuestion ?: false
 
         // Para WAITING_FOR_FACE: solo anunciar una vez por indice de pregunta.
         // Si el rostro se pierde y reaparece en la misma pregunta, no se repite.
@@ -765,13 +767,16 @@ private fun BimodalSession(
         // Construye el contexto a partir del estado del orquestador y del ultimo
         // resultado, y genera la frase localmente. La respuesta esperada solo se
         // pasa como contexto interno: el generador nunca la revela si hay reintento.
+        // En la ultima pregunta el desenlace terminal no produce frase (el generador
+        // devuelve null): nunca suena una frase de continuidad antes del cierre, que
+        // lo aporta SESSION_COMPLETED con su propia categoria.
         val feedbackContext = GeneralTeacherFeedbackContext(
             state = state,
             questionIndex = qi,
             currentAttempt = progress?.currentAttempt ?: 1,
             maxAttempts = progress?.maxAttempts ?: 1,
             canRetry = canRetry,
-            isLastQuestion = lastResult?.isLastQuestion ?: (progress?.isLastQuestion ?: false),
+            isLastQuestion = isLast,
             semanticResult = lastResult?.semanticResult,
             questionText = currentQuestion?.questionText,
             expectedAnswer = currentQuestion?.expectedAnswer
@@ -779,8 +784,8 @@ private fun BimodalSession(
         val message = feedbackGenerator.generate(feedbackContext)
             ?: return@LaunchedEffect
 
-        // Solo los estados de desenlace de la pregunta alimentan la tarjeta de
-        // retroalimentacion; el inicio de sesion y la transicion entre preguntas no.
+        // Solo los estados de desenlace de la pregunta y el cierre alimentan la
+        // tarjeta de retroalimentacion; el inicio de sesion no.
         if (state != BimodalInteractionState.WAITING_FOR_FACE) {
             lastFeedbackMessage = message
         }
@@ -846,12 +851,15 @@ private fun BimodalSession(
         latencyTracker.markLogicalResponse()
         latencyTracker.markFeedbackStart()
         latencyStats = latencyTracker.commit()
+        // Log interno solo con valores numericos de latencia (sin transcripciones,
+        // nombres ni claves). El cumplimiento del objetivo se interpreta manualmente.
         Log.d(
             BIMODAL_LATENCY_TAG,
-            "ciclo: respuestaMs=${latencyStats.lastResponseLatencyMs} " +
-                "feedbackMs=${latencyStats.lastFeedbackLatencyMs} " +
-                "promedioMs=${latencyStats.averageResponseLatencyMs} " +
-                "muestras=${latencyStats.validSamples} cumpleObjetivo=${latencyStats.meetsTarget}"
+            "latency_logical_ms=${latencyStats.lastResponseLatencyMs} " +
+                "latency_feedback_ms=${latencyStats.lastFeedbackLatencyMs} " +
+                "latency_pipeline_ms=${latencyStats.lastPipelineLatencyMs} " +
+                "latency_average_ms=${latencyStats.averageResponseLatencyMs} " +
+                "measurements_count=${latencyStats.validSamples}"
         )
 
         // Pausa breve para que se escuche la retroalimentacion; si la voz sigue
@@ -1346,10 +1354,11 @@ private fun BimodalSession(
                     )
 
                     // Mensaje generado tipo profesor (lo que dice el juguete), su
-                    // categoria, el resultado semantico, los intentos restantes y la
-                    // latencia de generacion local. La sintesis de voz se refleja
-                    // aparte ("El juguete esta hablando…") y la latencia logica
-                    // principal en la tarjeta de latencia del sistema.
+                    // categoria, el resultado semantico, los intentos restantes, el
+                    // proveedor de voz y la latencia de generacion local (valor
+                    // numerico, no cumplimiento). La sintesis de voz se refleja aparte
+                    // ("El juguete esta hablando…") y la latencia logica principal en
+                    // la tarjeta de latencia del sistema.
                     val fb = lastFeedbackMessage
                     if (fb != null) {
                         HorizontalDivider()
@@ -1905,6 +1914,7 @@ private fun SessionSummaryCard(summary: BimodalSessionSummary) {
             InfoRow("No interpretables", summary.notInterpretable.toString())
             InfoRow("Sin respuesta", summary.noResponse.toString())
             InfoRow("Tiempos agotados", summary.timeExpired.toString())
+            InfoRow("Errores de reconocimiento", summary.sttErrors.toString())
             InfoRow("Errores técnicos", summary.technicalErrors.toString())
             InfoRow("Intentos usados", summary.totalAttempts.toString())
         }
@@ -1912,11 +1922,15 @@ private fun SessionSummaryCard(summary: BimodalSessionSummary) {
 }
 
 /**
- * Tarjeta con las metricas de latencia del sistema en la sesion actual: ultima
- * latencia de respuesta logica, ultima latencia hasta el inicio del feedback,
- * promedio de la sesion, cantidad de mediciones validas e indicador de
- * cumplimiento del objetivo tecnico del charter. Solo refleja marcas de tiempo:
- * no contiene transcripciones, audios ni datos del nino.
+ * Tarjeta con las metricas de latencia del sistema en la sesion actual: valores
+ * numericos exactos en milisegundos (ultima respuesta logica, ultima hasta el
+ * feedback, ultima del pipeline completo, promedios y mediciones validas) y el
+ * umbral de referencia del charter como dato informativo.
+ *
+ * No muestra ningun indicador de cumplimiento ("cumple/no cumple"): el
+ * cumplimiento del objetivo se interpreta manualmente a partir de los numeros.
+ * Solo refleja marcas de tiempo: no contiene transcripciones, audios ni datos del
+ * nino.
  */
 @Composable
 private fun LatencyMetricsCard(stats: BimodalLatencyStats) {
@@ -1939,28 +1953,13 @@ private fun LatencyMetricsCard(stats: BimodalLatencyStats) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
-            InfoRow(
-                "Última respuesta lógica",
-                stats.lastResponseLatencyMs?.let { "$it ms" } ?: "—"
-            )
-            InfoRow(
-                "Última hasta feedback",
-                stats.lastFeedbackLatencyMs?.let { "$it ms" } ?: "—"
-            )
-            InfoRow(
-                "Promedio de respuesta",
-                stats.averageResponseLatencyMs?.let { "$it ms" } ?: "—"
-            )
+            InfoRow("Última respuesta lógica", latencyMsLabel(stats.lastResponseLatencyMs))
+            InfoRow("Última hasta feedback", latencyMsLabel(stats.lastFeedbackLatencyMs))
+            InfoRow("Última pipeline completa", latencyMsLabel(stats.lastPipelineLatencyMs))
+            InfoRow("Promedio de respuesta", latencyMsLabel(stats.averageResponseLatencyMs))
+            InfoRow("Promedio hasta feedback", latencyMsLabel(stats.averageFeedbackLatencyMs))
             InfoRow("Mediciones válidas", stats.validSamples.toString())
-            val targetLabel = "Objetivo < ${stats.targetMs} ms"
-            InfoRow(
-                targetLabel,
-                when {
-                    !stats.hasData -> "Sin mediciones aún"
-                    stats.meetsTarget -> "Cumple ✓"
-                    else -> "No cumple ✗"
-                }
-            )
+            InfoRow("Umbral de referencia", latencyMsLabel(stats.targetMs))
         }
     }
 }
@@ -2048,6 +2047,7 @@ private fun resultLabel(result: SemanticResult): String = when (result) {
     SemanticResult.NOT_INTERPRETABLE -> "No interpretable"
     SemanticResult.NO_RESPONSE -> "Sin respuesta"
 }
+
 
 /** Origen del ultimo resultado semantico mostrado en la pantalla. */
 private enum class SemanticSource(val label: String) {

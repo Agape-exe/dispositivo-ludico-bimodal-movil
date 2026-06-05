@@ -172,6 +172,31 @@ class BimodalFlowOrchestratorTest {
     }
 
     @Test
+    fun lastQuestionResult_isFlaggedAsLastQuestion() {
+        load(activity(question("q1"), question("q2")))
+
+        // q1 (intermedia): el resultado no es la ultima pregunta.
+        reachListening()
+        orchestrator.onSpeechCaptured("respuesta")
+        orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+        assertFalse(orchestrator.lastResult!!.isLastQuestion)
+        assertEquals(BimodalAutoAction.ADVANCE, orchestrator.resolveAutoAction())
+
+        // q2 (ultima): el resultado se marca como ultima pregunta y completa.
+        orchestrator.moveToNextQuestion()
+        orchestrator.onFaceDetected()
+        orchestrator.startListening()
+        orchestrator.onSpeechCaptured("respuesta")
+        orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+        assertTrue(orchestrator.lastResult!!.isLastQuestion)
+        assertEquals(BimodalAutoAction.COMPLETE, orchestrator.resolveAutoAction())
+
+        // Avanzar desde la ultima pregunta finaliza la sesion directamente.
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.SESSION_COMPLETED, orchestrator.state)
+    }
+
+    @Test
     fun cancelSession_movesToSessionCancelled() {
         load(activity(question("q1")))
         orchestrator.startSession()
@@ -320,7 +345,7 @@ class BimodalFlowOrchestratorTest {
     }
 
     @Test
-    fun sessionSummary_countsOutcomesAndAttempts() {
+    fun sessionSummary_countsEachAttemptInItsCategory() {
         load(activity(question("q1", maxAttempts = 2), question("q2", maxAttempts = 1)))
 
         // q1: incorrecta (intento 1) -> reintento -> correcta (intento 2).
@@ -342,11 +367,89 @@ class BimodalFlowOrchestratorTest {
         assertEquals(BimodalInteractionState.SESSION_COMPLETED, orchestrator.state)
         val summary = orchestrator.summary
         assertEquals(2, summary.resolvedQuestions)
+        // El intento incorrecto se contabiliza aunque despues se acierte: no se pierde.
         assertEquals(1, summary.correct)
-        assertEquals(0, summary.incorrect)
+        assertEquals(1, summary.incorrect)
         assertEquals(1, summary.noResponse)
-        // q1 consumio 2 intentos, q2 consumio 1.
+        // 3 intentos contabilizados: q1 (incorrecto + correcto) y q2 (sin respuesta).
         assertEquals(3, summary.totalAttempts)
+    }
+
+    @Test
+    fun twoIncorrectAttempts_incrementIncorrectByTwo() {
+        // Pregunta con maxAttempts = 2: ambos intentos incorrectos cuentan.
+        load(activity(question("q1", maxAttempts = 2)))
+
+        // Intento 1 incorrecto -> permite reintento.
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+        assertEquals(1, orchestrator.summary.incorrect)
+        assertTrue(orchestrator.lastResult!!.canRetry)
+
+        // Intento 2 incorrecto -> termina la pregunta.
+        orchestrator.retryQuestion()
+        orchestrator.startListening()
+        orchestrator.onSpeechCaptured("otra cosa mas")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+        assertEquals(2, orchestrator.summary.incorrect)
+        assertFalse(orchestrator.lastResult!!.canRetry)
+
+        orchestrator.completeSession()
+        assertEquals(2, orchestrator.summary.incorrect)
+        assertEquals(0, orchestrator.summary.correct)
+        assertEquals(1, orchestrator.summary.resolvedQuestions)
+        assertEquals(2, orchestrator.summary.totalAttempts)
+    }
+
+    @Test
+    fun incorrectAttempt_doesNotIncrementCorrect() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        assertEquals(1, orchestrator.summary.incorrect)
+        assertEquals(0, orchestrator.summary.correct)
+    }
+
+    @Test
+    fun notInterpretableAttempt_doesNotIncrementIncorrect() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("mmm")
+        orchestrator.onSemanticEvaluated(SemanticResult.NOT_INTERPRETABLE)
+
+        assertEquals(1, orchestrator.summary.notInterpretable)
+        assertEquals(0, orchestrator.summary.incorrect)
+    }
+
+    @Test
+    fun sttErrorAttempt_doesNotIncrementIncorrect() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechFailed("reconocedor ocupado")
+
+        assertEquals(1, orchestrator.summary.sttErrors)
+        assertEquals(0, orchestrator.summary.incorrect)
+        assertEquals(0, orchestrator.summary.technicalErrors)
+    }
+
+    @Test
+    fun sameAttempt_isNotCountedTwice() {
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+        // Reenviar la misma evaluacion estando ya en feedback no debe recontar.
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        assertEquals(1, orchestrator.summary.incorrect)
+        assertEquals(1, orchestrator.summary.totalAttempts)
     }
 
     @Test
