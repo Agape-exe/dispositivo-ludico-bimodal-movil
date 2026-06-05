@@ -63,11 +63,14 @@ import com.taller.app.bimodal.BimodalInteractionState
 import com.taller.app.bimodal.BimodalLatencyStats
 import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
-import com.taller.app.bimodal.BimodalVoiceFeedback
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
+import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackContext
+import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackGenerator
+import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackMessage
+import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackType
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
@@ -80,7 +83,6 @@ import com.taller.app.speech.SttState
 import com.taller.app.vision.FaceAnalyzer
 import com.taller.app.vision.FacePresenceTracker
 import com.taller.app.voice.LocalToyVoiceProvider
-import com.taller.app.voice.ToySpeechPhrase
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceFallback
@@ -328,6 +330,12 @@ private fun BimodalSession(
     // del orquestador. Una sola instancia por actividad cargada.
     val semanticAdapter = remember(activity) { SemanticEvaluationAdapter() }
 
+    // Generador de retroalimentacion general tipo profesor: produce localmente
+    // frases breves y variadas por categoria, sin IA ni servicios externos. Mantiene
+    // estado (ultima frase por categoria) para no repetir, por lo que vive una sola
+    // instancia por actividad cargada.
+    val feedbackGenerator = remember(activity) { GeneralTeacherFeedbackGenerator() }
+
     // El orquestador es una maquina de estados plana; reflejamos sus valores en
     // estado Compose y los sincronizamos despues de cada evento.
     var state by remember(activity) { mutableStateOf(orchestrator.state) }
@@ -341,6 +349,10 @@ private fun BimodalSession(
     // diferenciar claramente en la UI lo real de lo simulado.
     var semanticSource by remember(activity) { mutableStateOf<SemanticSource?>(null) }
     var semanticLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
+
+    // Ultimo mensaje de retroalimentacion general generado (categoria + texto +
+    // latencia de generacion local) para mostrarlo en la tarjeta de feedback.
+    var lastFeedbackMessage by remember(activity) { mutableStateOf<GeneralTeacherFeedbackMessage?>(null) }
 
     // Tracker de latencia de la sesion: mide cada ciclo de respuesta real (desde la
     // transcripcion disponible hasta la respuesta logica y el inicio del feedback) y
@@ -489,6 +501,7 @@ private fun BimodalSession(
         sttError = ""
         semanticSource = null
         semanticLatencyMs = null
+        lastFeedbackMessage = null
     }
 
     // Tope de tiempo de respuesta: arranca al comenzar la escucha y usa el tiempo
@@ -679,7 +692,12 @@ private fun BimodalSession(
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
             ToyVoiceProviderType.LOCAL -> localVoiceProvider
         }
-        lastSpokenPhrase = "${ToySpeechPhrase.QUESTION_INTRO.text} $questionText"
+        // Intro variado tipo profesor antes de enunciar la pregunta (sin revelar
+        // ni explicar el contenido: solo invita a escuchar). Se genera una vez por
+        // (re)presentacion para que el texto mostrado y el reproducido coincidan.
+        val intro = feedbackGenerator.message(GeneralTeacherFeedbackType.QUESTION_INTRO)
+        val presentationText = "${intro.text} $questionText"
+        lastSpokenPhrase = presentationText
         toyVoiceSpeaking = true
         try {
             // Si la voz no esta disponible no se interrumpe el flujo: el resultado
@@ -687,7 +705,7 @@ private fun BimodalSession(
             // registra que proveedor atendio realmente la reproduccion.
             val outcome = runCatching {
                 ToyVoiceFallback.speak(
-                    text = "${ToySpeechPhrase.QUESTION_INTRO.text} $questionText",
+                    text = presentationText,
                     useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
                     allowFallback = voiceSettings.fallbackToLocal,
                     neural = neuralProvider,
@@ -711,13 +729,14 @@ private fun BimodalSession(
     }
 
     // ----- Retroalimentacion auditiva del flujo -----------------------------------
-    // Reproduce una frase predefinida al entrar en cada estado de feedback, al
-    // inicio de sesion y al completarla. PRESENTING_QUESTION ya tiene su propio
-    // efecto (presentationKey) que lee la pregunta; este bloque atiende el resto.
+    // Genera una frase de retroalimentacion general tipo profesor (variada y segura)
+    // al entrar en cada estado de feedback, al inicio de sesion y al completarla, y
+    // la envia a la capa comun de voz. PRESENTING_QUESTION ya tiene su propio efecto
+    // (presentationKey) que lee la pregunta; este bloque atiende el resto.
     //
     // La clave combina estado + indice de pregunta + intento para que LaunchedEffect
     // dispare exactamente una vez por evento real, aunque Compose recomponga varias
-    // veces en el mismo estado.
+    // veces en el mismo estado (evita repetir la voz por recomposicion).
     val feedbackVoiceKey: String? = when (state) {
         BimodalInteractionState.WAITING_FOR_FACE,
         BimodalInteractionState.FEEDBACK_CORRECT,
@@ -743,22 +762,47 @@ private fun BimodalSession(
             lastAnnouncedWaitingFaceIndex[0] = qi
         }
 
-        val phrase = BimodalVoiceFeedback.phraseFor(state, canRetry, qi)
+        // Construye el contexto a partir del estado del orquestador y del ultimo
+        // resultado, y genera la frase localmente. La respuesta esperada solo se
+        // pasa como contexto interno: el generador nunca la revela si hay reintento.
+        val feedbackContext = GeneralTeacherFeedbackContext(
+            state = state,
+            questionIndex = qi,
+            currentAttempt = progress?.currentAttempt ?: 1,
+            maxAttempts = progress?.maxAttempts ?: 1,
+            canRetry = canRetry,
+            isLastQuestion = lastResult?.isLastQuestion ?: (progress?.isLastQuestion ?: false),
+            semanticResult = lastResult?.semanticResult,
+            questionText = currentQuestion?.questionText,
+            expectedAnswer = currentQuestion?.expectedAnswer
+        )
+        val message = feedbackGenerator.generate(feedbackContext)
             ?: return@LaunchedEffect
+
+        // Solo los estados de desenlace de la pregunta alimentan la tarjeta de
+        // retroalimentacion; el inicio de sesion y la transicion entre preguntas no.
+        if (state != BimodalInteractionState.WAITING_FOR_FACE) {
+            lastFeedbackMessage = message
+        }
+        // Log seguro: solo categoria y latencia de generacion, nunca el texto.
+        Log.d(
+            BIMODAL_VOICE_TAG,
+            "feedback: categoria=${message.type} generacionUs=${message.generationLatencyMicros}"
+        )
 
         val neuralProvider = when (voiceSettings.provider) {
             ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
             ToyVoiceProviderType.LOCAL -> localVoiceProvider
         }
-        lastSpokenPhrase = phrase.text
+        lastSpokenPhrase = message.text
         toyVoiceSpeaking = true
         try {
             // Si la voz falla no se interrumpe el flujo: el error se ignora y la
             // interaccion continua visualmente (nunca cancela la sesion por audio).
             val outcome = runCatching {
                 ToyVoiceFallback.speak(
-                    text = phrase.text,
+                    text = message.text,
                     useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
                     allowFallback = voiceSettings.fallbackToLocal,
                     neural = neuralProvider,
@@ -1300,6 +1344,47 @@ private fun BimodalSession(
                         text = feedbackMessage(state, canRetry),
                         style = MaterialTheme.typography.bodyMedium
                     )
+
+                    // Mensaje generado tipo profesor (lo que dice el juguete), su
+                    // categoria, el resultado semantico, los intentos restantes y la
+                    // latencia de generacion local. La sintesis de voz se refleja
+                    // aparte ("El juguete esta hablando…") y la latencia logica
+                    // principal en la tarjeta de latencia del sistema.
+                    val fb = lastFeedbackMessage
+                    if (fb != null) {
+                        HorizontalDivider()
+                        Text(
+                            text = "El juguete dice: “${fb.text}”",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        InfoRow("Categoría", feedbackTypeLabel(fb.type))
+                        InfoRow(
+                            "Resultado semántico",
+                            lastResult?.semanticResult?.let { resultLabel(it) } ?: "—"
+                        )
+                        InfoRow(
+                            "Intentos restantes",
+                            progress?.let {
+                                (it.maxAttempts - it.currentAttempt).coerceAtLeast(0).toString()
+                            } ?: "—"
+                        )
+                        InfoRow("Voz", lastVoiceProviderUsed ?: "—")
+                        InfoRow(
+                            "Fallback de voz",
+                            when (lastVoiceFallbackUsed) {
+                                true -> "Sí"
+                                false -> "No"
+                                null -> "—"
+                            }
+                        )
+                        InfoRow(
+                            "Latencia de generación",
+                            "≈ ${fb.generationLatencyMicros} µs"
+                        )
+                    }
+
                     if (state == BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR &&
                         !errorMessage.isNullOrBlank()
                     ) {
@@ -1936,6 +2021,24 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.LOCAL -> "Voz local"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
+}
+
+/** Etiqueta legible para la categoria de retroalimentacion general. */
+private fun feedbackTypeLabel(type: GeneralTeacherFeedbackType): String = when (type) {
+    GeneralTeacherFeedbackType.CORRECT -> "Correcta"
+    GeneralTeacherFeedbackType.INCORRECT_RETRY -> "Incorrecta (reintento)"
+    GeneralTeacherFeedbackType.INCORRECT_NEXT -> "Incorrecta (avanza)"
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY -> "No interpretable (reintento)"
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT -> "No interpretable (avanza)"
+    GeneralTeacherFeedbackType.NO_RESPONSE_RETRY -> "Sin respuesta (reintento)"
+    GeneralTeacherFeedbackType.NO_RESPONSE_NEXT -> "Sin respuesta (avanza)"
+    GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY -> "Tiempo agotado (reintento)"
+    GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT -> "Tiempo agotado (avanza)"
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY -> "Error técnico (reintento)"
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT -> "Error técnico (avanza)"
+    GeneralTeacherFeedbackType.SESSION_START -> "Inicio de sesión"
+    GeneralTeacherFeedbackType.QUESTION_INTRO -> "Presentación de pregunta"
+    GeneralTeacherFeedbackType.SESSION_COMPLETED -> "Sesión completada"
 }
 
 /** Etiqueta legible para el resultado semantico. */
