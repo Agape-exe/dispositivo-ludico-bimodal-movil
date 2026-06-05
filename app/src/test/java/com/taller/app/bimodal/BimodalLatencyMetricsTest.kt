@@ -66,6 +66,41 @@ class BimodalLatencyMetricsTest {
     }
 
     @Test
+    fun computeStats_averagesFeedbackAndExposesPipeline() {
+        val sample1 = BimodalLatencySample(
+            sttStartAtMs = 0,
+            sttFinalAtMs = 100,
+            logicalResponseAtMs = 500,
+            feedbackStartAtMs = 600
+        )
+        val sample2 = BimodalLatencySample(
+            sttStartAtMs = 1_000,
+            sttFinalAtMs = 1_100,
+            logicalResponseAtMs = 1_900,
+            feedbackStartAtMs = 2_000
+        )
+
+        val stats = computeLatencyStats(listOf(sample1, sample2))
+
+        // Hasta feedback: (500 + 900) / 2 = 700.
+        assertEquals(700L, stats.averageFeedbackLatencyMs)
+        // Pipeline completo de la ultima muestra: 2000 - 1000 = 1000.
+        assertEquals(1_000L, stats.lastPipelineLatencyMs)
+    }
+
+    @Test
+    fun latencyMsLabel_formatsExactValueWithMs() {
+        assertEquals("1234 ms", latencyMsLabel(1_234L))
+        assertEquals("0 ms", latencyMsLabel(0L))
+        assertTrue(latencyMsLabel(450L).endsWith("ms"))
+    }
+
+    @Test
+    fun latencyMsLabel_withoutValue_returnsDash() {
+        assertEquals("—", latencyMsLabel(null))
+    }
+
+    @Test
     fun computeStats_withoutValidSamples_hasNoData() {
         val stats = computeLatencyStats(listOf(BimodalLatencySample(sttFinalAtMs = 0)))
 

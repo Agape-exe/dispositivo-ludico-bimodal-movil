@@ -35,6 +35,61 @@ class BimodalVoiceFeedbackTest {
     }
 
     @Test
+    fun lastQuestionCorrect_returnsCorrectFinalWithoutContinuity() {
+        // En la ultima pregunta el acierto no debe invitar a continuar.
+        val phrase = BimodalVoiceFeedback.phraseFor(
+            state = BimodalInteractionState.FEEDBACK_CORRECT,
+            canRetry = false,
+            questionIndex = 2,
+            isLastQuestion = true
+        )
+        assertEquals(ToySpeechPhrase.CORRECT_FINAL, phrase)
+    }
+
+    @Test
+    fun lastQuestionIncorrectWithoutRetry_returnsIncorrectFinalNotNext() {
+        // En la ultima pregunta una incorrecta sin reintento no debe decir
+        // "vamos con la siguiente pregunta".
+        val phrase = BimodalVoiceFeedback.phraseFor(
+            state = BimodalInteractionState.FEEDBACK_INCORRECT,
+            canRetry = false,
+            questionIndex = 2,
+            isLastQuestion = true
+        )
+        assertEquals(ToySpeechPhrase.INCORRECT_FINAL, phrase)
+    }
+
+    @Test
+    fun lastQuestionIncorrectWithRetry_stillReturnsRetry() {
+        // Aunque sea la ultima pregunta, si quedan intentos se reintenta.
+        val phrase = BimodalVoiceFeedback.phraseFor(
+            state = BimodalInteractionState.FEEDBACK_INCORRECT,
+            canRetry = true,
+            questionIndex = 2,
+            isLastQuestion = true
+        )
+        assertEquals(ToySpeechPhrase.INCORRECT_RETRY, phrase)
+    }
+
+    @Test
+    fun notInterpretableWithoutRetry_returnsNotInterpretableFinal() {
+        val phrase = BimodalVoiceFeedback.phraseFor(
+            state = BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
+            canRetry = false
+        )
+        assertEquals(ToySpeechPhrase.NOT_INTERPRETABLE_FINAL, phrase)
+    }
+
+    @Test
+    fun noResponseWithoutRetry_returnsNoResponseFinal() {
+        val phrase = BimodalVoiceFeedback.phraseFor(
+            state = BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+            canRetry = false
+        )
+        assertEquals(ToySpeechPhrase.NO_RESPONSE_FINAL, phrase)
+    }
+
+    @Test
     fun notInterpretable_returnsNotInterpretableRetry() {
         val phrase = BimodalVoiceFeedback.phraseFor(
             state = BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,

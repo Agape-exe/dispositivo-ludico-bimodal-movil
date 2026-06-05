@@ -68,6 +68,7 @@ import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
+import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
@@ -735,6 +736,7 @@ private fun BimodalSession(
         if (feedbackVoiceKey == null) return@LaunchedEffect
         val qi = progress?.currentQuestionIndex ?: 0
         val canRetry = lastResult?.canRetry ?: false
+        val isLast = lastResult?.isLastQuestion ?: false
 
         // Para WAITING_FOR_FACE: solo anunciar una vez por indice de pregunta.
         // Si el rostro se pierde y reaparece en la misma pregunta, no se repite.
@@ -743,7 +745,9 @@ private fun BimodalSession(
             lastAnnouncedWaitingFaceIndex[0] = qi
         }
 
-        val phrase = BimodalVoiceFeedback.phraseFor(state, canRetry, qi)
+        // En la ultima pregunta no se reproducen frases de continuidad: el desenlace
+        // usa solo frases de resultado y el cierre lo aporta SESSION_COMPLETED.
+        val phrase = BimodalVoiceFeedback.phraseFor(state, canRetry, qi, isLast)
             ?: return@LaunchedEffect
 
         val neuralProvider = when (voiceSettings.provider) {
@@ -802,12 +806,15 @@ private fun BimodalSession(
         latencyTracker.markLogicalResponse()
         latencyTracker.markFeedbackStart()
         latencyStats = latencyTracker.commit()
+        // Log interno solo con valores numericos de latencia (sin transcripciones,
+        // nombres ni claves). El cumplimiento del objetivo se interpreta manualmente.
         Log.d(
             BIMODAL_LATENCY_TAG,
-            "ciclo: respuestaMs=${latencyStats.lastResponseLatencyMs} " +
-                "feedbackMs=${latencyStats.lastFeedbackLatencyMs} " +
-                "promedioMs=${latencyStats.averageResponseLatencyMs} " +
-                "muestras=${latencyStats.validSamples} cumpleObjetivo=${latencyStats.meetsTarget}"
+            "latency_logical_ms=${latencyStats.lastResponseLatencyMs} " +
+                "latency_feedback_ms=${latencyStats.lastFeedbackLatencyMs} " +
+                "latency_pipeline_ms=${latencyStats.lastPipelineLatencyMs} " +
+                "latency_average_ms=${latencyStats.averageResponseLatencyMs} " +
+                "measurements_count=${latencyStats.validSamples}"
         )
 
         // Pausa breve para que se escuche la retroalimentacion; si la voz sigue
@@ -1820,6 +1827,7 @@ private fun SessionSummaryCard(summary: BimodalSessionSummary) {
             InfoRow("No interpretables", summary.notInterpretable.toString())
             InfoRow("Sin respuesta", summary.noResponse.toString())
             InfoRow("Tiempos agotados", summary.timeExpired.toString())
+            InfoRow("Errores de reconocimiento", summary.sttErrors.toString())
             InfoRow("Errores técnicos", summary.technicalErrors.toString())
             InfoRow("Intentos usados", summary.totalAttempts.toString())
         }
@@ -1827,11 +1835,15 @@ private fun SessionSummaryCard(summary: BimodalSessionSummary) {
 }
 
 /**
- * Tarjeta con las metricas de latencia del sistema en la sesion actual: ultima
- * latencia de respuesta logica, ultima latencia hasta el inicio del feedback,
- * promedio de la sesion, cantidad de mediciones validas e indicador de
- * cumplimiento del objetivo tecnico del charter. Solo refleja marcas de tiempo:
- * no contiene transcripciones, audios ni datos del nino.
+ * Tarjeta con las metricas de latencia del sistema en la sesion actual: valores
+ * numericos exactos en milisegundos (ultima respuesta logica, ultima hasta el
+ * feedback, ultima del pipeline completo, promedios y mediciones validas) y el
+ * umbral de referencia del charter como dato informativo.
+ *
+ * No muestra ningun indicador de cumplimiento ("cumple/no cumple"): el
+ * cumplimiento del objetivo se interpreta manualmente a partir de los numeros.
+ * Solo refleja marcas de tiempo: no contiene transcripciones, audios ni datos del
+ * nino.
  */
 @Composable
 private fun LatencyMetricsCard(stats: BimodalLatencyStats) {
@@ -1854,28 +1866,13 @@ private fun LatencyMetricsCard(stats: BimodalLatencyStats) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
-            InfoRow(
-                "Última respuesta lógica",
-                stats.lastResponseLatencyMs?.let { "$it ms" } ?: "—"
-            )
-            InfoRow(
-                "Última hasta feedback",
-                stats.lastFeedbackLatencyMs?.let { "$it ms" } ?: "—"
-            )
-            InfoRow(
-                "Promedio de respuesta",
-                stats.averageResponseLatencyMs?.let { "$it ms" } ?: "—"
-            )
+            InfoRow("Última respuesta lógica", latencyMsLabel(stats.lastResponseLatencyMs))
+            InfoRow("Última hasta feedback", latencyMsLabel(stats.lastFeedbackLatencyMs))
+            InfoRow("Última pipeline completa", latencyMsLabel(stats.lastPipelineLatencyMs))
+            InfoRow("Promedio de respuesta", latencyMsLabel(stats.averageResponseLatencyMs))
+            InfoRow("Promedio hasta feedback", latencyMsLabel(stats.averageFeedbackLatencyMs))
             InfoRow("Mediciones válidas", stats.validSamples.toString())
-            val targetLabel = "Objetivo < ${stats.targetMs} ms"
-            InfoRow(
-                targetLabel,
-                when {
-                    !stats.hasData -> "Sin mediciones aún"
-                    stats.meetsTarget -> "Cumple ✓"
-                    else -> "No cumple ✗"
-                }
-            )
+            InfoRow("Umbral de referencia", latencyMsLabel(stats.targetMs))
         }
     }
 }

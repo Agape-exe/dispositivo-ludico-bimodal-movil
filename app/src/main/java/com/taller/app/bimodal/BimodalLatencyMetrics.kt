@@ -69,14 +69,18 @@ data class BimodalLatencySample(
  * @property validSamples cantidad de mediciones validas consideradas.
  * @property lastResponseLatencyMs ultima latencia de respuesta logica.
  * @property lastFeedbackLatencyMs ultima latencia hasta el inicio del feedback.
+ * @property lastPipelineLatencyMs ultima latencia total del pipeline (escucha->feedback).
  * @property averageResponseLatencyMs promedio de latencias de respuesta logica.
+ * @property averageFeedbackLatencyMs promedio de latencias hasta el inicio del feedback.
  * @property targetMs umbral tecnico de referencia.
  */
 data class BimodalLatencyStats(
     val validSamples: Int = 0,
     val lastResponseLatencyMs: Long? = null,
     val lastFeedbackLatencyMs: Long? = null,
+    val lastPipelineLatencyMs: Long? = null,
     val averageResponseLatencyMs: Long? = null,
+    val averageFeedbackLatencyMs: Long? = null,
     val targetMs: Long = LATENCY_TARGET_MS
 ) {
     /** Indica si el promedio de la sesion cumple el objetivo tecnico (< umbral). */
@@ -102,15 +106,27 @@ fun computeLatencyStats(
 
     val responseLatencies = valid.mapNotNull { it.totalResponseLatencyMs }
     val average = responseLatencies.sum() / responseLatencies.size
+    val feedbackLatencies = valid.mapNotNull { it.responseToFeedbackLatencyMs }
+    val averageFeedback =
+        if (feedbackLatencies.isEmpty()) null else feedbackLatencies.sum() / feedbackLatencies.size
     val last = valid.last()
     return BimodalLatencyStats(
         validSamples = valid.size,
         lastResponseLatencyMs = last.totalResponseLatencyMs,
         lastFeedbackLatencyMs = last.responseToFeedbackLatencyMs,
+        lastPipelineLatencyMs = last.fullPipelineLatencyMs,
         averageResponseLatencyMs = average,
+        averageFeedbackLatencyMs = averageFeedback,
         targetMs = targetMs
     )
 }
+
+/**
+ * Formatea un valor de latencia (ms) para mostrarlo en pantalla o registrarlo.
+ * Devuelve el numero exacto seguido de " ms", o un guion si no hay dato. Es una
+ * funcion pura para poder validarla con pruebas unitarias.
+ */
+fun latencyMsLabel(valueMs: Long?): String = valueMs?.let { "$it ms" } ?: "—"
 
 /**
  * Acumulador mutable de latencias para una sesion del flujo bimodal.

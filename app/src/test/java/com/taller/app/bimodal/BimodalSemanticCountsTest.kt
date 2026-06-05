@@ -151,7 +151,7 @@ class BimodalSemanticCountsTest {
     }
 
     @Test
-    fun sttError_isTechnicalErrorNotCorrect() {
+    fun sttError_isSttErrorNotIncorrectNorCorrect() {
         load(question())
         orchestrator.startSession()
         orchestrator.onFaceDetected()
@@ -163,7 +163,9 @@ class BimodalSemanticCountsTest {
 
         val s = orchestrator.summary
         assertEquals(0, s.correct)
-        assertEquals(1, s.technicalErrors)
+        assertEquals(0, s.incorrect)
+        assertEquals(1, s.sttErrors)
+        assertEquals(0, s.technicalErrors)
     }
 
     @Test
