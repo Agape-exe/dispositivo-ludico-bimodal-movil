@@ -16,13 +16,17 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Proveedor de mediacion ludica generativa basado en un servicio en la nube
- * compatible con el formato de chat (estilo OpenAI). Esta desacoplado del flujo y
- * es seguro por defecto:
+ * compatible con el formato de chat de OpenAI (Azure AI Foundry, ruta v1). Esta
+ * desacoplado del flujo y es seguro por defecto:
  *
  * - Sin credenciales (config no operativa) responde [GenerativeMediationResult.Unavailable]
  *   sin tocar la red, por lo que la app funciona sin configurar nada.
  * - Con credenciales realiza una unica llamada con timeout; ante cualquier error de
  *   red, timeout, codigo HTTP o respuesta inesperada responde Unavailable.
+ * - Si el proveedor esta saturado ("Overloaded"), lo trata como un error temporal:
+ *   responde Unavailable de inmediato (el flujo usa el banco local) y entra en un
+ *   breve periodo de enfriamiento durante el cual no vuelve a llamar a la red,
+ *   evitando repetir llamadas saturadas en la misma sesion.
  *
  * Privacidad: al servicio solo se envia informacion controlada de la actividad (ver
  * [GenerativeMediationRequest]). NUNCA se envia la transcripcion del nino, su
@@ -42,6 +46,13 @@ class CloudGenerativeMediationProvider(
 
     private val makeClient = clientProvider
 
+    /**
+     * Marca de tiempo (epoch ms) hasta la cual se omiten llamadas a la red por una
+     * saturacion reciente del proveedor. Cero significa sin enfriamiento activo.
+     */
+    @Volatile
+    private var cooldownUntilMs: Long = 0L
+
     override fun isConfigured(): Boolean = configProvider().isOperational
 
     override suspend fun generateMediation(
@@ -54,27 +65,63 @@ class CloudGenerativeMediationProvider(
             )
         }
 
+        // Enfriamiento por saturacion previa: no se vuelve a contactar la red hasta
+        // que pase la ventana, para no repetir llamadas saturadas en la sesion.
+        if (System.currentTimeMillis() < cooldownUntilMs) {
+            Log.d(TAG, "en enfriamiento por saturacion; se omite la llamada")
+            return GenerativeMediationResult.Unavailable(OVERLOADED_REASON)
+        }
+
+        // Construye la URL final compatible con el formato OpenAI v1 de Azure AI
+        // Foundry: {endpoint}/chat/completions. No usa la ruta clasica de Azure
+        // OpenAI (/openai/deployments/{deployment}/chat/completions) ni anade
+        // api-version: el modelo (deployment) viaja en el cuerpo JSON como "model".
+        val url = chatCompletionsUrl(config.endpoint)
+        // Logs tecnicos seguros: nunca incluyen la API key.
+        Log.d(TAG, "endpoint base=${config.endpoint}")
+        Log.d(TAG, "url final=$url")
+        Log.d(TAG, "modelo=${config.model}")
+
         val start = System.nanoTime()
         return withContext(Dispatchers.IO) {
             try {
                 val payload = buildPayload(request, config)
                 val httpRequest = Request.Builder()
-                    .url(config.endpoint)
+                    .url(url)
                     .addHeader("Authorization", "Bearer ${config.apiKey}")
-                    .addHeader("Content-Type", "application/json")
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
 
                 makeClient(config).newCall(httpRequest).execute().use { response ->
+                    val code = response.code
+                    val responseBody = response.body?.string()
+                    Log.d(TAG, "respuesta HTTP code=$code")
+
                     if (!response.isSuccessful) {
-                        return@withContext unavailable("Codigo HTTP ${response.code}.")
+                        val summary = summarize(responseBody)
+                        Log.w(TAG, "error HTTP code=$code cuerpo=$summary")
+                        // 429/503 o cuerpo con "Overloaded" => saturacion temporal.
+                        if (isOverloaded(code, responseBody)) {
+                            return@withContext enterCooldown()
+                        }
+                        return@withContext unavailable("Codigo HTTP $code.")
                     }
-                    val body = response.body?.string()
-                    if (body.isNullOrBlank()) {
+
+                    if (responseBody.isNullOrBlank()) {
                         return@withContext unavailable("Respuesta vacia del servicio.")
                     }
-                    val text = parseText(body)
+                    // Algunas pasarelas devuelven 200 con un error de saturacion en
+                    // el cuerpo; se trata igual que un fallo temporal.
+                    if (looksOverloaded(responseBody)) {
+                        Log.w(TAG, "saturacion reportada en cuerpo 2xx")
+                        return@withContext enterCooldown()
+                    }
+                    val text = parseText(responseBody)
                         ?: return@withContext unavailable("Respuesta sin texto utilizable.")
+                    if (looksOverloaded(text)) {
+                        Log.w(TAG, "saturacion reportada en el contenido")
+                        return@withContext enterCooldown()
+                    }
                     val latencyMs = (System.nanoTime() - start) / 1_000_000
                     GenerativeMediationResult.Generated(text.trim(), latencyMs)
                 }
@@ -93,10 +140,23 @@ class CloudGenerativeMediationProvider(
 
     private fun unavailable(reason: String) = GenerativeMediationResult.Unavailable(reason)
 
+    /** Activa el enfriamiento y devuelve el resultado de saturacion para el flujo. */
+    private fun enterCooldown(): GenerativeMediationResult {
+        cooldownUntilMs = System.currentTimeMillis() + OVERLOADED_COOLDOWN_MS
+        return GenerativeMediationResult.Unavailable(OVERLOADED_REASON)
+    }
+
+    private fun summarize(body: String?): String =
+        body?.take(ERROR_BODY_LIMIT)
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            .orEmpty()
+            .ifBlank { "(sin cuerpo)" }
+
     /**
      * Construye el cuerpo de la peticion con instrucciones estrictas y solo
      * informacion controlada de la actividad. No incluye transcripciones ni datos
-     * personales.
+     * personales. Pide respuestas muy cortas para reducir carga y latencia.
      */
     private fun buildPayload(request: GenerativeMediationRequest, config: GenerativeMediationConfig): String {
         val messages = JSONArray()
@@ -114,8 +174,8 @@ class CloudGenerativeMediationProvider(
         return JSONObject().apply {
             put("model", config.model)
             put("messages", messages)
-            put("temperature", 0.7)
-            put("max_tokens", 80)
+            put("temperature", TEMPERATURE)
+            put("max_tokens", MAX_TOKENS)
         }.toString()
     }
 
@@ -124,7 +184,8 @@ class CloudGenerativeMediationProvider(
         append(request.locale)
         append("). Tono: ")
         append(request.tone)
-        append(". Responde con 1 o 2 frases muy breves, sin emojis, sin explicaciones largas. ")
+        append(". Responde con UNA sola frase de maximo 30 palabras. ")
+        append("Sin explicaciones, sin emojis, sin preguntas adicionales. ")
         append("No digas que eres una IA, un modelo ni un sistema. ")
         append("No reveles la respuesta esperada. No inventes datos personales. ")
         when (request.type) {
@@ -170,6 +231,43 @@ class CloudGenerativeMediationProvider(
     companion object {
         private const val TAG = "CloudMediation"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        /** Maximo de caracteres del cuerpo de error que se registra (resumido). */
+        private const val ERROR_BODY_LIMIT = 300
+
+        /** Respuestas cortas: pocos tokens reducen carga y latencia. */
+        private const val MAX_TOKENS = 64
+        private const val TEMPERATURE = 0.7
+
+        /** Motivo de respaldo legible cuando el proveedor esta saturado. */
+        const val OVERLOADED_REASON = "Proveedor saturado (API overloaded)."
+
+        /** Ventana de enfriamiento tras una saturacion, para no repetir llamadas. */
+        private const val OVERLOADED_COOLDOWN_MS = 30_000L
+
+        private const val HTTP_TOO_MANY_REQUESTS = 429
+        private const val HTTP_SERVICE_UNAVAILABLE = 503
+
+        /**
+         * Construye la URL final compatible con el formato OpenAI v1: agrega
+         * "/chat/completions" al endpoint base. Tolera barras finales y evita
+         * duplicar el sufijo. No agrega "/deployments/" ni "api-version".
+         */
+        fun chatCompletionsUrl(endpoint: String): String {
+            val base = endpoint.trim().trimEnd('/')
+            return if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
+        }
+
+        /** Indica si un texto reporta saturacion del proveedor ("Overloaded"). */
+        fun looksOverloaded(text: String?): Boolean =
+            text != null && text.contains("overloaded", ignoreCase = true)
+
+        /**
+         * Clasifica una respuesta de error como saturacion temporal: por codigo
+         * (429/503) o porque el cuerpo menciona "Overloaded".
+         */
+        fun isOverloaded(code: Int, body: String?): Boolean =
+            code == HTTP_TOO_MANY_REQUESTS || code == HTTP_SERVICE_UNAVAILABLE || looksOverloaded(body)
 
         private fun defaultClient(config: GenerativeMediationConfig): OkHttpClient =
             OkHttpClient.Builder()
