@@ -60,6 +60,32 @@ android {
             "AZURE_SPEECH_VOICE",
             "\"${localSecret("AZURE_SPEECH_VOICE")}\""
         )
+
+        // Mediacion ludica generativa (opcional). Desactivada por defecto: la app
+        // funciona sin credenciales y usa el banco local de frases. Si se quiere
+        // activar, definir en local.properties (no versionado):
+        // GENERATIVE_MEDIATION_ENABLED=true, GENERATIVE_MEDIATION_API_KEY,
+        // GENERATIVE_MEDIATION_ENDPOINT y, opcionalmente, GENERATIVE_MEDIATION_MODEL.
+        buildConfigField(
+            "boolean",
+            "GENERATIVE_MEDIATION_ENABLED",
+            localSecret("GENERATIVE_MEDIATION_ENABLED").ifBlank { "false" }
+        )
+        buildConfigField(
+            "String",
+            "GENERATIVE_MEDIATION_API_KEY",
+            "\"${localSecret("GENERATIVE_MEDIATION_API_KEY")}\""
+        )
+        buildConfigField(
+            "String",
+            "GENERATIVE_MEDIATION_ENDPOINT",
+            "\"${localSecret("GENERATIVE_MEDIATION_ENDPOINT")}\""
+        )
+        buildConfigField(
+            "String",
+            "GENERATIVE_MEDIATION_MODEL",
+            "\"${localSecret("GENERATIVE_MEDIATION_MODEL").ifBlank { "gpt-4o-mini" }}\""
+        )
     }
 
     buildTypes {
