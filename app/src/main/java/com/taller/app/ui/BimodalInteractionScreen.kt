@@ -71,20 +71,16 @@ import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackContext
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackGenerator
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackMessage
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackType
+import com.taller.app.bimodal.feedback.AnimalMediationBank
 import com.taller.app.bimodal.latencyMsLabel
-import com.taller.app.bimodal.mediation.CloudGenerativeMediationProvider
-import com.taller.app.bimodal.mediation.GenerativeMediationConfig
-import com.taller.app.bimodal.mediation.GenerativeMediationRequest
-import com.taller.app.bimodal.mediation.GenerativeMediationResponse
-import com.taller.app.bimodal.mediation.GenerativeMediationService
 import com.taller.app.bimodal.mediation.GenerativeMediationType
-import com.taller.app.bimodal.mediation.LocalMediationFallbackProvider
 import com.taller.app.bimodal.mediation.MediationSource
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
+import com.taller.app.model.LocalMediationKey
 import com.taller.app.model.OperationMode
 import com.taller.app.semantic.SemanticResult
 import com.taller.app.speech.SpeechToTextService
@@ -345,23 +341,17 @@ private fun BimodalSession(
     // instancia por actividad cargada.
     val feedbackGenerator = remember(activity) { GeneralTeacherFeedbackGenerator() }
 
-    // Capa opcional de mediacion ludica generativa. Lee su configuracion de
-    // BuildConfig (credenciales no versionadas); si esta desactivada o sin
-    // credenciales, el servicio usa el banco local de frases como respaldo. El
-    // proveedor en la nube esta desacoplado y solo recibe informacion controlada de
-    // la actividad, nunca la transcripcion del nino. Una instancia por sesion.
-    val mediationConfig = remember { GenerativeMediationConfig.fromBuild() }
-    val mediationService = remember(activity) {
-        GenerativeMediationService(
-            config = mediationConfig,
-            cloudProvider = CloudGenerativeMediationProvider({ mediationConfig }),
-            localProvider = LocalMediationFallbackProvider(feedbackGenerator)
-        )
-    }
+    // Banco local avanzado de mediacion ludica para la actividad de animales. No usa
+    // IA generativa, no llama APIs externas y no depende de internet: a partir de la
+    // clave de mediacion local de cada pregunta elige frases calidas y variadas,
+    // evitando repetir la misma de forma consecutiva. Para claves generales o no
+    // reconocidas recurre al banco general tipo profesor. Mantiene estado, por lo que
+    // vive una sola instancia por actividad cargada.
+    val animalBank = remember(activity) { AnimalMediationBank(generalFallback = feedbackGenerator) }
 
     // Diagnostico de la ultima mediacion para la interfaz tecnica: origen efectivo
-    // (local/generativa/fallback), latencia del intento generativo, tipo y motivo
-    // del respaldo, si lo hubo. No contiene texto del nino.
+    // (siempre local en esta actividad), latencia de seleccion, tipo y motivo del
+    // respaldo, si lo hubo. No contiene texto del nino.
     var lastMediationSource by remember(activity) { mutableStateOf<MediationSource?>(null) }
     var lastMediationLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
     var lastMediationType by remember(activity) { mutableStateOf<GenerativeMediationType?>(null) }
@@ -723,35 +713,30 @@ private fun BimodalSession(
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
             ToyVoiceProviderType.LOCAL -> localVoiceProvider
         }
-        // Intro variado tipo profesor antes de enunciar la pregunta (sin revelar
-        // ni explicar el contenido: solo invita a escuchar). Se genera una vez por
-        // (re)presentacion para que el texto mostrado y el reproducido coincidan.
+        // Intro ludico del banco local antes de enunciar la pregunta (sin revelar ni
+        // explicar la respuesta: solo invita a pensar y escuchar). Se genera una vez
+        // por (re)presentacion para que el texto mostrado y el reproducido coincidan.
         //
-        // La mediacion generativa solo produce la introduccion; la pregunta original
-        // se concatena verbatim despues, por lo que su intencion nunca cambia. Si la
-        // mediacion esta desactivada o falla, el servicio devuelve una frase del
-        // banco local (mismo comportamiento previo).
-        val totalQuestions = progress?.totalQuestions ?: activity.questions.size
-        val isLastForIntro = progress?.let { it.currentQuestionIndex >= totalQuestions - 1 } ?: false
-        val introMediation = mediationService.mediate(
-            GenerativeMediationRequest(
-                type = GenerativeMediationType.QUESTION_INTRODUCTION,
-                questionText = questionText,
-                expectedAnswer = currentQuestion?.expectedAnswer,
-                keywords = currentQuestion?.keywords ?: emptyList(),
-                hasRemainingAttempts = (progress?.let { it.currentAttempt < it.maxAttempts }) ?: false,
-                isLastQuestion = isLastForIntro
-            )
-        )
-        lastMediationSource = introMediation.source
-        lastMediationLatencyMs = introMediation.latencyMs
-        lastMediationType = introMediation.type
-        lastMediationFallbackReason = introMediation.fallbackReason
+        // Las introducciones especificas de animales ya incluyen el enunciado de la
+        // pregunta; para una clave general la introduccion es generica y la pregunta
+        // se concatena verbatim despues, por lo que su intencion nunca cambia.
+        val mediationKey = currentQuestion?.mediationKey
+        val introStart = System.nanoTime()
+        val introText = animalBank.getQuestionIntroduction(mediationKey)
+        lastMediationSource = MediationSource.LOCAL
+        lastMediationLatencyMs = (System.nanoTime() - introStart) / 1_000_000
+        lastMediationType = GenerativeMediationType.QUESTION_INTRODUCTION
+        lastMediationFallbackReason = null
         Log.d(
             BIMODAL_VOICE_TAG,
-            "mediacion intro: origen=${introMediation.source} latenciaMs=${introMediation.latencyMs}"
+            "mediacion intro: origen=local clave=${LocalMediationKey.fromKey(mediationKey).name}"
         )
-        val presentationText = "${introMediation.text} $questionText"
+        val presentationText =
+            if (LocalMediationKey.fromKey(mediationKey) == LocalMediationKey.NONE) {
+                "$introText $questionText"
+            } else {
+                introText
+            }
         lastSpokenPhrase = presentationText
         toyVoiceSpeaking = true
         try {
@@ -838,40 +823,52 @@ private fun BimodalSession(
         val category = feedbackGenerator.feedbackTypeFor(feedbackContext)
             ?: return@LaunchedEffect
 
-        // El anuncio de WAITING_FOR_FACE (inicio de sesion / paso de pregunta) no es
-        // retroalimentacion contextual: se mantiene con el banco local y no actualiza
-        // la tarjeta de feedback ni el diagnostico de mediacion. El resto de estados
-        // (desenlaces y cierre) pasan por la mediacion generativa, que decide su
-        // origen (generativa / fallback / local) respetando la categoria ya fijada.
+        // El anuncio de WAITING_FOR_FACE no es retroalimentacion contextual: solo la
+        // primera pregunta tiene saludo de apertura; el paso entre preguntas (rostro
+        // reanunciado) no agrega voz, porque la presentacion de la pregunta ya lee su
+        // propia introduccion. El resto de estados (desenlaces y cierre) toman su
+        // frase del banco local de animales segun la clave de mediacion de la
+        // pregunta, respetando la categoria ya fijada por el flujo.
+        val mediationKey = currentQuestion?.mediationKey
         val spokenText: String
         if (state == BimodalInteractionState.WAITING_FOR_FACE) {
-            spokenText = feedbackGenerator.message(category).text
+            if (category != GeneralTeacherFeedbackType.SESSION_START) return@LaunchedEffect
+            spokenText = animalBank.getSessionStartPhrase()
         } else {
-            val mediation = mediationService.mediate(
-                GenerativeMediationRequest(
-                    type = GenerativeMediationType.CONTEXTUAL_FEEDBACK,
-                    questionText = currentQuestion?.questionText ?: "",
-                    expectedAnswer = currentQuestion?.expectedAnswer,
-                    keywords = currentQuestion?.keywords ?: emptyList(),
-                    feedbackCategory = category,
-                    semanticResult = lastResult?.semanticResult,
-                    hasRemainingAttempts = canRetry,
-                    isLastQuestion = isLast
-                )
-            )
-            spokenText = mediation.text
-            lastMediationSource = mediation.source
-            lastMediationLatencyMs = mediation.latencyMs
-            lastMediationType = mediation.type
-            lastMediationFallbackReason = mediation.fallbackReason
+            val feedbackStart = System.nanoTime()
+            spokenText = when (category) {
+                GeneralTeacherFeedbackType.CORRECT ->
+                    animalBank.getCorrectFeedback(mediationKey)
+                GeneralTeacherFeedbackType.INCORRECT_RETRY ->
+                    animalBank.getIncorrectRetryFeedback(mediationKey)
+                GeneralTeacherFeedbackType.INCORRECT_NEXT ->
+                    animalBank.getIncorrectNextFeedback(mediationKey, isLast)
+                GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY,
+                GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT ->
+                    animalBank.getNotInterpretableFeedback()
+                GeneralTeacherFeedbackType.NO_RESPONSE_RETRY,
+                GeneralTeacherFeedbackType.NO_RESPONSE_NEXT,
+                GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY,
+                GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT ->
+                    animalBank.getNoResponseFeedback()
+                GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY,
+                GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT ->
+                    animalBank.getTechnicalErrorFeedback()
+                GeneralTeacherFeedbackType.SESSION_COMPLETED ->
+                    animalBank.getSessionCompletedPhrase()
+                GeneralTeacherFeedbackType.SESSION_START,
+                GeneralTeacherFeedbackType.QUESTION_INTRO ->
+                    feedbackGenerator.message(category).text
+            }
+            lastMediationSource = MediationSource.LOCAL
+            lastMediationLatencyMs = (System.nanoTime() - feedbackStart) / 1_000_000
+            lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
+            lastMediationFallbackReason = null
             // La tarjeta de feedback muestra la categoria fijada por el flujo y el
-            // texto finalmente reproducido (generado o local).
+            // texto finalmente reproducido por el banco local.
             lastFeedbackMessage = GeneralTeacherFeedbackMessage(category, spokenText)
-            // Log seguro: solo categoria y origen de la mediacion, nunca el texto.
-            Log.d(
-                BIMODAL_VOICE_TAG,
-                "feedback: categoria=$category mediacion=${mediation.source} latenciaMs=${mediation.latencyMs}"
-            )
+            // Log seguro: solo categoria y origen, nunca el texto.
+            Log.d(BIMODAL_VOICE_TAG, "feedback: categoria=$category mediacion=local")
         }
 
         val neuralProvider = when (voiceSettings.provider) {
@@ -1105,11 +1102,10 @@ private fun BimodalSession(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Diagnostico de la mediacion ludica generativa: deja claro si la frase la
-        // produjo la IA (generativa), si se uso el banco local por respaldo (fallback)
-        // o si la mediacion esta desactivada (local). Muestra la latencia del intento
-        // generativo en milisegundos exactos, el tipo de mediacion y el motivo del
-        // respaldo. No muestra ningun indicador de "cumple/no cumple".
+        // Diagnostico de la mediacion ludica local: la frase siempre proviene del
+        // banco local avanzado (sin IA, sin red). Muestra el origen efectivo, la
+        // latencia de seleccion en milisegundos, el tipo de mediacion y el motivo del
+        // respaldo, si lo hubo. No muestra ningun indicador de "cumple/no cumple".
         Card(
             modifier = Modifier.fillMaxWidth(),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -1121,21 +1117,18 @@ private fun BimodalSession(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "Mediación generativa",
+                    text = "Mediación local",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
-                InfoRow(
-                    "Estado",
-                    if (mediationConfig.isOperational) "Activada" else "Desactivada (banco local)"
-                )
+                InfoRow("Estado", "Banco local de animales")
                 InfoRow("Mediación usada", lastMediationSource?.let { mediationSourceLabel(it) } ?: "—")
                 InfoRow(
                     "Tipo de mediación",
                     lastMediationType?.let { mediationTypeLabel(it) } ?: "—"
                 )
                 InfoRow(
-                    "Latencia de mediación IA",
+                    "Latencia de mediación",
                     lastMediationLatencyMs?.let { "$it ms" } ?: "—"
                 )
                 InfoRow("Motivo de fallback", lastMediationFallbackReason ?: "—")
