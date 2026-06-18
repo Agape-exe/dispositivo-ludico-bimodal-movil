@@ -197,6 +197,48 @@ class BimodalFlowOrchestratorTest {
     }
 
     @Test
+    fun evaluatingLastQuestion_staysInFeedback_doesNotCompleteImmediately() {
+        // El orquestador NO debe emitir el cierre inmediatamente despues de evaluar la
+        // ultima pregunta: el flujo debe pasar por feedback (estado de
+        // retroalimentacion) para que el nino escuche la respuesta antes del cierre.
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("respuesta")
+        orchestrator.onSemanticEvaluated(SemanticResult.CORRECT)
+
+        // Tras evaluar la ultima pregunta el estado es de feedback, no SESSION_COMPLETED.
+        assertEquals(BimodalInteractionState.FEEDBACK_CORRECT, orchestrator.state)
+        assertTrue(orchestrator.lastResult!!.isLastQuestion)
+        // La accion automatica es COMPLETE, que la UI ejecuta solo tras reproducir el
+        // feedback y, despues, el cierre completo.
+        assertEquals(BimodalAutoAction.COMPLETE, orchestrator.resolveAutoAction())
+
+        // Solo al avanzar explicitamente (tras feedback + cierre) se completa la sesion.
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.SESSION_COMPLETED, orchestrator.state)
+    }
+
+    @Test
+    fun lastQuestionIncorrectNoAttempts_staysInFeedbackBeforeComplete() {
+        // Ultima pregunta incorrecta sin intentos: tambien pasa por feedback antes de
+        // completar, y la accion automatica es COMPLETE (no reintento).
+        load(activity(question("q1", maxAttempts = 1)))
+
+        reachListening()
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        assertEquals(BimodalInteractionState.FEEDBACK_INCORRECT, orchestrator.state)
+        assertFalse(orchestrator.lastResult!!.canRetry)
+        assertTrue(orchestrator.lastResult!!.isLastQuestion)
+        assertEquals(BimodalAutoAction.COMPLETE, orchestrator.resolveAutoAction())
+
+        orchestrator.moveToNextQuestion()
+        assertEquals(BimodalInteractionState.SESSION_COMPLETED, orchestrator.state)
+    }
+
+    @Test
     fun cancelSession_movesToSessionCancelled() {
         load(activity(question("q1")))
         orchestrator.startSession()

@@ -114,15 +114,6 @@ private const val BIMODAL_SEMANTIC_TAG = "BimodalSemantic"
 /** Etiqueta de logs de la voz del juguete (solo proveedor, nunca claves ni texto). */
 private const val BIMODAL_VOICE_TAG = "BimodalVoice"
 
-/** Pausa minima de retroalimentacion antes de aplicar el avance automatico. */
-private const val AUTO_ADVANCE_MIN_PAUSE_MS = 900L
-
-/** Tope de espera a que termine la voz de retroalimentacion antes de avanzar. */
-private const val AUTO_ADVANCE_MAX_VOICE_WAIT_MS = 4_000L
-
-/** Intervalo de sondeo mientras se espera a que termine la voz. */
-private const val AUTO_ADVANCE_POLL_MS = 100L
-
 /**
  * Pantalla inicial del modo bimodal inteligente.
  *
@@ -693,6 +684,44 @@ private fun BimodalSession(
         )
     }
 
+    // Reproduce una frase con la voz del juguete y SUSPENDE hasta que el audio
+    // termina realmente: los proveedores (Azure/ElevenLabs/local) completan su
+    // `speak` solo cuando el TTS o la red senalan el fin de la reproduccion. Es el
+    // unico punto de reproduccion del flujo: centraliza la seleccion de proveedor, el
+    // indicador "hablando", el respaldo local y el registro de diagnostico, y
+    // garantiza que el flujo nunca avance, reintente ni cierre antes de que la voz
+    // haya terminado. Nunca lanza: si la voz falla, el error se ignora y la
+    // interaccion continua (la sesion jamas se cancela por un problema de audio).
+    //
+    // Si la corrutina que la invoca se cancela (por ejemplo, el docente fuerza una
+    // accion manual), el bloque finally detiene el audio residual de forma ordenada.
+    suspend fun speakAndAwait(text: String) {
+        val neuralProvider = when (voiceSettings.provider) {
+            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
+            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
+            ToyVoiceProviderType.LOCAL -> localVoiceProvider
+        }
+        lastSpokenPhrase = text
+        toyVoiceSpeaking = true
+        try {
+            val outcome = runCatching {
+                ToyVoiceFallback.speak(
+                    text = text,
+                    useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
+                    allowFallback = voiceSettings.fallbackToLocal,
+                    neural = neuralProvider,
+                    local = localVoiceProvider
+                )
+            }.getOrNull()
+            recordVoiceUsage(voiceSettings.provider, outcome)
+        } finally {
+            azureVoiceProvider.stop()
+            elevenLabsVoiceProvider.stop()
+            toySpeechService.stop()
+            toyVoiceSpeaking = false
+        }
+    }
+
     // Guarda los indices de pregunta para los que ya se anuncio WAITING_FOR_FACE,
     // evitando repetir la frase si el rostro se pierde y vuelve en la misma pregunta.
     val lastAnnouncedWaitingFaceIndex = remember(activity) { intArrayOf(-1) }
@@ -708,11 +737,6 @@ private fun BimodalSession(
     LaunchedEffect(presentationKey) {
         if (presentationKey == null) return@LaunchedEffect
         val questionText = currentQuestion?.questionText ?: return@LaunchedEffect
-        val neuralProvider = when (voiceSettings.provider) {
-            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
-            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
-            ToyVoiceProviderType.LOCAL -> localVoiceProvider
-        }
         // Intro ludico del banco local antes de enunciar la pregunta (sin revelar ni
         // explicar la respuesta: solo invita a pensar y escuchar). Se genera una vez
         // por (re)presentacion para que el texto mostrado y el reproducido coincidan.
@@ -737,78 +761,100 @@ private fun BimodalSession(
             } else {
                 introText
             }
-        lastSpokenPhrase = presentationText
-        toyVoiceSpeaking = true
-        try {
-            // Si la voz no esta disponible no se interrumpe el flujo: el resultado
-            // se ignora y la interaccion continua sin audio (nunca crashea). Se
-            // registra que proveedor atendio realmente la reproduccion.
-            val outcome = runCatching {
-                ToyVoiceFallback.speak(
-                    text = presentationText,
-                    useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
-                    allowFallback = voiceSettings.fallbackToLocal,
-                    neural = neuralProvider,
-                    local = localVoiceProvider
-                )
-            }.getOrNull()
-            recordVoiceUsage(voiceSettings.provider, outcome)
-            // Tras la lectura, abre la escucha si seguimos en la misma pregunta y
-            // hay permiso de microfono. Sin permiso, el docente usa el boton.
-            if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
-                startVoiceCapture()
-            }
-        } finally {
-            // Si el efecto se cancela (cambio de estado/pregunta) corta el audio
-            // pendiente para no solaparlo con la escucha o la siguiente pregunta.
-            azureVoiceProvider.stop()
-            elevenLabsVoiceProvider.stop()
-            toySpeechService.stop()
-            toyVoiceSpeaking = false
+        // Lee la pregunta y SUSPENDE hasta que el audio termina por completo. Solo
+        // entonces abre la escucha, de modo que la voz nunca se solapa con la captura
+        // del microfono ni se corta a media frase. Si el efecto se cancela (cambio de
+        // estado o pregunta), speakAndAwait detiene el audio pendiente.
+        speakAndAwait(presentationText)
+        if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
+            startVoiceCapture()
         }
     }
 
-    // ----- Retroalimentacion auditiva del flujo -----------------------------------
-    // Genera una frase de retroalimentacion general tipo profesor (variada y segura)
-    // al entrar en cada estado de feedback, al inicio de sesion y al completarla, y
-    // la envia a la capa comun de voz. PRESENTING_QUESTION ya tiene su propio efecto
-    // (presentationKey) que lee la pregunta; este bloque atiende el resto.
+    // ----- Saludo de apertura ------------------------------------------------------
+    // Solo la primera pregunta tiene saludo de bienvenida mientras se espera el
+    // rostro. El paso entre preguntas (rostro reanunciado) no agrega voz, porque la
+    // presentacion de la pregunta ya lee su propia introduccion. La retroalimentacion
+    // de cada respuesta y el cierre de la sesion se reproducen, de forma estrictamente
+    // secuencial, en el efecto de avance automatico de mas abajo.
     //
-    // La clave combina estado + indice de pregunta + intento para que LaunchedEffect
-    // dispare exactamente una vez por evento real, aunque Compose recomponga varias
-    // veces en el mismo estado (evita repetir la voz por recomposicion).
-    val feedbackVoiceKey: String? = when (state) {
-        BimodalInteractionState.WAITING_FOR_FACE,
+    // La clave es el indice de pregunta para disparar el efecto una sola vez por
+    // pregunta, aunque Compose recomponga o el rostro se pierda y reaparezca.
+    val sessionStartVoiceKey: Int? =
+        if (state == BimodalInteractionState.WAITING_FOR_FACE) {
+            progress?.currentQuestionIndex ?: 0
+        } else {
+            null
+        }
+
+    LaunchedEffect(sessionStartVoiceKey) {
+        val qi = sessionStartVoiceKey ?: return@LaunchedEffect
+        // El saludo de apertura solo corresponde a la primera pregunta.
+        if (qi != 0) return@LaunchedEffect
+        // Solo anunciar una vez por indice de pregunta: si el rostro se pierde y
+        // reaparece en la misma pregunta, no se repite.
+        if (lastAnnouncedWaitingFaceIndex[0] == qi) return@LaunchedEffect
+        lastAnnouncedWaitingFaceIndex[0] = qi
+        speakAndAwait(animalBank.getSessionStartPhrase())
+    }
+
+    // ----- Retroalimentacion de voz + avance automatico del flujo -----------------
+    // Cuando la pregunta llega a un desenlace (feedback o tiempo agotado), este unico
+    // efecto ejecuta TODA la secuencia de forma estrictamente secuencial y sin
+    // solapes, de modo que el flujo nunca avanza, reintenta ni cierra antes de que la
+    // voz haya terminado por completo:
+    //   1) cierra la medicion de latencia del ciclo (hasta el inicio del feedback);
+    //   2) construye la retroalimentacion local de la respuesta del nino y la
+    //      reproduce, SUSPENDIENDO hasta que el audio termina (speakAndAwait);
+    //   3) solo entonces aplica la accion que decide el orquestador:
+    //        - reintentar la misma pregunta (quedan intentos), o
+    //        - avanzar a la siguiente (sin intentos y no es la ultima), o
+    //        - en la ultima pregunta, reproducir el cierre completo y solo despues
+    //          marcar la sesion como completada.
+    //
+    // La clave dispara el efecto una sola vez por desenlace real (estado + pregunta +
+    // intento). Si el docente fuerza una accion manual, el cambio de estado cancela
+    // este efecto y speakAndAwait detiene el audio de forma ordenada.
+    val autoFlowKey: String? = when (state) {
         BimodalInteractionState.FEEDBACK_CORRECT,
         BimodalInteractionState.FEEDBACK_INCORRECT,
         BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
         BimodalInteractionState.FEEDBACK_NO_RESPONSE,
         BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR,
-        BimodalInteractionState.TIME_EXPIRED,
-        BimodalInteractionState.SESSION_COMPLETED ->
+        BimodalInteractionState.TIME_EXPIRED ->
             "${state.name}:${progress?.currentQuestionIndex ?: 0}:${progress?.currentAttempt ?: 0}"
         else -> null
     }
+    LaunchedEffect(autoFlowKey) {
+        if (autoFlowKey == null) return@LaunchedEffect
 
-    LaunchedEffect(feedbackVoiceKey) {
-        if (feedbackVoiceKey == null) return@LaunchedEffect
+        // 1) Cierra la medicion de este ciclo: marca la respuesta logica y el inicio
+        // del feedback, consolida la muestra (descarta las no validas) y actualiza
+        // el resumen agregado. Solo se registran marcas de tiempo, nunca datos del
+        // nino. La latencia se mide hasta el inicio del feedback: no depende de la
+        // duracion del audio, que ahora se espera por completo.
+        latencyTracker.markLogicalResponse()
+        latencyTracker.markFeedbackStart()
+        latencyStats = latencyTracker.commit()
+        Log.d(
+            BIMODAL_LATENCY_TAG,
+            "latency_logical_ms=${latencyStats.lastResponseLatencyMs} " +
+                "latency_feedback_ms=${latencyStats.lastFeedbackLatencyMs} " +
+                "latency_pipeline_ms=${latencyStats.lastPipelineLatencyMs} " +
+                "latency_average_ms=${latencyStats.averageResponseLatencyMs} " +
+                "measurements_count=${latencyStats.validSamples}"
+        )
+
         val qi = progress?.currentQuestionIndex ?: 0
         val canRetry = lastResult?.canRetry ?: false
         val isLast = lastResult?.isLastQuestion ?: false
+        val mediationKey = currentQuestion?.mediationKey
 
-        // Para WAITING_FOR_FACE: solo anunciar una vez por indice de pregunta.
-        // Si el rostro se pierde y reaparece en la misma pregunta, no se repite.
-        if (state == BimodalInteractionState.WAITING_FOR_FACE) {
-            if (lastAnnouncedWaitingFaceIndex[0] == qi) return@LaunchedEffect
-            lastAnnouncedWaitingFaceIndex[0] = qi
-        }
-
-        // Construye el contexto a partir del estado del orquestador y del ultimo
-        // resultado, y decide la categoria de retroalimentacion localmente. La
-        // respuesta esperada solo se pasa como contexto interno: nunca se revela si
-        // hay reintento. En la ultima pregunta el desenlace terminal no produce
-        // categoria (feedbackTypeFor devuelve null): nunca suena una frase de
-        // continuidad antes del cierre, que lo aporta SESSION_COMPLETED.
+        // 2) Construye y reproduce la retroalimentacion de la respuesta del nino.
+        // La respuesta esperada solo se pasa como contexto interno: nunca se revela
+        // si hay reintento. En la ultima pregunta el desenlace SI produce feedback
+        // (el nino lo escucha antes del cierre); la regla de no anunciar un avance
+        // inexistente la aplica el banco local al elegir la frase (isLast).
         val feedbackContext = GeneralTeacherFeedbackContext(
             state = state,
             questionIndex = qi,
@@ -821,22 +867,9 @@ private fun BimodalSession(
             expectedAnswer = currentQuestion?.expectedAnswer
         )
         val category = feedbackGenerator.feedbackTypeFor(feedbackContext)
-            ?: return@LaunchedEffect
-
-        // El anuncio de WAITING_FOR_FACE no es retroalimentacion contextual: solo la
-        // primera pregunta tiene saludo de apertura; el paso entre preguntas (rostro
-        // reanunciado) no agrega voz, porque la presentacion de la pregunta ya lee su
-        // propia introduccion. El resto de estados (desenlaces y cierre) toman su
-        // frase del banco local de animales segun la clave de mediacion de la
-        // pregunta, respetando la categoria ya fijada por el flujo.
-        val mediationKey = currentQuestion?.mediationKey
-        val spokenText: String
-        if (state == BimodalInteractionState.WAITING_FOR_FACE) {
-            if (category != GeneralTeacherFeedbackType.SESSION_START) return@LaunchedEffect
-            spokenText = animalBank.getSessionStartPhrase()
-        } else {
+        if (category != null) {
             val feedbackStart = System.nanoTime()
-            spokenText = when (category) {
+            val spokenText = when (category) {
                 GeneralTeacherFeedbackType.CORRECT ->
                     animalBank.getCorrectFeedback(mediationKey)
                 GeneralTeacherFeedbackType.INCORRECT_RETRY ->
@@ -867,92 +900,30 @@ private fun BimodalSession(
             // La tarjeta de feedback muestra la categoria fijada por el flujo y el
             // texto finalmente reproducido por el banco local.
             lastFeedbackMessage = GeneralTeacherFeedbackMessage(category, spokenText)
-            // Log seguro: solo categoria y origen, nunca el texto.
             Log.d(BIMODAL_VOICE_TAG, "feedback: categoria=$category mediacion=local")
+            // Reproduce el feedback completo: SUSPENDE hasta que el audio termina.
+            speakAndAwait(spokenText)
         }
 
-        val neuralProvider = when (voiceSettings.provider) {
-            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
-            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
-            ToyVoiceProviderType.LOCAL -> localVoiceProvider
-        }
-        lastSpokenPhrase = spokenText
-        toyVoiceSpeaking = true
-        try {
-            // Si la voz falla no se interrumpe el flujo: el error se ignora y la
-            // interaccion continua visualmente (nunca cancela la sesion por audio).
-            val outcome = runCatching {
-                ToyVoiceFallback.speak(
-                    text = spokenText,
-                    useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
-                    allowFallback = voiceSettings.fallbackToLocal,
-                    neural = neuralProvider,
-                    local = localVoiceProvider
-                )
-            }.getOrNull()
-            recordVoiceUsage(voiceSettings.provider, outcome)
-        } finally {
-            azureVoiceProvider.stop()
-            elevenLabsVoiceProvider.stop()
-            toySpeechService.stop()
-            toyVoiceSpeaking = false
-        }
-    }
-
-    // ----- Avance automatico del flujo + cierre de la medicion de latencia --------
-    // Cuando la pregunta llega a un desenlace (feedback o tiempo agotado), este
-    // efecto: 1) cierra la medicion de latencia del ciclo y actualiza el resumen;
-    // 2) espera una pausa breve (y a que termine la voz de retroalimentacion, con
-    // tope) para que el nino la escuche; 3) aplica la accion automatica que decide
-    // el orquestador: reintentar, avanzar o finalizar. La clave dispara el efecto
-    // una sola vez por desenlace real (estado + pregunta + intento).
-    val currentToyVoiceSpeaking by rememberUpdatedState(toyVoiceSpeaking)
-    val autoFlowKey: String? = when (state) {
-        BimodalInteractionState.FEEDBACK_CORRECT,
-        BimodalInteractionState.FEEDBACK_INCORRECT,
-        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
-        BimodalInteractionState.FEEDBACK_NO_RESPONSE,
-        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR,
-        BimodalInteractionState.TIME_EXPIRED ->
-            "${state.name}:${progress?.currentQuestionIndex ?: 0}:${progress?.currentAttempt ?: 0}"
-        else -> null
-    }
-    LaunchedEffect(autoFlowKey) {
-        if (autoFlowKey == null) return@LaunchedEffect
-
-        // Cierra la medicion de este ciclo: marca la respuesta logica y el inicio
-        // del feedback, consolida la muestra (descarta las no validas) y actualiza
-        // el resumen agregado. Solo se registran marcas de tiempo, nunca datos del
-        // nino. Un log interno permite revisar latencias sin exponer transcripciones.
-        latencyTracker.markLogicalResponse()
-        latencyTracker.markFeedbackStart()
-        latencyStats = latencyTracker.commit()
-        // Log interno solo con valores numericos de latencia (sin transcripciones,
-        // nombres ni claves). El cumplimiento del objetivo se interpreta manualmente.
-        Log.d(
-            BIMODAL_LATENCY_TAG,
-            "latency_logical_ms=${latencyStats.lastResponseLatencyMs} " +
-                "latency_feedback_ms=${latencyStats.lastFeedbackLatencyMs} " +
-                "latency_pipeline_ms=${latencyStats.lastPipelineLatencyMs} " +
-                "latency_average_ms=${latencyStats.averageResponseLatencyMs} " +
-                "measurements_count=${latencyStats.validSamples}"
-        )
-
-        // Pausa breve para que se escuche la retroalimentacion; si la voz sigue
-        // sonando se espera a que termine, con un tope para no demorar el avance.
-        delay(AUTO_ADVANCE_MIN_PAUSE_MS)
-        var waited = 0L
-        while (currentToyVoiceSpeaking && waited < AUTO_ADVANCE_MAX_VOICE_WAIT_MS) {
-            delay(AUTO_ADVANCE_POLL_MS)
-            waited += AUTO_ADVANCE_POLL_MS
-        }
-
-        // Aplica la accion automatica. Si el estado ya cambio (p. ej. el docente
-        // pulso un boton manual), resolveAutoAction devuelve NONE y no se hace nada.
+        // 3) Solo despues de que la retroalimentacion termino por completo, decide el
+        // avance. La voz nunca se interrumpe para avanzar, reintentar ni cerrar.
         when (orchestrator.resolveAutoAction()) {
             BimodalAutoAction.RETRY -> dispatch { orchestrator.retryQuestion() }
-            BimodalAutoAction.ADVANCE,
-            BimodalAutoAction.COMPLETE -> dispatch { orchestrator.moveToNextQuestion() }
+            BimodalAutoAction.ADVANCE -> dispatch { orchestrator.moveToNextQuestion() }
+            BimodalAutoAction.COMPLETE -> {
+                // Ultima pregunta: tras el feedback de la respuesta, reproduce el
+                // cierre COMPLETO y solo entonces marca la sesion como completada.
+                // Nunca se salta directamente a SESSION_COMPLETED.
+                val closingStart = System.nanoTime()
+                val closingText = animalBank.getSessionCompletedPhrase()
+                lastMediationSource = MediationSource.LOCAL
+                lastMediationLatencyMs = (System.nanoTime() - closingStart) / 1_000_000
+                lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
+                lastMediationFallbackReason = null
+                Log.d(BIMODAL_VOICE_TAG, "cierre: mediacion=local")
+                speakAndAwait(closingText)
+                dispatch { orchestrator.moveToNextQuestion() }
+            }
             BimodalAutoAction.NONE -> Unit
         }
     }

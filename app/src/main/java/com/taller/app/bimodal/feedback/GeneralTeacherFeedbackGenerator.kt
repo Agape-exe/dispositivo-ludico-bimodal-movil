@@ -39,11 +39,13 @@ class GeneralTeacherFeedbackGenerator(
      * se anima a continuar sin revelar la respuesta esperada.
      *
      * En la ultima pregunta ([GeneralTeacherFeedbackContext.isLastQuestion]) el
-     * desenlace terminal (sin reintento) no produce frase: nunca debe sonar una
-     * frase de continuidad ("continuemos", "pasemos a la siguiente") antes del
-     * cierre. El cierre lo aporta el estado SESSION_COMPLETED con su propia
-     * categoria. Un reintento si se anuncia aunque sea la ultima pregunta, porque
-     * invita a repetir la misma pregunta y no contiene continuidad.
+     * desenlace SI produce retroalimentacion: el nino debe escuchar el feedback de
+     * su respuesta antes del cierre de la sesion. La regla de "no anunciar un avance
+     * que no ocurrira" (no decir "continuemos", "pasemos a la siguiente") se aplica al
+     * elegir la frase concreta —en el banco local de mediacion, que filtra las frases
+     * de continuidad en la ultima pregunta—, no suprimiendo la categoria aqui. El
+     * cierre lo aporta el estado SESSION_COMPLETED con su propia categoria, despues de
+     * que la retroalimentacion termina de reproducirse.
      */
     fun feedbackTypeFor(context: GeneralTeacherFeedbackContext): GeneralTeacherFeedbackType? =
         when (context.state) {
@@ -53,27 +55,21 @@ class GeneralTeacherFeedbackGenerator(
             BimodalInteractionState.PRESENTING_QUESTION ->
                 GeneralTeacherFeedbackType.QUESTION_INTRO
             BimodalInteractionState.FEEDBACK_CORRECT ->
-                if (context.isLastQuestion) null
-                else GeneralTeacherFeedbackType.CORRECT
+                GeneralTeacherFeedbackType.CORRECT
             BimodalInteractionState.FEEDBACK_INCORRECT ->
                 if (context.canRetry) GeneralTeacherFeedbackType.INCORRECT_RETRY
-                else if (context.isLastQuestion) null
                 else GeneralTeacherFeedbackType.INCORRECT_NEXT
             BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE ->
                 if (context.canRetry) GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY
-                else if (context.isLastQuestion) null
                 else GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT
             BimodalInteractionState.FEEDBACK_NO_RESPONSE ->
                 if (context.canRetry) GeneralTeacherFeedbackType.NO_RESPONSE_RETRY
-                else if (context.isLastQuestion) null
                 else GeneralTeacherFeedbackType.NO_RESPONSE_NEXT
             BimodalInteractionState.TIME_EXPIRED ->
                 if (context.canRetry) GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY
-                else if (context.isLastQuestion) null
                 else GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT
             BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR ->
                 if (context.canRetry) GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY
-                else if (context.isLastQuestion) null
                 else GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT
             BimodalInteractionState.SESSION_COMPLETED ->
                 GeneralTeacherFeedbackType.SESSION_COMPLETED
