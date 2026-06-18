@@ -4,33 +4,23 @@ import com.taller.app.model.LocalMediationKey
 import kotlin.random.Random
 
 /**
- * Banco local avanzado de frases de mediacion ludica para la actividad de animales
- * ("Los animales y sus sonidos").
+ * Banco local de frases narrativas para la actividad de animales
+ * ("Rescatemos los sonidos de los animales").
  *
- * A partir de la clave de mediacion local registrada por el docente
- * ([LocalMediationKey]) entrega frases calidas, humanizadas y entretenidas para
- * ninos pequenos. No usa IA generativa, no llama a ninguna API externa y no
- * depende de internet: solo elige que frase decir entre conjuntos pre-aprobados.
+ * Las frases tienen tono teatral y de aventura: el juguete es un personaje que
+ * juega con el nino, no un evaluador. No usa IA generativa, no llama a ninguna
+ * API externa y no depende de internet.
  *
- * El banco no decide si una respuesta es correcta; eso sigue siendo trabajo del
- * SemanticEvaluator. Aqui solo se selecciona la frase adecuada para el desenlace
- * que el flujo ya determino.
- *
- * Reglas que respetan estos conjuntos de frases:
- *  - Nunca se revela la respuesta esperada mientras quedan intentos (las frases de
- *    reintento solo invitan a pensar de nuevo).
- *  - Con la respuesta correcta nunca se dice algo distinto a un acierto real.
- *  - Ante error tecnico, silencio o respuesta no interpretable nunca se culpa al
- *    nino.
- *  - No se usan frases de acierto parcial ("estas cerca", "casi lo tienes", "vas
- *    por buen camino", "mencionaste una idea importante").
- *  - En la ultima pregunta, [getIncorrectNextFeedback] evita frases de continuidad
- *    ("continuemos", "pasemos a la siguiente", "vamos con otra").
+ * Reglas que respetan todos los conjuntos de frases:
+ *  - Nunca se revela la respuesta esperada mientras quedan intentos.
+ *  - Ante error tecnico, silencio o respuesta no interpretable nunca se culpa al nino.
+ *  - No se usan frases de acierto parcial ("estas cerca", "casi lo tienes", etc.).
+ *  - En la ultima pregunta, se evitan frases de continuidad ("continuemos",
+ *    "pasemos a la siguiente", "vamos con otra").
+ *  - No se usan frases como "evaluacion", "sistema", "respuesta correcta/incorrecta".
  *
  * Para claves no reconocidas o vacias ([LocalMediationKey.NONE]) la introduccion y
- * la retroalimentacion contextual se delegan a [GeneralTeacherFeedbackGenerator]
- * (frases generales seguras); las categorias generales de sesion, silencio, error y
- * cierre siempre usan los bancos amplios de esta clase.
+ * la retroalimentacion contextual se delegan a [GeneralTeacherFeedbackGenerator].
  *
  * Mantiene estado mutable (el ultimo indice elegido por conjunto) para no repetir
  * la misma frase de forma consecutiva, por lo que debe existir una instancia por
@@ -41,15 +31,13 @@ class AnimalMediationBank(
     private val generalFallback: GeneralTeacherFeedbackGenerator = GeneralTeacherFeedbackGenerator()
 ) {
 
-    /** Ultimo indice de frase elegido por conjunto, para evitar repeticiones seguidas. */
     private val lastIndexByGroup = HashMap<String, Int>()
 
-    /** Frase de apertura de la sesion. */
-    fun getSessionStartPhrase(): String = pick("GENERAL_SESSION_START", GENERAL_SESSION_START)
+    /** Frase de apertura de mision al iniciar la sesion. */
+    fun getSessionStartPhrase(): String = pick("MISSION_START", MISSION_START)
 
-    /** Frase de cierre cuando la actividad termina. */
-    fun getSessionCompletedPhrase(): String =
-        pick("GENERAL_SESSION_COMPLETED", GENERAL_SESSION_COMPLETED)
+    /** Frase de cierre al completar la actividad. */
+    fun getSessionCompletedPhrase(): String = pick("MISSION_COMPLETED", MISSION_COMPLETED)
 
     /** Frase para cuando la respuesta no se pudo interpretar. Nunca culpa al nino. */
     fun getNotInterpretableFeedback(): String =
@@ -63,21 +51,41 @@ class AnimalMediationBank(
         pick("GENERAL_TECHNICAL_ERROR", GENERAL_TECHNICAL_ERROR)
 
     /**
-     * Introduccion previa a una pregunta segun su clave de mediacion. Las frases de
-     * animales ya incluyen el enunciado de la pregunta; para [LocalMediationKey.NONE]
-     * o claves no reconocidas devuelve una introduccion general (que no incluye la
-     * pregunta: la concatena el llamador).
+     * Devuelve un microdiálogo breve de forma ocasional (probabilidad configurable)
+     * para intercalar antes de la intro de una pregunta. Devuelve null cuando no
+     * corresponde usarlo, para no alargar la interaccion.
+     */
+    fun getMicroDialogue(probabilityPercent: Int = 35): String? {
+        if (random.nextInt(100) >= probabilityPercent) return null
+        return pick("MICRO_DIALOGUE", MICRO_DIALOGUES)
+    }
+
+    /**
+     * Mini escena narrativa antes de una pregunta segun su clave de mediacion. Las
+     * escenas de animales ya incluyen el enunciado de la pregunta; para
+     * [LocalMediationKey.NONE] o claves no reconocidas devuelve una introduccion
+     * general (la pregunta se concatena aparte en el llamador).
      */
     fun getQuestionIntroduction(mediationKey: String?): String =
         forKey(mediationKey, INTRODUCTIONS, "INTRO") {
             generalFallback.message(GeneralTeacherFeedbackType.QUESTION_INTRO).text
         }
 
-    /** Retroalimentacion para una respuesta correcta segun la clave de mediacion. */
-    fun getCorrectFeedback(mediationKey: String?): String =
-        forKey(mediationKey, CORRECT_FEEDBACK, "CORRECT") {
-            generalFallback.message(GeneralTeacherFeedbackType.CORRECT).text
-        }
+    /**
+     * Retroalimentacion para una respuesta correcta segun la clave de mediacion.
+     * En la ultima pregunta ([isLastQuestion]) se excluyen las frases con continuidad.
+     */
+    fun getCorrectFeedback(mediationKey: String?, isLastQuestion: Boolean = false): String {
+        val key = LocalMediationKey.fromKey(mediationKey)
+        val list = CORRECT_FEEDBACK[key]
+            ?: return generalFallback.message(GeneralTeacherFeedbackType.CORRECT).text
+
+        if (!isLastQuestion) return pick("CORRECT_${key.name}", list)
+
+        val neutral = list.filterNot(::hasContinuation)
+        return if (neutral.isEmpty()) pick("CORRECT_${key.name}", list)
+        else pick("CORRECT_LAST_${key.name}", neutral)
+    }
 
     /**
      * Retroalimentacion para una respuesta incorrecta cuando aun quedan intentos.
@@ -92,9 +100,7 @@ class AnimalMediationBank(
      * Retroalimentacion para una respuesta incorrecta sin intentos restantes. Aqui
      * si puede mencionarse la respuesta correcta de forma amable.
      *
-     * En la ultima pregunta ([isLastQuestion]) se excluyen las frases con continuidad
-     * ("continuemos", "pasemos a la siguiente", "sigamos") para no anunciar un avance
-     * que no ocurrira; si la clave es general se usa el cierre suave.
+     * En la ultima pregunta ([isLastQuestion]) se excluyen frases con continuidad.
      */
     fun getIncorrectNextFeedback(mediationKey: String?, isLastQuestion: Boolean): String {
         val key = LocalMediationKey.fromKey(mediationKey)
@@ -104,16 +110,11 @@ class AnimalMediationBank(
 
         if (!isLastQuestion) return pick("NEXT_${key.name}", list)
 
-        // Ultima pregunta: nunca una frase de continuidad antes del cierre.
         val neutral = list.filterNot(::hasContinuation)
         return if (neutral.isEmpty()) getSessionCompletedPhrase()
         else pick("NEXT_LAST_${key.name}", neutral)
     }
 
-    /**
-     * Resuelve la frase de un grupo asociado a una clave de mediacion concreta; si la
-     * clave es general o no tiene frases propias, usa [generalText].
-     */
     private inline fun forKey(
         mediationKey: String?,
         groups: Map<LocalMediationKey, List<String>>,
@@ -125,10 +126,6 @@ class AnimalMediationBank(
         return pick("${prefix}_${key.name}", list)
     }
 
-    /**
-     * Selecciona una frase del conjunto evitando repetir la ultima usada: elige de
-     * forma uniforme entre las demas opciones. Con una sola frase la devuelve siempre.
-     */
     private fun pick(group: String, options: List<String>): String {
         require(options.isNotEmpty()) { "El conjunto $group no tiene frases" }
 
@@ -141,7 +138,6 @@ class AnimalMediationBank(
         val index = if (lastIndex == null) {
             random.nextInt(options.size)
         } else {
-            // Elige uniformemente entre las (size - 1) opciones distintas de la ultima.
             val candidate = random.nextInt(options.size - 1)
             if (candidate >= lastIndex) candidate + 1 else candidate
         }
@@ -151,43 +147,62 @@ class AnimalMediationBank(
 
     companion object {
 
-        /** Marcas de continuidad a evitar en la ultima pregunta. */
         private val CONTINUATION_MARKERS = listOf(
             "continuemos", "continuar", "siguiente", "vamos con otra",
             "pasemos", "sigamos", "vamos a continuar"
         )
 
-        /** Indica si una frase contiene alguna marca de continuidad. */
         private fun hasContinuation(phrase: String): Boolean {
             val lower = phrase.lowercase()
             return CONTINUATION_MARKERS.any { lower.contains(it) }
         }
 
-        val GENERAL_SESSION_START: List<String> = listOf(
-            "Hola, hoy vamos a jugar aprendiendo sobre los animales.",
-            "Vamos a empezar una actividad divertida con animales y sonidos.",
-            "Hoy escucharemos, pensaremos y responderemos sobre animales.",
-            "Me alegra verte. Vamos a jugar con preguntas de animales.",
-            "Prepárate, porque hoy conoceremos animales domésticos y de granja.",
-            "Vamos a imaginar que visitamos un lugar lleno de animalitos.",
-            "Hoy jugaremos a reconocer animales y algunos sonidos que hacen.",
-            "Escucha con atención, porque los animales tienen mucho que enseñarnos.",
-            "Empecemos con una aventura pequeña sobre animales.",
-            "Vamos a aprender jugando. Hoy hablaremos de animales que quizá ya conoces."
+        // ----- Apertura de mision --------------------------------------------------
+
+        val MISSION_START: List<String> = listOf(
+            "¡Hola! Hoy tengo una misión especial. Se me mezclaron algunos sonidos de animales y necesito tu ayuda para recordarlos.",
+            "¡Qué bueno que estás aquí! Mi granja imaginaria está un poquito desordenada y necesito a alguien que sepa de animales.",
+            "Hoy vamos a ser exploradores de animales. Yo te haré algunas preguntas y tú me ayudarás a encontrarlos.",
+            "Tengo un pequeño problema: escuché varios sonidos de animales, pero algunos se me olvidaron. ¿Me ayudas?",
+            "Bienvenido a nuestra misión animal. Vamos a buscar sonidos, mascotas y animales de la granja.",
+            "Hoy necesito tus orejitas de explorador. Vamos a descubrir animales juntos.",
+            "Prepárate, porque vamos a entrar a una aventura de animales. Yo pregunto y tú me ayudas.",
+            "Mi memoria de juguete se confundió con algunos animalitos. Vamos a ordenarlos juntos.",
+            "Tenemos una misión: reconocer animales y sonidos. Sé que puedes ayudarme.",
+            "Hoy la granja necesita nuestra ayuda. Vamos a descubrir qué animal es cada uno."
         )
 
-        val GENERAL_SESSION_COMPLETED: List<String> = listOf(
-            "Terminamos la actividad. Gracias por jugar y aprender conmigo.",
-            "Muy bien, completamos las preguntas sobre animales.",
-            "Hemos terminado por hoy. Me gustó mucho jugar contigo.",
-            "Gracias por participar. Aprendimos juntos sobre los animales.",
-            "La actividad terminó. Lo hiciste con mucho esfuerzo.",
-            "Muy bien, llegamos al final de nuestra aventura con animales.",
-            "Terminamos el juego de animales. Gracias por responder.",
-            "Excelente, completamos todas las preguntas de hoy.",
-            "Ya terminamos. Me encantó acompañarte en esta actividad.",
-            "Gracias por jugar conmigo. Hoy recordamos animales y sonidos."
+        // ----- Cierre de mision ----------------------------------------------------
+
+        val MISSION_COMPLETED: List<String> = listOf(
+            "¡Misión cumplida! Gracias por ayudarme a ordenar los animales.",
+            "Terminamos nuestra aventura animal. Me encantó jugar contigo.",
+            "La granja imaginaria está feliz otra vez. Gracias por ayudarme.",
+            "Completamos todas las pistas de animales. Lo hiciste con mucho esfuerzo.",
+            "Nuestra misión terminó. Hoy reconocimos sonidos, mascotas y animales de granja.",
+            "Gracias por ser mi ayudante en esta aventura.",
+            "Los animales ya están en su lugar. Terminamos por hoy.",
+            "Muy bien, explorador. Completamos la misión de animales.",
+            "Hoy hicimos un gran trabajo en nuestra aventura animal.",
+            "Gracias por jugar conmigo. Nuestra misión de animales terminó."
         )
+
+        // ----- Microdiálogos opcionales --------------------------------------------
+
+        val MICRO_DIALOGUES: List<String> = listOf(
+            "Espera... creo que escuché algo.",
+            "Vamos despacito, como buenos exploradores.",
+            "Usa tus orejitas de detective.",
+            "A ver, a ver... pensemos juntos.",
+            "Me parece que hay un animal cerca.",
+            "Esta misión está interesante.",
+            "Necesito tu ayuda en esta parte.",
+            "Vamos a imaginarlo juntos.",
+            "Shhh... prestemos atención.",
+            "Listo, vamos con la siguiente pista."
+        )
+
+        // ----- Frases generales (no interpretable, sin respuesta, error técnico) ---
 
         val GENERAL_NOT_INTERPRETABLE: List<String> = listOf(
             "No pude escucharte bien. Vamos a repetirlo con voz clara.",
@@ -228,197 +243,203 @@ class AnimalMediationBank(
             "Sigamos con calma. Voy a escucharte otra vez."
         )
 
-        // ----- Frases especificas por clave de mediacion local ---------------------
+        // ----- Mini escenas antes de cada pregunta ---------------------------------
 
         val INTRODUCTIONS: Map<LocalMediationKey, List<String>> = mapOf(
             LocalMediationKey.ANIMAL_DOG_SOUND to listOf(
-                "Te cuento algo: los perros son mascotas muy juguetonas y a veces ladran cuando están felices. Ahora dime, ¿qué sonido hace el perro?",
-                "Imaginemos que vemos un perrito moviendo la colita porque quiere jugar. Dime, ¿qué sonido hace el perro?",
-                "Hoy empezamos con un animal muy conocido. Tiene patitas, cola y muchas veces cuida la casa. ¿Qué sonido hace el perro?",
-                "Piensa en un perrito cuando ve llegar a su dueño. Se emociona mucho y hace un sonido. ¿Qué sonido hace el perro?",
-                "En muchas casas hay perritos que saludan con mucha alegría. Escucha bien: ¿qué sonido hace el perro?",
-                "Vamos a imaginar un parque con un perrito corriendo detrás de una pelota. Ahora dime, ¿qué sonido hace el perro?",
-                "Hay un animal que a veces usa collar, mueve la cola y ladra. ¿Qué sonido hace el perro?",
-                "Te cuento que algunos perros ladran cuando quieren avisar algo. Ahora dime, ¿qué sonido hace el perro?",
-                "Imagina que tocamos una puerta y un perrito nos escucha desde adentro. ¿Qué sonido hace el perro?",
-                "Vamos a jugar con sonidos. Primero pensemos en un perrito feliz. ¿Qué sonido hace el perro?"
+                "Primera misión: escuché unas patitas corriendo por el patio. Creo que es un perrito feliz. ¿Qué sonido hace el perro?",
+                "Imagina que abrimos la puerta y un perrito viene moviendo la colita. Quiere saludarnos. ¿Qué sonido hace el perro?",
+                "Veo una pelota rodando y un perrito detrás de ella. Está muy emocionado. ¿Qué sonido hace el perro?",
+                "En nuestra misión apareció un perrito guardián. Quiere avisarnos algo. ¿Qué sonido hace el perro?",
+                "Creo que hay un perro cerca de la casa. Se acercó muy contento. ¿Qué sonido hace el perro?",
+                "Un perrito está jugando en el parque y quiere llamar nuestra atención. ¿Qué sonido hace el perro?",
+                "Misión perrito: encontramos huellitas pequeñas en el camino. Ahora dime, ¿qué sonido hace el perro?",
+                "Imagina a un perro saludando a su familia cuando llega a casa. ¿Qué sonido hace el perro?",
+                "Nuestro primer animal tiene cola, orejas y muchas ganas de jugar. ¿Qué sonido hace el perro?",
+                "El perrito de la misión quiere decirnos algo con su ladrido. ¿Qué sonido hace el perro?"
             ),
             LocalMediationKey.ANIMAL_DOMESTIC to listOf(
-                "Hay animales que pueden vivir cerca de nosotros y acompañarnos en casa. Ahora dime, menciona un animal doméstico.",
-                "Pensemos en los animalitos que algunas familias cuidan en casa. Dime un animal doméstico.",
-                "Imagina una casa con una mascota cariñosa. Ahora dime, menciona un animal doméstico.",
-                "Algunas mascotas viven con las personas y reciben mucho cariño. Dime un animal doméstico.",
-                "Vamos a pensar en animales que podemos cuidar en casa. Menciona un animal doméstico.",
-                "Hay animalitos que comen, duermen y juegan cerca de las personas. Dime uno que sea doméstico.",
-                "Imagina que visitamos una casa donde hay una mascota. ¿Qué animal doméstico podrías mencionar?",
-                "Algunas personas tienen animales en casa y los cuidan todos los días. Menciona un animal doméstico.",
-                "Vamos a pensar en una mascota que pueda vivir con una familia. Dime un animal doméstico.",
-                "Hay animales que no viven en la selva ni en la granja, sino cerca de nosotros en casa. Menciona uno."
+                "Segunda misión: entramos a una casita imaginaria. Allí vive una mascota muy querida. Menciona un animal doméstico.",
+                "Ahora busquemos un animal que pueda vivir cerca de las personas. Menciona un animal doméstico.",
+                "En esta parte de la aventura necesitamos encontrar una mascota. ¿Qué animal doméstico puedes mencionar?",
+                "Imagina una casa con una camita pequeña, comida y agua para una mascota. Menciona un animal doméstico.",
+                "La misión ahora es pensar en un animal que una familia pueda cuidar en casa. Dime uno.",
+                "Hay animalitos que acompañan a las personas y reciben mucho cariño. Menciona un animal doméstico.",
+                "Abrimos una puerta imaginaria y vemos una mascota esperando. ¿Qué animal doméstico puede ser?",
+                "Ahora toca buscar un animal de casa, uno que pueda ser mascota. Menciona uno.",
+                "Nuestro juguete necesita ordenar las mascotas. Ayúdame: menciona un animal doméstico.",
+                "Pensemos en un animal que pueda vivir con una familia. ¿Cuál puede ser?"
             ),
             LocalMediationKey.ANIMAL_CAT_SOUND to listOf(
-                "Ahora pensemos en un gatito. Los gatos caminan suavecito y hacen un sonido especial. Dime, ¿qué sonido hace el gato?",
-                "Imagina un gato pequeño buscando a su mamá. Escucha bien: ¿qué sonido hace el gato?",
-                "Los gatitos pueden ser muy curiosos y a veces hacen un sonido tierno. ¿Qué sonido hace el gato?",
-                "Sigamos jugando con sonidos de animales. Ahora toca el gato: ¿qué sonido hace?",
-                "Piensa en un gatito cuando quiere que lo acaricien. Dime, ¿qué sonido hace el gato?",
-                "Imagina un gato sentado en la ventana mirando todo con curiosidad. ¿Qué sonido hace el gato?",
-                "Hay un animal que tiene bigotes, camina suavecito y maúlla. ¿Qué sonido hace el gato?",
-                "Vamos a pensar en un gatito que quiere leche. Dime, ¿qué sonido hace el gato?",
-                "Los gatos a veces se acercan despacito y hacen un sonido suave. ¿Qué sonido hace el gato?",
-                "Ahora imaginemos un gatito jugando con una bolita de lana. ¿Qué sonido hace el gato?"
+                "Tercera misión: escuché un sonido suavecito cerca de la ventana. Creo que hay un gatito. ¿Qué sonido hace el gato?",
+                "Shhh... caminemos despacio. Hay un gatito curioso mirándonos. ¿Qué sonido hace el gato?",
+                "Imagina un gato pequeño jugando con una bolita de lana. De pronto quiere hablarnos. ¿Qué sonido hace el gato?",
+                "Ahora apareció un animal con bigotes y patitas suaves. ¿Qué sonido hace el gato?",
+                "El gatito de nuestra misión quiere llamar a su mamá. ¿Qué sonido hace el gato?",
+                "Veo unos bigotes asomándose detrás de una silla. Creo que es un gato. ¿Qué sonido hace?",
+                "Nuestro siguiente animal camina suavecito y a veces se acurruca. ¿Qué sonido hace el gato?",
+                "Imagina que un gatito quiere pedir comida. ¿Qué sonido hace el gato?",
+                "En esta parte de la aventura encontramos un gatito curioso. Dime, ¿qué sonido hace?",
+                "El gatito se acercó despacito y quiere saludarnos. ¿Qué sonido hace el gato?"
             ),
             LocalMediationKey.ANIMAL_FARM to listOf(
-                "Imaginemos que visitamos una granja con muchos animales. Algunos caminan, otros corren y otros hacen sonidos fuertes. Ahora dime, menciona un animal que encontremos en la granja.",
-                "En la granja viven muchos animales que podemos conocer y cuidar. Dime un animal que encontremos en la granja.",
-                "Vamos a pasear con la imaginación por una granja. Mira a tu alrededor y dime un animal que podríamos encontrar.",
-                "En una granja podemos ver animales grandes y pequeños. Ahora menciona un animal de la granja.",
-                "Pensemos en una granja con corrales, pasto y muchos sonidos. Dime un animal que viva allí.",
-                "Imagina que abrimos la puerta de una granja y escuchamos muchos animales. Menciona uno que podamos encontrar.",
-                "En la granja hay animales que dan leche, ponen huevos o ayudan en el campo. Dime uno.",
-                "Vamos a visitar una granja imaginaria. Hay corrales, pasto y animalitos. ¿Qué animal encontramos allí?",
-                "Piensa en los animales que suelen vivir en el campo. Menciona uno que encontremos en la granja.",
-                "Ahora viajemos con la imaginación a una granja. Dime un animal que viva en ese lugar."
+                "Última misión: llegamos a la granja imaginaria. Hay pasto, corrales y muchos animales. Menciona un animal que encontremos en la granja.",
+                "Ahora abrimos la tranquera de la granja. Veo varios animales caminando por ahí. Menciona uno.",
+                "En esta parte final visitamos una granja llena de sonidos y movimiento. Dime un animal que encontremos allí.",
+                "Imagina una granja con gallinas, corrales y mucho pasto. Menciona un animal de la granja.",
+                "La última pista nos lleva al campo. Allí viven muchos animales. Dime uno que encontremos en la granja.",
+                "Escucha la aventura: llegamos a un lugar con animales grandes y pequeños. Menciona un animal de granja.",
+                "La granja nos espera. Hay animales que dan leche, ponen huevos o viven en corrales. Dime uno.",
+                "Caminamos por la granja imaginaria y vemos muchos animalitos. ¿Cuál podemos encontrar?",
+                "Último reto de explorador: piensa en una granja y menciona un animal que viva allí.",
+                "Llegamos al final de la aventura animal. Ayúdame con un animal que encontremos en la granja."
             )
         )
 
+        // ----- Feedback correcto ---------------------------------------------------
+
         val CORRECT_FEEDBACK: Map<LocalMediationKey, List<String>> = mapOf(
             LocalMediationKey.ANIMAL_DOG_SOUND to listOf(
-                "¡Exacto! El perro hace guau. Los perritos ladran así cuando quieren saludar o jugar.",
-                "¡Muy bien! El sonido del perro es guau. Lo hiciste muy bien.",
-                "¡Eso es! El perro ladra y hace guau.",
-                "¡Excelente! Un perro puede decir guau cuando está contento o quiere llamar la atención.",
-                "¡Bien hecho! Reconociste el sonido del perro.",
-                "¡Muy buena respuesta! El perro hace guau cuando ladra.",
-                "¡Sí! El perrito dice guau. Lo respondiste muy bien.",
-                "¡Correcto! Cuando un perro ladra, muchas veces escuchamos guau.",
-                "¡Genial! Ese es el sonido que hace un perro.",
-                "¡Lo lograste! El perro hace guau, como un perrito saludando."
+                "¡Sííí! ¡Era el perrito! El perro hace guau. Lo encontraste muy bien.",
+                "¡Exacto! El perrito dice guau cuando ladra. Misión cumplida.",
+                "¡Muy bien! Tu respuesta ayudó al perrito a recuperar su sonido.",
+                "¡Eso es! El perro hace guau. Nuestro perrito imaginario está feliz.",
+                "¡Excelente! Reconociste el sonido del perro.",
+                "¡Lo lograste! El perrito ya puede ladrar otra vez: guau.",
+                "¡Qué buena respuesta! El sonido del perro es guau.",
+                "¡Genial! El perro ladra y hace guau. Sigamos con nuestra aventura.",
+                "¡Correcto! Ese era el sonido que estábamos buscando.",
+                "¡Muy bien, explorador! Encontraste el sonido del perro."
             ),
             LocalMediationKey.ANIMAL_DOMESTIC to listOf(
-                "¡Muy bien! Ese es un animal doméstico porque puede vivir cerca de las personas.",
-                "¡Exacto! Ese animal puede ser una mascota o vivir en casa con una familia.",
-                "¡Bien hecho! Mencionaste un animal doméstico.",
-                "¡Excelente! Ese animal puede acompañar a las personas en casa.",
-                "¡Muy buena respuesta! Ese animal sí puede ser doméstico.",
-                "¡Sí! Ese animal puede ser cuidado por una familia.",
-                "¡Lo hiciste muy bien! Ese animal puede vivir cerca de las personas.",
-                "¡Correcto! Ese es un ejemplo de animal doméstico.",
-                "¡Genial! Pensaste en un animal que puede estar en casa.",
-                "¡Muy bien pensado! Ese animal puede ser una mascota."
+                "¡Muy bien! Ese animal puede ser doméstico. Lo encontraste.",
+                "¡Exacto! Ese animal puede vivir cerca de las personas.",
+                "¡Genial! Esa mascota sí pertenece al grupo de animales domésticos.",
+                "¡Excelente respuesta! Ese animal puede acompañar a una familia.",
+                "¡Lo lograste! Encontraste un animal doméstico.",
+                "¡Muy bien pensado! Ese animal puede ser cuidado en casa.",
+                "¡Sí! Ese animal puede ser una mascota.",
+                "¡Qué buena respuesta! Ese animal puede vivir cerca de nosotros.",
+                "¡Misión cumplida! Encontramos un animal doméstico.",
+                "¡Bien hecho! Ese animal sí puede estar en una casa."
             ),
             LocalMediationKey.ANIMAL_CAT_SOUND to listOf(
-                "¡Exacto! El gato hace miau. Los gatitos maúllan cuando quieren llamar nuestra atención.",
-                "¡Muy bien! El sonido del gato es miau.",
-                "¡Eso es! El gato maúlla y hace miau.",
-                "¡Excelente! Reconociste el sonido del gato.",
-                "¡Bien hecho! Un gatito puede decir miau cuando quiere algo.",
-                "¡Correcto! El gato hace miau con su vocecita suave.",
-                "¡Genial! Ese es el sonido de un gatito.",
-                "¡Muy buena respuesta! El gato maúlla y dice miau.",
-                "¡Lo lograste! El gatito hace miau.",
-                "¡Sí! El gato dice miau cuando maúlla."
+                "¡Sííí! ¡Era el gatito! El gato hace miau.",
+                "¡Exacto! El gatito maúlla y dice miau.",
+                "¡Muy bien! Encontraste el sonido del gato.",
+                "¡Excelente! El gato hace miau con su vocecita suave.",
+                "¡Lo lograste! Nuestro gatito imaginario ya tiene su sonido.",
+                "¡Genial! El sonido del gato es miau.",
+                "¡Correcto! El gato maúlla cuando quiere llamar la atención.",
+                "¡Muy buena respuesta! Ese era el sonido del gatito.",
+                "¡Bien hecho! El gato dice miau.",
+                "¡Misión gatito cumplida! El gato hace miau."
             ),
             LocalMediationKey.ANIMAL_FARM to listOf(
                 "¡Muy bien! Ese animal puede vivir en la granja.",
                 "¡Exacto! En la granja podemos encontrar ese animal.",
-                "¡Bien hecho! Mencionaste un animal que podemos ver en una granja.",
-                "¡Excelente! Ese animal forma parte de la vida en la granja.",
-                "¡Muy buena respuesta! En una granja hay muchos animales como ese.",
-                "¡Sí! Ese animal puede estar en una granja.",
-                "¡Correcto! Ese es un buen ejemplo de animal de granja.",
-                "¡Genial! Pensaste en un animal que vive en el campo o en la granja.",
-                "¡Lo hiciste muy bien! Ese animal puede vivir en una granja.",
-                "¡Muy bien pensado! Ese animal sí pertenece al ambiente de la granja."
+                "¡Genial! Encontraste un animal de la granja.",
+                "¡Excelente respuesta! Ese animal pertenece a nuestra granja imaginaria.",
+                "¡Lo lograste! La granja ya tiene otro animal en su lugar.",
+                "¡Muy bien pensado! Ese animal puede estar en una granja.",
+                "¡Misión cumplida! Reconociste un animal de granja.",
+                "¡Qué buena respuesta! Ese animal puede vivir en el campo o en la granja.",
+                "¡Correcto! Ese es un animal que podemos encontrar en la granja.",
+                "¡Bien hecho! Nuestra granja imaginaria está más completa."
             )
         )
+
+        // ----- Feedback incorrecto con reintento -----------------------------------
 
         val INCORRECT_RETRY: Map<LocalMediationKey, List<String>> = mapOf(
             LocalMediationKey.ANIMAL_DOG_SOUND to listOf(
-                "No te preocupes, intentemos otra vez. Imagina a un perrito llamando a su dueño.",
-                "Pensemos con calma. ¿Qué sonido escuchas cuando un perro ladra?",
-                "Vamos a probar nuevamente. Recuerda el sonido que hace un perrito.",
-                "Intentemos otra vez. Piensa en un perro pequeño jugando en el parque.",
-                "No pasa nada, podemos repetir. Escucha la pregunta otra vez: ¿qué sonido hace el perro?",
-                "Vamos a imaginar al perrito de nuevo. ¿Qué sonido haría para saludar?",
-                "Probemos otra vez. Piensa en el sonido de un perro cuando ladra.",
-                "Puedes intentarlo nuevamente. Recuerda cómo suena un perrito.",
-                "Vamos con calma. Imagina que un perro quiere llamar tu atención.",
-                "Intentemos una vez más. ¿Qué sonido hace un perrito cuando ladra?"
+                "Mmm, mi radar de perritos no está seguro. Intentemos otra vez.",
+                "Pensemos en un perrito cuando ladra para saludar. Probemos nuevamente.",
+                "No pasa nada. Cerremos los ojitos un momento e imaginemos a un perro.",
+                "Vamos otra vez. ¿Qué sonido haría un perrito emocionado?",
+                "Creo que el perrito quiere que lo escuchemos mejor. Intentemos de nuevo.",
+                "Probemos otra pista: este animal ladra cuando quiere avisar algo.",
+                "El perrito todavía está escondiendo su sonido. Vamos a intentarlo otra vez.",
+                "No te preocupes, las misiones se resuelven con calma. Pensemos otra vez.",
+                "Escuchemos con la imaginación a un perro en el patio. Intenta responder.",
+                "Vamos a darle otra oportunidad al perrito. ¿Qué sonido hace?"
             ),
             LocalMediationKey.ANIMAL_DOMESTIC to listOf(
-                "Pensemos otra vez. Un animal doméstico es uno que puede vivir con las personas.",
-                "Intentemos nuevamente. Piensa en una mascota que pueda estar en una casa.",
-                "No te preocupes, probemos otra vez. Recuerda un animal que una familia pueda cuidar.",
-                "Vamos a repetir con calma. Puede ser un animal como una mascota.",
-                "Piensa en un animal que tal vez hayas visto en una casa. Intenta responder otra vez.",
-                "Vamos a pensar en mascotas. ¿Qué animal podría vivir con una familia?",
-                "Probemos otra vez. Imagina un animalito que alguien cuide en su casa.",
-                "No pasa nada. Piensa en un animal que pueda dormir, comer y jugar en una casa.",
-                "Intentemos una vez más. Puede ser un animal que las personas quieran y cuiden.",
-                "Vamos con calma. Recuerda algún animal que hayas visto como mascota."
+                "Pensemos otra vez. Buscamos un animal que pueda vivir con las personas.",
+                "No pasa nada. Imagina una mascota dentro de una casa.",
+                "Probemos de nuevo. ¿Qué animal podría cuidar una familia?",
+                "La pista es: puede vivir cerca de nosotros y recibir cariño.",
+                "Vamos con calma. Piensa en un animal que hayas visto como mascota.",
+                "Creo que necesitamos otra pista: algunos animales domésticos duermen en casa.",
+                "Intentemos otra vez. Puede ser un animal pequeño o grande, pero cercano a las personas.",
+                "Respira tranquilo. Imagina una casa con una mascota.",
+                "A ver, a ver... ¿qué animal puede acompañar a una familia?",
+                "La misión sigue. Pensemos en una mascota conocida."
             ),
             LocalMediationKey.ANIMAL_CAT_SOUND to listOf(
-                "Intentemos otra vez. Imagina a un gatito pequeño llamando con su voz.",
-                "Pensemos con calma. ¿Qué sonido hace un gato cuando maúlla?",
-                "Vamos a probar nuevamente. Recuerda el sonido de un gatito.",
-                "No pasa nada, repetimos. Piensa en un gato diciendo su sonido.",
-                "Escuchemos la pregunta otra vez: ¿qué sonido hace el gato?",
-                "Vamos con calma. Imagina a un gatito queriendo llamar tu atención.",
-                "Probemos una vez más. ¿Cómo suena un gato cuando maúlla?",
-                "Piensa en un gatito pequeño. ¿Qué sonido haría?",
-                "Intentémoslo otra vez. Recuerda cómo suena un gato.",
-                "No te preocupes. Vamos a imaginar al gatito de nuevo."
+                "Mmm, el gatito habló muy bajito. Intentemos otra vez.",
+                "Pensemos en un gatito pequeño llamando a su mamá.",
+                "Vamos con calma. ¿Qué sonido hace un gato cuando maúlla?",
+                "El gatito está escondido, pero podemos recordar su sonido.",
+                "Probemos nuevamente. Imagina a un gato pidiendo comida.",
+                "No pasa nada. Escuchemos al gatito con la imaginación.",
+                "Creo que el gatito quiere que lo intentemos otra vez.",
+                "Respira tranquilo. Piensa en un gato haciendo su sonido.",
+                "Vamos a repetir la misión del gatito.",
+                "El gatito está cerquita. ¿Qué sonido hace?"
             ),
             LocalMediationKey.ANIMAL_FARM to listOf(
                 "Pensemos otra vez. En una granja hay animales que viven en corrales o en el campo.",
-                "Intentemos nuevamente. Imagina una granja con pasto, corrales y muchos animales.",
-                "No te preocupes, probemos otra vez. Piensa en un animal que viva en una granja.",
-                "Vamos a repetir con calma. Puede ser un animal que dé leche, ponga huevos o viva en un corral.",
-                "Intenta otra vez. Recuerda algún animal que hayas visto en dibujos de granja.",
-                "Vamos con calma. Imagina una granja y mira qué animal aparece primero en tu mente.",
-                "Probemos otra vez. Piensa en animales que caminan por el campo.",
-                "No pasa nada. Recuerda un animal que podrías encontrar en una granja.",
-                "Intentemos nuevamente. Puede ser un animal grande o pequeño que viva en la granja.",
-                "Respira tranquilo y piensa en un animal de corral o de campo."
+                "No pasa nada. Imagina una granja con pasto, animales y corrales.",
+                "Probemos nuevamente. ¿Qué animal podrías ver en una granja?",
+                "La pista es: puede ser un animal que dé leche, ponga huevos o viva en un corral.",
+                "Vamos con calma. Recuerda algún animal que hayas visto en una granja.",
+                "La granja tiene muchos animales. Intentemos encontrar uno.",
+                "Respira tranquilo. Imagina que caminas por una granja.",
+                "A ver, a ver... ¿qué animal vive en el campo o en un corral?",
+                "No te preocupes. La misión final todavía puede resolverse.",
+                "Pensemos juntos en animales grandes o pequeños de una granja."
             )
         )
 
+        // ----- Feedback incorrecto sin intentos restantes -------------------------
+
         val INCORRECT_NEXT: Map<LocalMediationKey, List<String>> = mapOf(
             LocalMediationKey.ANIMAL_DOG_SOUND to listOf(
-                "Está bien, lo intentaste. El perro hace guau. Sigamos con la siguiente.",
-                "Buen intento. El sonido del perro es guau. Vamos a continuar.",
-                "No te preocupes. Los perros ladran y hacen guau. Continuemos.",
-                "Gracias por intentarlo. El perro dice guau cuando ladra.",
-                "Está bien. Ahora ya recordamos que el perro hace guau.",
+                "Buen intento. El perro hace guau. El perrito ya recuperó su sonido.",
+                "Está bien, lo intentaste. El sonido que buscábamos era guau.",
+                "No pasa nada. Los perros ladran y hacen guau.",
+                "Gracias por ayudarme. Ahora recordamos que el perro dice guau.",
+                "El perrito nos dejó una pista: cuando ladra, hace guau.",
                 "Muy bien por participar. El sonido del perro es guau.",
-                "Lo intentaste con ganas. El perro hace guau cuando ladra.",
-                "No pasa nada. Aprendimos que el perrito dice guau.",
-                "Gracias por responder. El perro ladra y suena como guau.",
-                "Está bien, seguimos aprendiendo. El perro hace guau."
+                "Lo intentaste con ganas. El perrito hace guau cuando ladra.",
+                "Aprendimos algo juntos: el perro dice guau.",
+                "Está bien. Guardemos el sonido guau para el perrito.",
+                "Gracias por intentarlo. Nuestro perrito imaginario ya tiene su sonido."
             ),
             LocalMediationKey.ANIMAL_DOMESTIC to listOf(
                 "Está bien, lo intentaste. Algunos animales domésticos son el perro, el gato o el conejo.",
                 "Buen intento. Un animal doméstico puede ser un perro, un gato o un hámster.",
                 "No te preocupes. Los animales domésticos son los que pueden vivir cerca de las personas.",
                 "Gracias por intentarlo. Por ejemplo, el perro y el gato son animales domésticos.",
-                "Muy bien por participar. Ahora recordamos que una mascota puede ser un animal doméstico.",
-                "Está bien. Un animal doméstico puede ser el perro, el gato o la tortuga.",
-                "Gracias por responder. Los animales domésticos pueden vivir con una familia.",
-                "Lo intentaste. Algunos ejemplos son el conejo, el pez o el pájaro.",
-                "No pasa nada. Seguimos aprendiendo sobre animales domésticos.",
-                "Está bien, aprendimos juntos. Un animal doméstico puede ser una mascota."
+                "Aprendimos juntos que una mascota puede ser un animal doméstico.",
+                "Está bien. El conejo, la tortuga o el pez también pueden ser animales domésticos.",
+                "Lo intentaste con ganas. Los animales domésticos pueden vivir con una familia.",
+                "Guardemos esta idea: algunos animales domésticos viven en casa.",
+                "Muy bien por participar. Encontramos ejemplos como perro, gato y conejo.",
+                "La misión nos enseñó algo: una mascota puede ser un animal doméstico."
             ),
             LocalMediationKey.ANIMAL_CAT_SOUND to listOf(
-                "Está bien, lo intentaste. El gato hace miau. Continuemos.",
+                "Está bien, lo intentaste. El gato hace miau.",
                 "Buen intento. El sonido del gato es miau.",
                 "No te preocupes. Los gatos maúllan y hacen miau.",
-                "Gracias por intentarlo. Ahora recordamos que el gato dice miau.",
-                "Está bien. El gatito hace miau cuando maúlla.",
-                "Muy bien por participar. El sonido del gato es miau.",
-                "Lo intentaste con calma. El gato dice miau.",
-                "No pasa nada. Aprendimos que el gatito hace miau.",
-                "Gracias por responder. El gato maúlla con un miau.",
-                "Está bien, seguimos aprendiendo. El gato hace miau."
+                "Gracias por ayudarme. Ahora recordamos que el gato dice miau.",
+                "El gatito nos dejó una pista: cuando maúlla, hace miau.",
+                "Muy bien por participar. El gato hace miau con su vocecita.",
+                "Lo intentaste con calma. El sonido que buscábamos era miau.",
+                "Aprendimos juntos que el gato dice miau.",
+                "Guardemos este sonido para el gatito: miau.",
+                "El gatito ya recuperó su sonido. Hace miau."
             ),
             LocalMediationKey.ANIMAL_FARM to listOf(
                 "Está bien, lo intentaste. En la granja podemos encontrar vacas, gallinas, cerdos y caballos.",
@@ -428,9 +449,9 @@ class AnimalMediationBank(
                 "Está bien. En la granja podemos encontrar muchos animales, como la vaca y la gallina.",
                 "Muy bien por intentarlo. Algunos animales de granja son el cerdo, el caballo y la oveja.",
                 "Gracias por responder. En una granja también podemos encontrar patos, cabras y pollitos.",
-                "No pasa nada. Seguimos aprendiendo sobre los animales de la granja.",
-                "Está bien, aprendimos juntos. Una granja puede tener vacas, gallinas y caballos.",
-                "Buen esfuerzo. Ahora recordamos que en la granja viven varios animales."
+                "No pasa nada. Aprendimos juntos sobre los animales de la granja.",
+                "Buen esfuerzo. Una granja puede tener vacas, gallinas y caballos.",
+                "La granja nos enseñó algo hoy: allí viven muchos animales diferentes."
             )
         )
     }

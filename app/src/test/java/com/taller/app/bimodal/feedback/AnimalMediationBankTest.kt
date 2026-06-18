@@ -29,8 +29,9 @@ class AnimalMediationBankTest {
     /** Todos los conjuntos de frases pre-aprobados del banco. */
     private fun allPhraseLists(): List<List<String>> {
         val general = listOf(
-            AnimalMediationBank.GENERAL_SESSION_START,
-            AnimalMediationBank.GENERAL_SESSION_COMPLETED,
+            AnimalMediationBank.MISSION_START,
+            AnimalMediationBank.MISSION_COMPLETED,
+            AnimalMediationBank.MICRO_DIALOGUES,
             AnimalMediationBank.GENERAL_NOT_INTERPRETABLE,
             AnimalMediationBank.GENERAL_NO_RESPONSE,
             AnimalMediationBank.GENERAL_TECHNICAL_ERROR

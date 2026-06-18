@@ -755,12 +755,16 @@ private fun BimodalSession(
             BIMODAL_VOICE_TAG,
             "mediacion intro: origen=local clave=${LocalMediationKey.fromKey(mediationKey).name}"
         )
-        val presentationText =
+        val sceneText =
             if (LocalMediationKey.fromKey(mediationKey) == LocalMediationKey.NONE) {
                 "$introText $questionText"
             } else {
                 introText
             }
+        // Microdiálogo breve y ocasional antes de la escena (el banco decide si
+        // incluirlo segun probabilidad interna, para no alargar la interaccion).
+        val microDialogue = animalBank.getMicroDialogue()
+        val presentationText = if (microDialogue != null) "$microDialogue $sceneText" else sceneText
         // Lee la pregunta y SUSPENDE hasta que el audio termina por completo. Solo
         // entonces abre la escucha, de modo que la voz nunca se solapa con la captura
         // del microfono ni se corta a media frase. Si el efecto se cancela (cambio de
@@ -871,7 +875,7 @@ private fun BimodalSession(
             val feedbackStart = System.nanoTime()
             val spokenText = when (category) {
                 GeneralTeacherFeedbackType.CORRECT ->
-                    animalBank.getCorrectFeedback(mediationKey)
+                    animalBank.getCorrectFeedback(mediationKey, isLast)
                 GeneralTeacherFeedbackType.INCORRECT_RETRY ->
                     animalBank.getIncorrectRetryFeedback(mediationKey)
                 GeneralTeacherFeedbackType.INCORRECT_NEXT ->
