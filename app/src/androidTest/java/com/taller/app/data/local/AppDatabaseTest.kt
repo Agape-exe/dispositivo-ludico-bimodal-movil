@@ -275,6 +275,187 @@ class AppDatabaseTest {
     }
 
     @Test
+    fun questionWithMediationKeyIsPersistedAndRetrieved() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Actividad con mediación",
+                topic = "Animales",
+                operationMode = "CLASSIC",
+                maxAttempts = 2,
+                maxTimeSeconds = 10,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        val questionId = questionDao.insert(
+            QuestionEntity(
+                activityId = activityId,
+                questionText = "¿Qué sonido hace el perro?",
+                expectedAnswer = "guau",
+                keywords = "guau,guau guau,ladra,ladrido",
+                orderIndex = 1,
+                maxAttempts = 2,
+                maxTimeSeconds = 10,
+                createdAt = now,
+                updatedAt = now,
+                mediationKey = "ANIMAL_DOG_SOUND"
+            )
+        )
+
+        val questions = questionDao.getByActivityIdOnce(activityId)
+        assertEquals(1, questions.size)
+        assertEquals("ANIMAL_DOG_SOUND", questions[0].mediationKey)
+        assertEquals(questionId, questions[0].id)
+    }
+
+    @Test
+    fun questionWithoutMediationKeyDefaultsToNull() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Actividad sin mediación",
+                topic = "Test",
+                operationMode = "CLASSIC",
+                maxAttempts = 3,
+                maxTimeSeconds = 30,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        questionDao.insert(
+            QuestionEntity(
+                activityId = activityId,
+                questionText = "¿Pregunta sin mediación?",
+                expectedAnswer = "respuesta",
+                keywords = "respuesta",
+                orderIndex = 1,
+                maxAttempts = 3,
+                maxTimeSeconds = 30,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+
+        val questions = questionDao.getByActivityIdOnce(activityId)
+        assertEquals(1, questions.size)
+        assertEquals(null, questions[0].mediationKey)
+    }
+
+    @Test
+    fun updateQuestionMediationKey() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Actividad edición mediación",
+                topic = "Test",
+                operationMode = "CLASSIC",
+                maxAttempts = 2,
+                maxTimeSeconds = 10,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        val questionId = questionDao.insert(
+            QuestionEntity(
+                activityId = activityId,
+                questionText = "Menciona un animal doméstico",
+                expectedAnswer = "perro",
+                keywords = "perro,gato,conejo",
+                orderIndex = 1,
+                maxAttempts = 2,
+                maxTimeSeconds = 10,
+                createdAt = now,
+                updatedAt = now,
+                mediationKey = null
+            )
+        )
+
+        questionDao.update(
+            QuestionEntity(
+                id = questionId,
+                activityId = activityId,
+                questionText = "Menciona un animal doméstico",
+                expectedAnswer = "perro",
+                keywords = "perro,gato,conejo,hámster",
+                orderIndex = 1,
+                maxAttempts = 2,
+                maxTimeSeconds = 10,
+                createdAt = now,
+                updatedAt = now + 1000,
+                mediationKey = "ANIMAL_DOMESTIC"
+            )
+        )
+
+        val questions = questionDao.getByActivityIdOnce(activityId)
+        assertEquals(1, questions.size)
+        assertEquals("ANIMAL_DOMESTIC", questions[0].mediationKey)
+        assertEquals("perro,gato,conejo,hámster", questions[0].keywords)
+    }
+
+    @Test
+    fun multipleMediationKeysAreStoredCorrectly() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Actividad animales",
+                topic = "Animales",
+                operationMode = "CLASSIC",
+                maxAttempts = 2,
+                maxTimeSeconds = 10,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        questionDao.insertAll(
+            listOf(
+                QuestionEntity(
+                    activityId = activityId,
+                    questionText = "¿Qué sonido hace el perro?",
+                    expectedAnswer = "guau",
+                    keywords = "guau,ladra",
+                    orderIndex = 1,
+                    maxAttempts = 2,
+                    maxTimeSeconds = 10,
+                    createdAt = now,
+                    updatedAt = now,
+                    mediationKey = "ANIMAL_DOG_SOUND"
+                ),
+                QuestionEntity(
+                    activityId = activityId,
+                    questionText = "¿Qué sonido hace el gato?",
+                    expectedAnswer = "miau",
+                    keywords = "miau,maúlla",
+                    orderIndex = 2,
+                    maxAttempts = 2,
+                    maxTimeSeconds = 10,
+                    createdAt = now,
+                    updatedAt = now,
+                    mediationKey = "ANIMAL_CAT_SOUND"
+                ),
+                QuestionEntity(
+                    activityId = activityId,
+                    questionText = "Menciona un animal de granja",
+                    expectedAnswer = "vaca",
+                    keywords = "vaca,gallina,cerdo,caballo",
+                    orderIndex = 3,
+                    maxAttempts = 2,
+                    maxTimeSeconds = 10,
+                    createdAt = now,
+                    updatedAt = now,
+                    mediationKey = "ANIMAL_FARM"
+                )
+            )
+        )
+
+        val questions = questionDao.getByActivityIdOnce(activityId)
+        assertEquals(3, questions.size)
+        assertEquals("ANIMAL_DOG_SOUND", questions[0].mediationKey)
+        assertEquals("ANIMAL_CAT_SOUND", questions[1].mediationKey)
+        assertEquals("ANIMAL_FARM", questions[2].mediationKey)
+    }
+
+    @Test
     fun deleteQuestion() = runBlocking {
         val now = System.currentTimeMillis()
         val activityId = activityDao.insert(

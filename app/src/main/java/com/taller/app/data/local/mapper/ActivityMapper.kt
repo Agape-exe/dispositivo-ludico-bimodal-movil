@@ -35,7 +35,8 @@ fun LearningQuestion.toEntity(activityId: Long, orderIndex: Int): QuestionEntity
     maxAttempts = maxAttempts,
     maxTimeSeconds = maxTimeSeconds,
     createdAt = System.currentTimeMillis(),
-    updatedAt = System.currentTimeMillis()
+    updatedAt = System.currentTimeMillis(),
+    mediationKey = mediationKey
 )
 
 fun QuestionEntity.toDomain(): LearningQuestion = LearningQuestion(
@@ -44,5 +45,6 @@ fun QuestionEntity.toDomain(): LearningQuestion = LearningQuestion(
     expectedAnswer = expectedAnswer,
     keywords = keywords.split(",").map { it.trim() }.filter { it.isNotEmpty() },
     maxTimeSeconds = maxTimeSeconds,
-    maxAttempts = maxAttempts
+    maxAttempts = maxAttempts,
+    mediationKey = mediationKey
 )

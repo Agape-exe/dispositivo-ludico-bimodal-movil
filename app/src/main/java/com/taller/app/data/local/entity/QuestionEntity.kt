@@ -27,5 +27,6 @@ data class QuestionEntity(
     val maxAttempts: Int,
     val maxTimeSeconds: Int,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val mediationKey: String? = null
 )
