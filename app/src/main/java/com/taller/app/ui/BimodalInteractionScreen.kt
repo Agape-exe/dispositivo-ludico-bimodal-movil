@@ -104,6 +104,7 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Etiqueta de logs internos de latencia (solo numeros, sin datos del nino). */
 private const val BIMODAL_LATENCY_TAG = "BimodalLatency"
@@ -113,6 +114,30 @@ private const val BIMODAL_SEMANTIC_TAG = "BimodalSemantic"
 
 /** Etiqueta de logs de la voz del juguete (solo proveedor, nunca claves ni texto). */
 private const val BIMODAL_VOICE_TAG = "BimodalVoice"
+
+/**
+ * Tope de seguridad para una sola reproduccion de voz. Es generoso para no cortar
+ * una frase larga real, pero garantiza que el flujo nunca se quede congelado si un
+ * proveedor de voz se cuelga (p. ej. la red de Azure no responde o el reproductor
+ * nunca emite su callback de fin). Se calcula segun la longitud del texto y se
+ * acota entre un minimo y un maximo.
+ */
+private const val SPEECH_TIMEOUT_MIN_MS = 12_000L
+private const val SPEECH_TIMEOUT_MAX_MS = 45_000L
+private const val SPEECH_TIMEOUT_PER_CHAR_MS = 120L
+
+/** Tope de seguridad (ms) para reproducir [text], acotado a un rango razonable. */
+private fun speechTimeoutMsFor(text: String): Long =
+    (SPEECH_TIMEOUT_MIN_MS + text.length * SPEECH_TIMEOUT_PER_CHAR_MS)
+        .coerceAtMost(SPEECH_TIMEOUT_MAX_MS)
+
+/**
+ * Tiempo maximo que el flujo puede permanecer en "preparando la pregunta" antes de
+ * que la salvaguarda fuerce la apertura de la escucha. Se fija por encima del tope
+ * maximo de una sola reproduccion ([SPEECH_TIMEOUT_MAX_MS]) para no interrumpir una
+ * intro larga legitima: solo actua si la presentacion quedo realmente congelada.
+ */
+private const val PRESENTING_WATCHDOG_MS = 50_000L
 
 /**
  * Pantalla inicial del modo bimodal inteligente.
@@ -704,15 +729,29 @@ private fun BimodalSession(
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
         try {
-            val outcome = runCatching {
-                ToyVoiceFallback.speak(
-                    text = text,
-                    useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
-                    allowFallback = voiceSettings.fallbackToLocal,
-                    neural = neuralProvider,
-                    local = localVoiceProvider
+            // Tope de seguridad: si el proveedor de voz se cuelga (red caida, callback
+            // de fin que nunca llega), withTimeoutOrNull cancela la reproduccion y
+            // devuelve null en lugar de bloquear el flujo para siempre. El bloque
+            // finally detiene el audio residual de forma ordenada. La interaccion
+            // jamas se detiene por un problema de audio.
+            val timeoutMs = speechTimeoutMsFor(text)
+            val outcome = withTimeoutOrNull(timeoutMs) {
+                runCatching {
+                    ToyVoiceFallback.speak(
+                        text = text,
+                        useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
+                        allowFallback = voiceSettings.fallbackToLocal,
+                        neural = neuralProvider,
+                        local = localVoiceProvider
+                    )
+                }.getOrNull()
+            }
+            if (outcome == null) {
+                Log.w(
+                    BIMODAL_VOICE_TAG,
+                    "voz: sin resultado tras ${timeoutMs}ms (timeout o fallo); el flujo continua"
                 )
-            }.getOrNull()
+            }
             recordVoiceUsage(voiceSettings.provider, outcome)
         } finally {
             azureVoiceProvider.stop()
@@ -737,40 +776,92 @@ private fun BimodalSession(
     LaunchedEffect(presentationKey) {
         if (presentationKey == null) return@LaunchedEffect
         val questionText = currentQuestion?.questionText ?: return@LaunchedEffect
-        // Intro ludico del banco local antes de enunciar la pregunta (sin revelar ni
-        // explicar la respuesta: solo invita a pensar y escuchar). Se genera una vez
-        // por (re)presentacion para que el texto mostrado y el reproducido coincidan.
+        val mediationKey = currentQuestion?.mediationKey
+        val keyName = LocalMediationKey.fromKey(mediationKey).name
+        Log.d(
+            BIMODAL_VOICE_TAG,
+            "preparacion: inicio estado=${orchestrator.state} indice=${progress?.currentQuestionIndex} " +
+                "intento=${progress?.currentAttempt} clave=$keyName"
+        )
+
+        // Construye la escena de presentacion del banco local. Si por cualquier motivo
+        // fallara (lista vacia, clave inesperada, excepcion al construir la frase), no
+        // se cancela la pregunta: se cae a una frase basica que solo enuncia la
+        // pregunta, de modo que el flujo NUNCA se queda en "preparando la pregunta".
         //
         // Las introducciones especificas de animales ya incluyen el enunciado de la
         // pregunta; para una clave general la introduccion es generica y la pregunta
         // se concatena verbatim despues, por lo que su intencion nunca cambia.
-        val mediationKey = currentQuestion?.mediationKey
-        val introStart = System.nanoTime()
-        val introText = animalBank.getQuestionIntroduction(mediationKey)
-        lastMediationSource = MediationSource.LOCAL
-        lastMediationLatencyMs = (System.nanoTime() - introStart) / 1_000_000
-        lastMediationType = GenerativeMediationType.QUESTION_INTRODUCTION
-        lastMediationFallbackReason = null
-        Log.d(
-            BIMODAL_VOICE_TAG,
-            "mediacion intro: origen=local clave=${LocalMediationKey.fromKey(mediationKey).name}"
-        )
-        val sceneText =
-            if (LocalMediationKey.fromKey(mediationKey) == LocalMediationKey.NONE) {
-                "$introText $questionText"
-            } else {
-                introText
-            }
-        // Microdiálogo breve y ocasional antes de la escena (el banco decide si
-        // incluirlo segun probabilidad interna, para no alargar la interaccion).
-        val microDialogue = animalBank.getMicroDialogue()
-        val presentationText = if (microDialogue != null) "$microDialogue $sceneText" else sceneText
-        // Lee la pregunta y SUSPENDE hasta que el audio termina por completo. Solo
-        // entonces abre la escucha, de modo que la voz nunca se solapa con la captura
-        // del microfono ni se corta a media frase. Si el efecto se cancela (cambio de
-        // estado o pregunta), speakAndAwait detiene el audio pendiente.
+        val presentationText = try {
+            val introStart = System.nanoTime()
+            val introText = animalBank.getQuestionIntroduction(mediationKey)
+            lastMediationSource = MediationSource.LOCAL
+            lastMediationLatencyMs = (System.nanoTime() - introStart) / 1_000_000
+            lastMediationType = GenerativeMediationType.QUESTION_INTRODUCTION
+            lastMediationFallbackReason = null
+            val scenarioId = animalBank.currentScenarioId(mediationKey)
+            Log.d(
+                BIMODAL_VOICE_TAG,
+                "preparacion: intro lista origen=local clave=$keyName escenario=${scenarioId ?: "general"}"
+            )
+            val sceneText =
+                if (LocalMediationKey.fromKey(mediationKey) == LocalMediationKey.NONE) {
+                    "$introText $questionText"
+                } else {
+                    introText
+                }
+            // Microdiálogo breve y ocasional antes de la escena (el banco decide si
+            // incluirlo segun probabilidad interna, para no alargar la interaccion).
+            val microDialogue = animalBank.getMicroDialogue()
+            if (microDialogue != null) "$microDialogue $sceneText" else sceneText
+        } catch (e: Exception) {
+            // Frase basica de respaldo: nunca cancela la pregunta.
+            lastMediationFallbackReason = "intro_local_fallida"
+            Log.w(
+                BIMODAL_VOICE_TAG,
+                "preparacion: fallo al construir la intro, uso frase basica (clave=$keyName)"
+            )
+            "Ahora dime: $questionText"
+        }
+
+        // Lee la pregunta y SUSPENDE hasta que el audio termina por completo (con tope
+        // de seguridad dentro de speakAndAwait). Solo entonces abre la escucha, de modo
+        // que la voz nunca se solapa con la captura del microfono ni se corta a media
+        // frase. Si el efecto se cancela (cambio de estado o pregunta), speakAndAwait
+        // detiene el audio pendiente.
+        Log.d(BIMODAL_VOICE_TAG, "preparacion: reproduccion intro inicio")
         speakAndAwait(presentationText)
+        Log.d(BIMODAL_VOICE_TAG, "preparacion: reproduccion intro fin estado=${orchestrator.state}")
+
+        // Garantiza la salida de "preparando la pregunta": si seguimos presentando y
+        // hay permiso de microfono, abre la escucha. Si no, queda el boton manual.
         if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
+            startVoiceCapture()
+        }
+    }
+
+    // Salvaguarda contra bloqueos en "preparando la pregunta": si el flujo se queda en
+    // PRESENTING_QUESTION sin avanzar a la escucha (p. ej. una reproduccion que no
+    // termina y se queda colgada pese al tope de speakAndAwait), tras un tiempo
+    // prudente se fuerza la apertura de la captura de voz. Nunca deja la interaccion
+    // congelada de forma indefinida. Se re-lanza por (re)presentacion.
+    LaunchedEffect(presentationKey) {
+        if (presentationKey == null) return@LaunchedEffect
+        delay(PRESENTING_WATCHDOG_MS)
+        if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION &&
+            audioGranted &&
+            sttState != SttState.LISTENING &&
+            sttState != SttState.STOPPING
+        ) {
+            Log.w(
+                BIMODAL_VOICE_TAG,
+                "preparacion: watchdog disparado tras ${PRESENTING_WATCHDOG_MS}ms, abro la escucha"
+            )
+            if (toyVoiceSpeaking) {
+                toySpeechService.stop()
+                azureVoiceProvider.stop()
+                elevenLabsVoiceProvider.stop()
+            }
             startVoiceCapture()
         }
     }
