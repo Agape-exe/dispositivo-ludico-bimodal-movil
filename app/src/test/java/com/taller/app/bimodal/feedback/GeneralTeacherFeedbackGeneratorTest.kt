@@ -139,27 +139,29 @@ class GeneralTeacherFeedbackGeneratorTest {
     }
 
     @Test
-    fun lastQuestion_terminalOutcome_doesNotUseContinuityPhrase() {
+    fun lastQuestion_terminalOutcome_stillProducesFeedback() {
         val generator = newGenerator()
-        // En la ultima pregunta, el desenlace terminal (sin reintento) no produce
-        // frase: el cierre lo da SESSION_COMPLETED, por lo que nunca suena una frase
-        // de continuidad ("continuemos", "pasemos a la siguiente").
-        val terminalStates = listOf(
-            BimodalInteractionState.FEEDBACK_CORRECT,
-            BimodalInteractionState.FEEDBACK_INCORRECT,
-            BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
-            BimodalInteractionState.FEEDBACK_NO_RESPONSE,
-            BimodalInteractionState.TIME_EXPIRED,
-            BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR
+        // En la ultima pregunta, el desenlace terminal SI produce retroalimentacion:
+        // el nino debe escuchar el feedback de su respuesta antes del cierre. La regla
+        // de no anunciar un avance inexistente ("pasemos a la siguiente") se aplica al
+        // elegir la frase concreta (banco local), no suprimiendo la categoria aqui.
+        val expectedByState = mapOf(
+            BimodalInteractionState.FEEDBACK_CORRECT to GeneralTeacherFeedbackType.CORRECT,
+            BimodalInteractionState.FEEDBACK_INCORRECT to GeneralTeacherFeedbackType.INCORRECT_NEXT,
+            BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE to GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT,
+            BimodalInteractionState.FEEDBACK_NO_RESPONSE to GeneralTeacherFeedbackType.NO_RESPONSE_NEXT,
+            BimodalInteractionState.TIME_EXPIRED to GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT,
+            BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR to GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT
         )
-        for (state in terminalStates) {
-            assertNull(
-                "El estado $state en la ultima pregunta no debe producir frase de continuidad",
+        for ((state, expected) in expectedByState) {
+            assertEquals(
+                "El estado $state en la ultima pregunta debe producir feedback antes del cierre",
+                expected,
                 generator.feedbackTypeFor(
                     contextFor(state, canRetry = false, isLastQuestion = true)
                 )
             )
-            assertNull(
+            assertNotNull(
                 generator.generate(contextFor(state, canRetry = false, isLastQuestion = true))
             )
         }
