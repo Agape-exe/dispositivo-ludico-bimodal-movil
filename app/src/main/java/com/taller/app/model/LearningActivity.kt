@@ -13,7 +13,8 @@ data class LearningQuestion(
     val expectedAnswer: String,
     val keywords: List<String>,
     val maxTimeSeconds: Int,
-    val maxAttempts: Int
+    val maxAttempts: Int,
+    val mediationKey: String? = null
 )
 
 enum class OperationMode {

@@ -21,6 +21,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.entity.QuestionEntity
+import com.taller.app.model.LocalMediationKey
 import kotlinx.coroutines.launch
 
 private enum class QuestionView { LIST, FORM }
@@ -226,6 +233,8 @@ private fun QuestionCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val mediationKey = LocalMediationKey.fromKey(question.mediationKey)
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -252,6 +261,13 @@ private fun QuestionCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
+            if (mediationKey != LocalMediationKey.NONE) {
+                Text(
+                    text = "Mediación: ${mediationKey.displayName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
@@ -271,6 +287,7 @@ private fun QuestionCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuestionFormView(
     activityId: Long,
@@ -280,12 +297,14 @@ private fun QuestionFormView(
 ) {
     val key = existing?.id
 
+    var orderIndex by remember(key) { mutableStateOf(existing?.orderIndex?.toString() ?: "1") }
     var questionText by remember(key) { mutableStateOf(existing?.questionText ?: "") }
     var expectedAnswer by remember(key) { mutableStateOf(existing?.expectedAnswer ?: "") }
     var keywords by remember(key) { mutableStateOf(existing?.keywords ?: "") }
-    var orderIndex by remember(key) { mutableStateOf(existing?.orderIndex?.toString() ?: "1") }
-    var maxTimeSeconds by remember(key) { mutableStateOf(existing?.maxTimeSeconds?.toString() ?: "30") }
-    var maxAttempts by remember(key) { mutableStateOf(existing?.maxAttempts?.toString() ?: "3") }
+    var maxTimeSeconds by remember(key) { mutableStateOf(existing?.maxTimeSeconds?.toString() ?: "10") }
+    var maxAttempts by remember(key) { mutableStateOf(existing?.maxAttempts?.toString() ?: "2") }
+    var mediationKey by remember(key) { mutableStateOf(LocalMediationKey.fromKey(existing?.mediationKey)) }
+    var mediationDropdownExpanded by remember { mutableStateOf(false) }
 
     var questionTextError by remember(key) { mutableStateOf(false) }
     var expectedAnswerError by remember(key) { mutableStateOf(false) }
@@ -328,45 +347,11 @@ private fun QuestionFormView(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = questionText,
-            onValueChange = { questionText = it; questionTextError = false },
-            label = { Text("Texto de la pregunta *") },
-            isError = questionTextError,
-            supportingText = if (questionTextError) {
-                { Text("El texto de la pregunta es obligatorio") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 2
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = expectedAnswer,
-            onValueChange = { expectedAnswer = it; expectedAnswerError = false },
-            label = { Text("Respuesta esperada *") },
-            isError = expectedAnswerError,
-            supportingText = if (expectedAnswerError) {
-                { Text("La respuesta esperada es obligatoria") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = keywords,
-            onValueChange = { keywords = it; keywordsError = false },
-            label = { Text("Palabras clave * (separadas por coma)") },
-            isError = keywordsError,
-            supportingText = if (keywordsError) {
-                { Text("Ingresa al menos una palabra clave") }
-            } else null,
-            placeholder = { Text("ej: rojo, colorado, carmesí") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
+        Text(
+            text = "Datos de la pregunta",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -387,9 +372,54 @@ private fun QuestionFormView(
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(
+            value = questionText,
+            onValueChange = { questionText = it; questionTextError = false },
+            label = { Text("Texto de la pregunta *") },
+            isError = questionTextError,
+            supportingText = if (questionTextError) {
+                { Text("El texto de la pregunta es obligatorio") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = expectedAnswer,
+            onValueChange = { expectedAnswer = it; expectedAnswerError = false },
+            label = { Text("Respuesta esperada principal *") },
+            isError = expectedAnswerError,
+            supportingText = if (expectedAnswerError) {
+                { Text("La respuesta esperada es obligatoria") }
+            } else null,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = keywords,
+            onValueChange = { keywords = it; keywordsError = false },
+            label = { Text("Respuestas aceptadas / palabras clave *") },
+            isError = keywordsError,
+            supportingText = if (keywordsError) {
+                { Text("Ingresa al menos una palabra clave") }
+            } else {
+                { Text("Separa las respuestas válidas con comas.") }
+            },
+            placeholder = { Text("ej: guau, guau guau, ladra, ladrido") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
             value = maxTimeSeconds,
             onValueChange = { maxTimeSeconds = it; timeError = false },
-            label = { Text("Tiempo máximo (segundos) *") },
+            label = { Text("Tiempo máximo de respuesta (segundos) *") },
             isError = timeError,
             supportingText = if (timeError) {
                 { Text("Debe ser un número mayor que 0") }
@@ -404,7 +434,7 @@ private fun QuestionFormView(
         OutlinedTextField(
             value = maxAttempts,
             onValueChange = { maxAttempts = it; attemptsError = false },
-            label = { Text("Número máximo de intentos *") },
+            label = { Text("Intentos máximos *") },
             isError = attemptsError,
             supportingText = if (attemptsError) {
                 { Text("Debe ser un número mayor que 0") }
@@ -413,6 +443,52 @@ private fun QuestionFormView(
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
+
+        Spacer(modifier = Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = "Mediación local",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ExposedDropdownMenuBox(
+            expanded = mediationDropdownExpanded,
+            onExpandedChange = { mediationDropdownExpanded = it }
+        ) {
+            OutlinedTextField(
+                value = mediationKey.displayName,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Clave de mediación local") },
+                supportingText = { Text("Permite asociar esta pregunta con frases lúdicas predefinidas del juguete.") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = mediationDropdownExpanded) },
+                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+            )
+            ExposedDropdownMenu(
+                expanded = mediationDropdownExpanded,
+                onDismissRequest = { mediationDropdownExpanded = false }
+            ) {
+                LocalMediationKey.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.displayName) },
+                        onClick = {
+                            mediationKey = option
+                            mediationDropdownExpanded = false
+                        },
+                        contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                    )
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -431,7 +507,8 @@ private fun QuestionFormView(
                             maxTimeSeconds = maxTimeSeconds.toInt(),
                             maxAttempts = maxAttempts.toInt(),
                             createdAt = existing?.createdAt ?: now,
-                            updatedAt = now
+                            updatedAt = now,
+                            mediationKey = if (mediationKey == LocalMediationKey.NONE) null else mediationKey.name
                         )
                     )
                 }
