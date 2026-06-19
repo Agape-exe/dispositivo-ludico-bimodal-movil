@@ -25,7 +25,7 @@ import com.taller.app.data.local.entity.TechnicalEventEntity
         AttemptEntity::class,
         TechnicalEventEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -46,6 +46,53 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // sessions: nuevos campos de resumen y conteos
+                database.execSQL("ALTER TABLE sessions ADD COLUMN activityName TEXT")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN totalQuestions INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN completedQuestions INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN totalAttempts INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN correctCount INTEGER")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN incorrectCount INTEGER")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN noResponseCount INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN notInterpretableCount INTEGER")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN timeoutCount INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN technicalErrorCount INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE sessions ADD COLUMN totalDurationMs INTEGER")
+
+                // attempts: nuevos campos de intento, resultado y latencias
+                database.execSQL("ALTER TABLE attempts ADD COLUMN questionOrder INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN operationMode TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN questionText TEXT")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN classicResult TEXT")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN startedAtMs INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN responseReceivedAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN finishedAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN maxTimeMs INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN realResponseTimeMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN usedSemanticEvaluation INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN usedSpeechToText INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN wasFinalAttempt INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN advancedFeedbackType TEXT")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN finalAttemptState TEXT NOT NULL DEFAULT 'UNKNOWN'")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN sttStartAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN sttFinalAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN semanticStartAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN semanticEndAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN logicalResponseAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN feedbackStartAtMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN totalResponseLatencyMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN responseToFeedbackLatencyMs INTEGER")
+                database.execSQL("ALTER TABLE attempts ADD COLUMN fullPipelineLatencyMs INTEGER")
+
+                // technical_events: nuevos campos de trazabilidad
+                database.execSQL("ALTER TABLE technical_events ADD COLUMN attemptId INTEGER")
+                database.execSQL("ALTER TABLE technical_events ADD COLUMN operationMode TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE technical_events ADD COLUMN latencyMs INTEGER")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
@@ -53,7 +100,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "taller_app_db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build().also { INSTANCE = it }
             }
         }

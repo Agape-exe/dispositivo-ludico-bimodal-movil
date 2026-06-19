@@ -104,6 +104,7 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import com.taller.app.logger.InteractionDataLogger
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Etiqueta de logs internos de latencia (solo numeros, sin datos del nino). */
@@ -161,6 +162,9 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
     val db = remember { AppDatabase.getInstance(context) }
     val activityDao = remember { db.activityDao() }
     val questionDao = remember { db.questionDao() }
+    val dataLogger = remember {
+        InteractionDataLogger(db.sessionDao(), db.attemptDao(), db.technicalEventDao())
+    }
     val scope = rememberCoroutineScope()
 
     var loadedActivity by remember { mutableStateOf<LearningActivity?>(null) }
@@ -217,6 +221,7 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
     } else {
         BimodalSession(
             activity = active,
+            dataLogger = dataLogger,
             onChangeActivity = {
                 loadedActivity = null
                 infoMessage = null
@@ -341,6 +346,7 @@ private fun ActivitySelector(
 @Composable
 private fun BimodalSession(
     activity: LearningActivity,
+    dataLogger: InteractionDataLogger,
     onChangeActivity: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -397,6 +403,10 @@ private fun BimodalSession(
     // tecnico del charter (< 1.5 s). Solo guarda marcas de tiempo, nunca datos del nino.
     val latencyTracker = remember(activity) { BimodalLatencyTracker() }
     var latencyStats by remember(activity) { mutableStateOf(BimodalLatencyStats()) }
+
+    val scope = rememberCoroutineScope()
+    var logSessionId by remember(activity) { mutableStateOf(-1L) }
+    var logAttemptId by remember(activity) { mutableStateOf(-1L) }
 
     fun sync() {
         state = orchestrator.state
@@ -475,6 +485,22 @@ private fun BimodalSession(
         // Inicia un nuevo ciclo de medicion de latencia al encender el microfono.
         latencyTracker.beginCapture()
 
+        val sttSid = logSessionId
+        val sttAid = logAttemptId
+        if (sttSid > 0L) {
+            scope.launch {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = sttSid,
+                        questionId = progress?.currentQuestionId?.toLongOrNull(),
+                        attemptId = if (sttAid > 0L) sttAid else null,
+                        operationMode = "ADVANCED",
+                        eventType = "STT_STARTED"
+                    )
+                }
+            }
+        }
+
         speechService.startListening(
             onStateChange = { newState -> sttState = newState },
             onReady = {},
@@ -501,6 +527,21 @@ private fun BimodalSession(
             },
             onError = { message ->
                 sttError = message
+                val errSid = logSessionId
+                val errAid = logAttemptId
+                if (errSid > 0L) {
+                    scope.launch {
+                        runCatching {
+                            dataLogger.logTechnicalEvent(
+                                sessionId = errSid,
+                                questionId = progress?.currentQuestionId?.toLongOrNull(),
+                                attemptId = if (errAid > 0L) errAid else null,
+                                operationMode = "ADVANCED",
+                                eventType = "STT_ERROR"
+                            )
+                        }
+                    }
+                }
                 // Sin texto previo lo tratamos como ausencia de voz (sin respuesta);
                 // con texto previo, como fallo no interpretable. Nunca como incorrecta.
                 deliverCaptureOutcome(
@@ -775,6 +816,25 @@ private fun BimodalSession(
     }
     LaunchedEffect(presentationKey) {
         if (presentationKey == null) return@LaunchedEffect
+
+        val qIdLong = currentQuestion?.id?.toLongOrNull() ?: 0L
+        val sid = logSessionId
+        if (sid > 0L && qIdLong > 0L) {
+            logAttemptId = runCatching {
+                dataLogger.logAttemptStarted(
+                    sessionId = sid,
+                    questionId = qIdLong,
+                    questionOrder = progress?.currentQuestionIndex ?: 0,
+                    attemptNumber = progress?.currentAttempt ?: 1,
+                    operationMode = "ADVANCED",
+                    questionText = currentQuestion?.questionText,
+                    maxTimeMs = (currentQuestion?.maxTimeSeconds ?: DEFAULT_MAX_TIME_SECONDS) * 1000L,
+                    usedSemanticEvaluation = true,
+                    usedSpeechToText = true
+                )
+            }.getOrElse { -1L }
+        }
+
         val questionText = currentQuestion?.questionText ?: return@LaunchedEffect
         val mediationKey = currentQuestion?.mediationKey
         val keyName = LocalMediationKey.fromKey(mediationKey).name
@@ -930,7 +990,26 @@ private fun BimodalSession(
         // duracion del audio, que ahora se espera por completo.
         latencyTracker.markLogicalResponse()
         latencyTracker.markFeedbackStart()
+        val capturedLatencySample = latencyTracker.current()
         latencyStats = latencyTracker.commit()
+
+        val logAid = logAttemptId
+        val logSid = logSessionId
+        if (logAid > 0L && logSid > 0L) {
+            runCatching {
+                dataLogger.finishBimodalAttempt(
+                    attemptId = logAid,
+                    finalAttemptState = state.name,
+                    wasFinalAttempt = !(lastResult?.canRetry ?: false),
+                    transcript = lastResult?.transcription,
+                    semanticResult = lastResult?.semanticResult?.name,
+                    realResponseTimeMs = capturedLatencySample.totalResponseLatencyMs,
+                    usedStt = sttFinal.isNotBlank(),
+                    latencySample = capturedLatencySample
+                )
+            }
+        }
+
         Log.d(
             BIMODAL_LATENCY_TAG,
             "latency_logical_ms=${latencyStats.lastResponseLatencyMs} " +
@@ -1023,16 +1102,53 @@ private fun BimodalSession(
         }
     }
 
+    // Registra el cierre de la sesion en Room cuando se alcanza un estado terminal.
+    val terminalStateKey = when (state) {
+        BimodalInteractionState.SESSION_COMPLETED,
+        BimodalInteractionState.SESSION_CANCELLED,
+        BimodalInteractionState.ERROR -> state.name
+        else -> null
+    }
+    LaunchedEffect(terminalStateKey) {
+        if (terminalStateKey == null) return@LaunchedEffect
+        val sid = logSessionId
+        if (sid <= 0L) return@LaunchedEffect
+        val s = orchestrator.summary
+        val startedMs = orchestrator.progress?.sessionStartedAt ?: 0L
+        runCatching {
+            dataLogger.finishBimodalSession(
+                sessionId = sid,
+                finalState = terminalStateKey,
+                startedAtMs = startedMs,
+                completedQuestions = s.resolvedQuestions,
+                summary = s
+            )
+        }
+        logSessionId = -1L
+    }
+
     // Inicia la interaccion real en un solo paso: carga la actividad en el
     // orquestador, la confirma y arranca la sesion hasta quedar esperando rostro.
     fun startInteraction() {
         // Empieza una sesion limpia: descarta las latencias de una corrida anterior.
         latencyTracker.reset()
         latencyStats = BimodalLatencyStats()
+        logAttemptId = -1L
         dispatch {
             orchestrator.loadActivity(activity)
             orchestrator.markActivityLoaded()
             orchestrator.startSession()
+        }
+        val activityIdLong = activity.id.toLongOrNull() ?: return
+        scope.launch {
+            runCatching {
+                logSessionId = dataLogger.startSession(
+                    activityId = activityIdLong,
+                    activityName = activity.title,
+                    operationMode = "ADVANCED",
+                    totalQuestions = activity.questions.size
+                )
+            }
         }
     }
 

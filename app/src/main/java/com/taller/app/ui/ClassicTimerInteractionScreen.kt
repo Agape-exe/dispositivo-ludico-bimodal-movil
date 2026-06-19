@@ -74,6 +74,7 @@ import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import com.taller.app.logger.InteractionDataLogger
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CLASSIC_LOG_TAG = "ClassicTimer"
@@ -106,6 +107,9 @@ fun ClassicTimerInteractionScreen(activityId: Long, onBack: () -> Unit) {
     val db = remember { AppDatabase.getInstance(context) }
     val activityDao = remember { db.activityDao() }
     val questionDao = remember { db.questionDao() }
+    val dataLogger = remember {
+        InteractionDataLogger(db.sessionDao(), db.attemptDao(), db.technicalEventDao())
+    }
     val scope = rememberCoroutineScope()
 
     var loadedActivity by remember { mutableStateOf<LearningActivity?>(null) }
@@ -158,6 +162,7 @@ fun ClassicTimerInteractionScreen(activityId: Long, onBack: () -> Unit) {
     } else {
         ClassicSession(
             activity = active,
+            dataLogger = dataLogger,
             onChangeActivity = {
                 loadedActivity = null
                 infoMessage = null
@@ -268,6 +273,7 @@ private fun ClassicActivitySelector(
 @Composable
 private fun ClassicSession(
     activity: LearningActivity,
+    dataLogger: InteractionDataLogger,
     onChangeActivity: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -288,6 +294,13 @@ private fun ClassicSession(
         action()
         sync()
     }
+
+    val scope = rememberCoroutineScope()
+    var logSessionId by remember(activity) { mutableStateOf(-1L) }
+    var logAttemptId by remember(activity) { mutableStateOf(-1L) }
+    var classicTotalAttempts by remember(activity) { mutableStateOf(0) }
+    var classicNoResponse by remember(activity) { mutableStateOf(0) }
+    var classicTimeouts by remember(activity) { mutableStateOf(0) }
 
     val context = LocalContext.current
 
@@ -509,10 +522,29 @@ private fun ClassicSession(
         }
     }
 
-    // WAITING_FIXED_RESPONSE: abrir STT
+    // WAITING_FIXED_RESPONSE: registrar intento iniciado + abrir STT
     LaunchedEffect(state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
         if (state != ClassicTimerState.WAITING_FIXED_RESPONSE) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "WAITING_FIXED_RESPONSE: abriendo STT")
+
+        val qIdLong = progress?.currentQuestionId?.toLongOrNull() ?: 0L
+        val sid = logSessionId
+        if (sid > 0L && qIdLong > 0L) {
+            logAttemptId = runCatching {
+                dataLogger.logAttemptStarted(
+                    sessionId = sid,
+                    questionId = qIdLong,
+                    questionOrder = progress?.currentQuestionIndex ?: 0,
+                    attemptNumber = 1,
+                    operationMode = "CLASSIC",
+                    questionText = progress?.currentQuestionText,
+                    maxTimeMs = (progress?.effectiveMaxTimeSeconds ?: 10) * 1000L,
+                    usedSemanticEvaluation = false,
+                    usedSpeechToText = true
+                )
+            }.getOrElse { -1L }
+        }
+
         startListening()
     }
 
@@ -526,6 +558,25 @@ private fun ClassicSession(
         if (answerKey == null) return@LaunchedEffect
         val isLast = progress?.isLastQuestion ?: false
         Log.d(CLASSIC_LOG_TAG, "ANSWER_RECEIVED idx=$answerKey isLast=$isLast")
+
+        val classicAid = logAttemptId
+        val classicSid = logSessionId
+        val responseLatency = progress?.responseLatencyMs
+        classicTotalAttempts += 1
+        if (classicAid > 0L && classicSid > 0L) {
+            runCatching {
+                dataLogger.finishClassicAttempt(
+                    attemptId = classicAid,
+                    finalAttemptState = "ANSWER_RECEIVED",
+                    classicResult = "ANSWERED",
+                    transcript = sttFinal.ifBlank { null },
+                    responseReceivedAtMs = progress?.questionStartedAt?.let { it + (responseLatency ?: 0L) },
+                    realResponseTimeMs = responseLatency,
+                    usedStt = sttFinal.isNotBlank()
+                )
+            }
+        }
+
         // Última ronda: frase de cierre de participación sin anunciar otra pregunta,
         // y avance inmediato al cierre (sin transición intermedia).
         speakAndAwait(phraseBank.getAnswerReceived(isLast))
@@ -546,6 +597,23 @@ private fun ClassicSession(
         val hadPartial = progress?.hadPartialResponseOnTimeout ?: false
         val isLast = progress?.isLastQuestion ?: false
         Log.d(CLASSIC_LOG_TAG, "TIME_EXPIRED idx=$timeoutKey hadPartial=$hadPartial isLast=$isLast")
+
+        val timeoutAid = logAttemptId
+        val timeoutSid = logSessionId
+        classicTotalAttempts += 1
+        if (hadPartial) classicTimeouts += 1 else classicNoResponse += 1
+        if (timeoutAid > 0L && timeoutSid > 0L) {
+            runCatching {
+                dataLogger.finishClassicAttempt(
+                    attemptId = timeoutAid,
+                    finalAttemptState = "TIME_EXPIRED",
+                    classicResult = if (hadPartial) "TIMEOUT_PARTIAL" else "TIMEOUT_NO_RESPONSE",
+                    transcript = sttFinal.ifBlank { null },
+                    usedStt = sttFinal.isNotBlank()
+                )
+            }
+        }
+
         // En la última ronda la frase no anuncia otra pregunta; encadena al cierre.
         speakAndAwait(phraseBank.getTimeExpired(hadPartial, isLast))
         if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
@@ -561,11 +629,54 @@ private fun ClassicSession(
         speakAndAwait(phraseBank.getSessionCompleted())
     }
 
+    // Registra el cierre de la sesion clasica cuando se alcanza un estado terminal.
+    val classicTerminalKey = when (state) {
+        ClassicTimerState.SESSION_COMPLETED,
+        ClassicTimerState.SESSION_CANCELLED,
+        ClassicTimerState.ERROR -> state.name
+        else -> null
+    }
+    LaunchedEffect(classicTerminalKey) {
+        if (classicTerminalKey == null) return@LaunchedEffect
+        val sid = logSessionId
+        if (sid <= 0L) return@LaunchedEffect
+        val startedMs = progress?.sessionStartedAt ?: 0L
+        runCatching {
+            dataLogger.finishClassicSession(
+                sessionId = sid,
+                finalState = classicTerminalKey,
+                startedAtMs = startedMs,
+                completedQuestions = progress?.currentQuestionIndex?.let {
+                    if (state == ClassicTimerState.SESSION_COMPLETED) it + 1 else it
+                } ?: 0,
+                totalAttempts = classicTotalAttempts,
+                noResponseCount = classicNoResponse,
+                timeoutCount = classicTimeouts
+            )
+        }
+        logSessionId = -1L
+    }
+
     fun startInteraction() {
+        logAttemptId = -1L
+        classicTotalAttempts = 0
+        classicNoResponse = 0
+        classicTimeouts = 0
         dispatch {
             runner.loadActivity(activity)
             runner.markActivityLoaded()
             runner.startSession()
+        }
+        val activityIdLong = activity.id.toLongOrNull() ?: return
+        scope.launch {
+            runCatching {
+                logSessionId = dataLogger.startSession(
+                    activityId = activityIdLong,
+                    activityName = activity.title,
+                    operationMode = "CLASSIC",
+                    totalQuestions = activity.questions.size
+                )
+            }
         }
     }
 
