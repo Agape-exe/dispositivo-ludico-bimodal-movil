@@ -4,40 +4,35 @@ import com.taller.app.model.LocalMediationKey
 import kotlin.random.Random
 
 /**
- * Banco local de frases narrativas para la actividad de animales
- * ("Rescatemos los sonidos de los animales").
+ * Banco local de frases narrativas de Seven, el alien explorador, para la
+ * actividad de animales en modo bimodal inteligente.
  *
- * Las frases tienen tono teatral y de aventura: el juguete es un personaje que
- * juega con el nino, no un evaluador. No usa IA generativa, no llama a ninguna
- * API externa y no depende de internet.
+ * Seven es un alien curioso y amigable que llegó a la Tierra para aprender
+ * cosas nuevas con ayuda de los niños. No actúa como evaluador ni como
+ * profesor: cada sesión es una mini aventura donde Seven descubre animales,
+ * sonidos y objetos terrestres.
  *
  * ## Mini historias coherentes por escenario
  *
- * Cada clave de mediacion de animales tiene varios [AnimalNarrativeScenario]. Al
- * iniciar una pregunta se selecciona un escenario y se RECUERDA hasta que la
- * pregunta termina o se vuelve a presentar (reintento): la introduccion y la
- * retroalimentacion de esa pregunta se eligen siempre dentro del mismo escenario,
- * de modo que la historia tenga sentido (no se mezcla la intro "el gatito perdio su
- * voz" con un feedback de "el gatito de la ventana").
+ * Cada clave de mediación de animales tiene diez [AnimalNarrativeScenario]. Al
+ * iniciar una pregunta se selecciona un escenario y se recuerda hasta que la
+ * pregunta termina: la introducción y la retroalimentación de esa pregunta se
+ * eligen siempre dentro del mismo escenario, de modo que la historia tenga
+ * sentido narrativo.
  *
  * Reglas que respetan todos los conjuntos de frases:
- *  - Nunca se revela la respuesta esperada mientras quedan intentos.
- *  - Ante error tecnico, silencio o respuesta no interpretable nunca se culpa al nino.
- *  - No se usan frases de acierto parcial ("estas cerca", "casi lo tienes", etc.).
- *  - En la ultima pregunta, se evitan frases de continuidad ("continuemos",
- *    "pasemos a la siguiente", "vamos con otra").
- *  - Los inicios de feedback son variados para no sonar repetitivos ("Lo lograste"
- *    convive con "Eso era", "Encontraste la pista", "Ahora si", etc.).
+ *  - Nunca se culpa al niño por el resultado.
+ *  - No se usan frases de acierto parcial.
+ *  - No se usa la palabra "pista" como término principal.
+ *  - En la última pregunta se evitan frases de continuidad.
+ *  - Seven usa vocabulario de exploración espacial:
+ *    reto, ronda, misión, señal, exploración, registro.
  *
- * Para claves no reconocidas o vacias ([LocalMediationKey.NONE]) la introduccion y
- * la retroalimentacion contextual se delegan a [GeneralTeacherFeedbackGenerator].
- * Tambien se recurre al respaldo general si, por cualquier motivo, un escenario
- * tuviera una lista de frases vacia: el flujo nunca se queda sin frase.
- *
- * Mantiene estado mutable (el escenario activo por clave y el ultimo indice elegido
- * por conjunto) para no repetir y para mantener la coherencia narrativa, por lo que
- * debe existir una instancia por sesion. El generador de aleatoriedad es inyectable
- * para facilitar las pruebas.
+ * Para claves no reconocidas o sin escenario ([LocalMediationKey.NONE]) la
+ * introducción y la retroalimentación contextual se delegan a
+ * [GeneralTeacherFeedbackGenerator]. El banco también ofrece
+ * [getGenericIntroWithQuestion] para componer una intro de Seven con el texto
+ * de la pregunta embebido, usada por la pantalla cuando la clave es NONE.
  */
 class AnimalMediationBank(
     private val random: Random = Random.Default,
@@ -47,48 +42,38 @@ class AnimalMediationBank(
 
     private val lastIndexByGroup = HashMap<String, Int>()
 
-    /** Escenario actualmente activo por clave de mediacion (coherencia intro/feedback). */
     private val activeScenarioByKey = HashMap<LocalMediationKey, AnimalNarrativeScenario>()
 
-    /** Frase de apertura de mision al iniciar la sesion. */
     fun getSessionStartPhrase(): String = pick("MISSION_START", MISSION_START)
 
-    /** Frase de cierre al completar la actividad. */
     fun getSessionCompletedPhrase(): String = pick("MISSION_COMPLETED", MISSION_COMPLETED)
 
-    /** Frase para cuando la respuesta no se pudo interpretar. Nunca culpa al nino. */
     fun getNotInterpretableFeedback(): String =
         pick("GENERAL_NOT_INTERPRETABLE", GENERAL_NOT_INTERPRETABLE)
 
-    /** Frase para cuando no se detecto respuesta o silencio. Nunca culpa al nino. */
     fun getNoResponseFeedback(): String = pick("GENERAL_NO_RESPONSE", GENERAL_NO_RESPONSE)
 
-    /** Frase para un error tecnico recuperable. Nunca culpa al nino. */
     fun getTechnicalErrorFeedback(): String =
         pick("GENERAL_TECHNICAL_ERROR", GENERAL_TECHNICAL_ERROR)
 
-    /**
-     * Devuelve un microdiálogo breve de forma ocasional (probabilidad configurable)
-     * para intercalar antes de la intro de una pregunta. Devuelve null cuando no
-     * corresponde usarlo, para no alargar la interaccion.
-     */
     fun getMicroDialogue(probabilityPercent: Int = 35): String? {
         if (random.nextInt(100) >= probabilityPercent) return null
         return pick("MICRO_DIALOGUE", MICRO_DIALOGUES)
     }
 
     /**
-     * Identificador del escenario activo para la clave dada, o null si no hay uno
-     * seleccionado todavia (o la clave no tiene escenarios). Util para diagnostico y
-     * pruebas: permite verificar que el feedback proviene del mismo escenario que la
-     * introduccion.
+     * Intro genérica de Seven con el texto de la pregunta embebido, para usar
+     * cuando la clave de mediación es NONE (sin escenario específico de animal).
+     * Rellena el marcador {question} con [questionText].
      */
+    fun getGenericIntroWithQuestion(questionText: String): String {
+        val template = pick("GENERIC_INTRO_QUESTION", ADVANCED_QUESTION_INTRO_GENERAL)
+        return template.replace("{question}", questionText.trim())
+    }
+
     fun currentScenarioId(mediationKey: String?): String? =
         activeScenarioByKey[LocalMediationKey.fromKey(mediationKey)]?.id
 
-    /**
-     Mini escena narrativa antes de una pregunta segun su clave de mediacion.
-     */
     fun getQuestionIntroduction(mediationKey: String?): String {
         val key = LocalMediationKey.fromKey(mediationKey)
         val scenario = selectScenario(key)
@@ -98,10 +83,6 @@ class AnimalMediationBank(
         }
     }
 
-    /**
-     * Retroalimentacion para una respuesta correcta segun la clave de mediacion,
-     * dentro del escenario activo de la pregunta.
-     */
     fun getCorrectFeedback(mediationKey: String?, isLastQuestion: Boolean = false): String {
         val key = LocalMediationKey.fromKey(mediationKey)
         val scenario = activeScenario(key)
@@ -115,11 +96,6 @@ class AnimalMediationBank(
         )
     }
 
-    /**
-     * Retroalimentacion para una respuesta incorrecta cuando aun quedan intentos,
-     * dentro del escenario activo. Nunca revela la respuesta esperada: solo invita a
-     * pensar de nuevo.
-     */
     fun getIncorrectRetryFeedback(mediationKey: String?): String {
         val key = LocalMediationKey.fromKey(mediationKey)
         val scenario = activeScenario(key)
@@ -129,13 +105,6 @@ class AnimalMediationBank(
         }
     }
 
-    /**
-     * Retroalimentacion para una respuesta incorrecta sin intentos restantes, dentro
-     * del escenario activo. Aqui si puede mencionarse la respuesta correcta de forma
-     * amable.
-     *
-     * En la ultima pregunta ([isLastQuestion]) se excluyen frases con continuidad.
-     */
     fun getIncorrectNextFeedback(mediationKey: String?, isLastQuestion: Boolean): String {
         val key = LocalMediationKey.fromKey(mediationKey)
         val scenario = activeScenario(key)
@@ -153,13 +122,8 @@ class AnimalMediationBank(
         )
     }
 
-    // ----- Seleccion de escenario ---------------------------------------------
+    // ----- Selección de escenario ------------------------------------------------
 
-    /**
-     * Selecciona un escenario nuevo para la clave (evitando repetir el escenario
-     * anterior cuando hay alternativas) y lo recuerda como activo. Devuelve null si
-     * la clave no tiene escenarios (claves generales o no reconocidas).
-     */
     private fun selectScenario(key: LocalMediationKey): AnimalNarrativeScenario? {
         val keyScenarios = scenarios[key]?.takeIf { it.isNotEmpty() } ?: return null
         val index = pickIndex("SCENARIO_${key.name}", keyScenarios.size)
@@ -168,18 +132,9 @@ class AnimalMediationBank(
         return scenario
     }
 
-    /**
-     * Escenario activo de la clave; si todavia no hay uno (p. ej. el feedback se pide
-     * sin que se haya presentado la intro), selecciona uno bajo demanda.
-     */
     private fun activeScenario(key: LocalMediationKey): AnimalNarrativeScenario? =
         activeScenarioByKey[key] ?: selectScenario(key)
 
-    /**
-     * Elige una frase del escenario, aislando el estado anti-repeticion por escenario
-     * (con el id en la clave de grupo) y recurriendo al respaldo general si la lista
-     * estuviera vacia. Garantiza que nunca se devuelva texto en blanco.
-     */
     private fun pickFromScenario(
         prefix: String,
         scenario: AnimalNarrativeScenario,
@@ -190,10 +145,6 @@ class AnimalMediationBank(
         return pick("${prefix}_${scenario.id}", options)
     }
 
-    /**
-     * Igual que [pickFromScenario], pero aplica la regla de la ultima pregunta:
-     * excluye las frases de continuidad y, si no quedara ninguna, usa el respaldo.
-     */
     private fun pickContextual(
         prefix: String,
         scenario: AnimalNarrativeScenario,
@@ -208,7 +159,6 @@ class AnimalMediationBank(
         else pick("${prefix}_LAST_${scenario.id}", neutral)
     }
 
-    /** Elige un indice de [size] opciones evitando repetir el ultimo del grupo. */
     private fun pickIndex(group: String, size: Int): Int {
         require(size > 0) { "El conjunto $group no tiene opciones" }
         if (size == 1) {
@@ -243,386 +193,728 @@ class AnimalMediationBank(
             return CONTINUATION_MARKERS.any { lower.contains(it) }
         }
 
-        // ----- Apertura de mision --------------------------------------------------
+        // ----- Apertura de misión (ADVANCED_SESSION_START) -----------------------
 
         val MISSION_START: List<String> = listOf(
-            "¡Hola! Hoy tengo una misión especial. Se me mezclaron algunos sonidos de animales y necesito tu ayuda para recordarlos.",
-            "¡Qué bueno que estás aquí! Mi granja imaginaria está un poquito desordenada y necesito a alguien que sepa de animales.",
-            "Hoy vamos a ser exploradores de animales. Yo te haré algunas preguntas y tú me ayudarás a encontrarlos.",
-            "Tengo un pequeño problema: escuché varios sonidos de animales, pero algunos se me olvidaron. ¿Me ayudas?",
-            "Bienvenido a nuestra misión animal. Vamos a buscar sonidos, mascotas y animales de la granja.",
-            "Hoy necesito tus orejitas de explorador. Vamos a descubrir animales juntos.",
-            "Prepárate, porque vamos a entrar a una aventura de animales. Yo pregunto y tú me ayudas.",
-            "Mi memoria de juguete se confundió con algunos animalitos. Vamos a ordenarlos juntos.",
-            "Tenemos una misión: reconocer animales y sonidos. Sé que puedes ayudarme.",
-            "Hoy la granja necesita nuestra ayuda. Vamos a descubrir qué animal es cada uno."
+            "¡Hola! Soy Seven, un alien explorador. Hoy necesito tu ayuda para aprender sobre los animales de la Tierra.",
+            "¡Activando misión terrestre! Seven llegó del espacio para descubrir animalitos contigo.",
+            "¡Hola, explorador de la Tierra! Mi nave detectó muchos sonidos de animales y necesito tu ayuda.",
+            "Me contaron que en la Tierra viven criaturas muy curiosas. ¿Me ayudas a conocerlas?",
+            "¡Seven reportándose desde su nave! Hoy quiero aprender sobre los animalitos que viven aquí.",
+            "Mi radar espacial encontró una misión animal. Necesito una voz terrestre que me ayude.",
+            "¡Qué emoción! Seven llegó a investigar animales, sonidos y lugares de la Tierra.",
+            "Mi computadora espacial dice que tú conoces mejor este planeta. ¿Me ayudas en la misión?",
+            "¡Bienvenido a la exploración de Seven! Hoy descubriremos animalitos terrestres.",
+            "Seven tiene una misión especial: aprender de los animales con ayuda de un niño experto de la Tierra."
         )
 
-        // ----- Cierre de mision ----------------------------------------------------
+        // ----- Cierre de misión (ADVANCED_SESSION_COMPLETED) --------------------
 
         val MISSION_COMPLETED: List<String> = listOf(
-            "¡Misión cumplida! Gracias por ayudarme a ordenar los animales.",
-            "Terminamos nuestra aventura animal. Me encantó jugar contigo.",
-            "La granja imaginaria está feliz otra vez. Gracias por ayudarme.",
-            "Completamos todas las pistas de animales. Lo hiciste con mucho esfuerzo.",
-            "Nuestra misión terminó. Hoy reconocimos sonidos, mascotas y animales de granja.",
-            "Gracias por ser mi ayudante en esta aventura.",
-            "Los animales ya están en su lugar. Terminamos por hoy.",
-            "Muy bien, explorador. Completamos la misión de animales.",
-            "Hoy hicimos un gran trabajo en nuestra aventura animal.",
-            "Gracias por jugar conmigo. Nuestra misión de animales terminó."
+            "¡Misión completada! Seven aprendió mucho sobre los animales gracias a tu ayuda.",
+            "¡Exploración terminada! Mi nave guardó nuevos datos de los animalitos de la Tierra.",
+            "Seven está muy feliz. Hoy descubrimos criaturas terrestres juntos.",
+            "¡Gracias por ayudarme! La misión animal quedó completada.",
+            "Mi radar espacial terminó la exploración. Seven conoce más animales que antes.",
+            "¡Misión guardada en la memoria de Seven! Gracias por enseñarme cosas de la Tierra.",
+            "Hoy mi nave aprendió bastante sobre animales. Seven volverá con más retos pronto.",
+            "¡Exploración finalizada! Tus respuestas ayudaron mucho a Seven.",
+            "La misión llegó a su fin. Seven se despide con una sonrisa espacial.",
+            "¡Gracias, explorador! Seven completó esta aventura animal."
         )
 
-        // ----- Microdiálogos opcionales --------------------------------------------
+        // ----- Microdiálogos opcionales de Seven ---------------------------------
 
         val MICRO_DIALOGUES: List<String> = listOf(
-            "Espera... creo que escuché algo.",
-            "Vamos despacito, como buenos exploradores.",
-            "Usa tus orejitas de detective.",
-            "A ver, a ver... pensemos juntos.",
-            "Me parece que hay un animal cerca.",
-            "Esta misión está interesante.",
-            "Necesito tu ayuda en esta parte.",
-            "Vamos a imaginarlo juntos.",
-            "Shhh... prestemos atención.",
-            "Listo, vamos con la siguiente pista."
+            "Espera... Seven captó algo en su radar.",
+            "Vamos despacito, como buenos exploradores espaciales.",
+            "Activa tus orejitas de astronauta.",
+            "A ver, a ver... Seven está pensando.",
+            "Hay algo interesante en el mapa terrestre de Seven.",
+            "Esta misión está muy emocionante.",
+            "Seven necesita tu ayuda especial en esta parte.",
+            "Vamos a imaginarlo juntos desde la nave.",
+            "Shhh... Seven está escuchando con su antena.",
+            "¡Qué emoción! Seven está descubriendo algo nuevo."
         )
 
-        // ----- Frases generales (no interpretable, sin respuesta, error técnico) ---
+        // ----- Intro genérica con pregunta (ADVANCED_QUESTION_INTRO_GENERAL) -----
+        // Usa {question} como marcador que se reemplaza con el texto real.
+
+        val ADVANCED_QUESTION_INTRO_GENERAL: List<String> = listOf(
+            "Tengo un reto terrestre para ti: {question}",
+            "Mi radar encontró una duda curiosa: {question}",
+            "Ayúdame con este descubrimiento: {question}",
+            "Seven necesita aprender esto: {question}",
+            "Escucha este reto de exploración: {question}",
+            "Mi nave quiere registrar una respuesta: {question}",
+            "Tengo una misión pequeña para tu voz: {question}",
+            "Vamos con un reto de la Tierra: {question}",
+            "Mi antena detectó esta pregunta: {question}",
+            "Seven está pensando en algo curioso: {question}"
+        )
+
+        // ----- No interpretable (ADVANCED_NOT_INTERPRETABLE) --------------------
 
         val GENERAL_NOT_INTERPRETABLE: List<String> = listOf(
-            "No pude escucharte bien. Vamos a repetirlo con voz clara.",
-            "Creo que no entendí bien tu respuesta. Inténtalo otra vez despacito.",
-            "No logré reconocer lo que dijiste. Probemos nuevamente.",
-            "Vamos a intentarlo otra vez con calma y voz clara.",
-            "Te escuché un poquito bajo. Repitamos una vez más.",
-            "Creo que tu voz llegó un poco mezclada. Vamos a probar de nuevo.",
-            "No entendí bien esa respuesta. Dila otra vez con tranquilidad.",
-            "Vamos a repetirlo, pero esta vez un poquito más claro.",
-            "No pude reconocer bien tus palabras. Intentemos otra vez.",
-            "Te escuché, pero no pude entenderlo bien. Probemos nuevamente."
+            "Mi traductor espacial hizo chispitas y no entendió bien. ¿Puedes repetirlo?",
+            "La señal llegó un poco borrosa a mi nave. Intentemos otra vez.",
+            "Seven escuchó algo, pero su antena se confundió. Repítelo, por favor.",
+            "Mi radar de voz no pudo ordenar esa señal. ¿Me ayudas repitiendo?",
+            "Creo que mi traductor alienígena se mareó. Vamos otra vez.",
+            "La señal de tu voz llegó incompleta. Intentemos nuevamente.",
+            "Seven quiere entenderte bien. Dilo una vez más con tu voz.",
+            "Mi nave captó sonidos, pero no logró convertirlos en respuesta.",
+            "La antena espacial necesita otra señal más clara.",
+            "Ups, Seven no logró entender esa respuesta. Probemos de nuevo."
         )
+
+        // ----- Sin respuesta (ADVANCED_NO_RESPONSE) ------------------------------
 
         val GENERAL_NO_RESPONSE: List<String> = listOf(
-            "No escuché una respuesta. Cuando estés listo, puedes responder con voz clara.",
-            "Parece que no respondiste todavía. Intentemos una vez más.",
-            "Estoy esperando tu respuesta. Respira tranquilo y probemos de nuevo.",
-            "No escuché nada esta vez. Vamos a repetir la pregunta.",
-            "Puedes responder cuando estés listo. Intentemos otra vez.",
-            "No escuché tu voz. Vamos a probar nuevamente.",
-            "Parece que hubo un silencio. No pasa nada, repitamos.",
-            "Cuando estés listo, dime tu respuesta con voz clara.",
-            "Esta vez no escuché respuesta. Intentémoslo con calma.",
-            "Vamos a intentarlo otra vez. Yo te espero."
+            "No recibí ninguna señal de voz. Seven esperará otro intento.",
+            "Mi antena no escuchó respuesta esta vez. Intentemos de nuevo.",
+            "Parece que la señal no llegó a mi nave. Vamos otra vez.",
+            "Seven se quedó esperando tu voz. Puedes ayudarme intentándolo otra vez.",
+            "No llegó respuesta al radar espacial. Probemos nuevamente.",
+            "Mi nave no detectó sonido. Hagamos otro intento.",
+            "Esta vez el espacio se quedó en silencio. Seven seguirá atento.",
+            "No escuché tu señal, pero todavía podemos intentarlo.",
+            "La antena de Seven no recibió respuesta. Vamos con calma otra vez.",
+            "No pasó nada, explorador. Seven esperará una nueva señal."
         )
+
+        // ----- Error técnico (ADVANCED_TECHNICAL_ERROR) --------------------------
 
         val GENERAL_TECHNICAL_ERROR: List<String> = listOf(
-            "Parece que tuve un pequeño problema para escucharte. Vamos a intentarlo otra vez.",
-            "Algo falló por un momento, pero no pasa nada. Probemos nuevamente.",
-            "Tu respuesta es importante, pero tuve un problema técnico. Intentemos otra vez.",
-            "Creo que mi oído de juguete se confundió un poquito. Vamos de nuevo.",
-            "Tu voz no llegó bien esta vez. Repitamos con calma.",
-            "Hubo una pequeña falla, pero seguimos jugando.",
-            "No fue tu culpa. Tuve un problemita para escuchar.",
-            "Vamos a repetirlo, porque esta vez no pude procesarlo bien.",
-            "Mi sistema se distrajo un poquito. Intentemos nuevamente.",
-            "Sigamos con calma. Voy a escucharte otra vez."
+            "Ups, mi nave tuvo una pequeña falla técnica. Seven se está recuperando.",
+            "Mi sistema espacial hizo un ruidito extraño. Intentemos continuar.",
+            "Hubo un problema en los controles de Seven, no fue culpa tuya.",
+            "Mi antena tuvo una falla técnica. Seven intentará seguir con la misión.",
+            "Algo se movió en mi nave y no pude procesar bien la señal.",
+            "Seven detectó un error técnico, pero seguimos con calma.",
+            "Mi computadora espacial se confundió un momento. Vamos a continuar.",
+            "Hubo una interferencia en la nave. No te preocupes, seguimos.",
+            "Mi sistema necesita un segundo para ordenarse. Seven sigue aquí.",
+            "La nave tuvo una pequeña interferencia. Tu ayuda sigue siendo importante."
         )
 
-        // ----- Escenarios narrativos por clave de mediacion ------------------------
+        // ----- Escenarios narrativos de Seven por clave de mediación -------------
         // Cada escenario es una mini historia coherente: la intro plantea una
-        // situacion y todos sus feedbacks pertenecen a esa misma situacion. Los
-        // inicios de feedback se distribuyen para no sonar repetitivos.
+        // situación espacial y todos sus feedbacks pertenecen a esa misma historia.
 
         private val DOG_SCENARIOS = listOf(
             AnimalNarrativeScenario(
-                id = "DOG_LOST_BARK",
+                id = "DOG_S01",
                 intro = listOf(
-                    "Primera misión: el perrito de la aventura se quedó sin su ladrido y no sabe cómo avisar a su familia. Ayúdalo a recordarlo. ¿Qué sonido hace el perro?",
-                    "Mi perrito de juguete olvidó cómo ladrar y está un poco confundido. Recordemos su sonido juntos. ¿Qué sonido hace el perro?"
+                    "Me contaron que en la Tierra hay un animalito peludo que cuida la casa y mueve la cola. Seven quiere saber: ¿qué sonido hace el perro?"
                 ),
                 correctFeedback = listOf(
-                    "¡Eso era! El perrito recuperó su ladrido y ya puede avisar a su familia: guau.",
-                    "¡Lo resolvimos juntos! El perrito volvió a ladrar contento: guau.",
-                    "¡Qué buena ayuda! Gracias a ti el perrito recordó su guau.",
-                    "¡El animalito ya está feliz! El perrito volvió a hacer guau."
+                    "¡Guau detectado! Mi nave acaba de registrar el sonido del perrito terrestre."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "El perrito todavía no encuentra su ladrido. Pensemos otra vez, sin prisa.",
-                    "Mmm, su sonido sigue escondido. Imagina al perrito avisando a su familia e inténtalo de nuevo.",
-                    "Aún no aparece su ladrido. Cerremos los ojitos y probemos una vez más."
+                    "Mi antena escuchó algo, pero todavía no encontró el ladrido del perrito. Intentemos otra vez."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. El perrito ladra y hace guau; ya recordó su sonido.",
-                    "Gracias por ayudarlo. El sonido que buscaba el perrito era guau.",
-                    "Lo intentaste con ganas. Al final el perrito recordó su guau."
+                    "Seven no logró guardar el sonido del perrito esta vez, pero seguirá explorando."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "DOG_AT_GATE",
+                id = "DOG_S02",
                 intro = listOf(
-                    "Escucha... un perrito llegó a la reja moviendo la colita y quiere saludarnos. ¿Qué sonido hace el perro?",
-                    "Veo un perrito feliz esperando en la puerta para darnos la bienvenida. ¿Qué sonido hace el perro?"
+                    "Seven vio en su mapa un amigo de cuatro patas que acompaña a las personas. Ayúdame: ¿qué sonido hace el perro?"
                 ),
                 correctFeedback = listOf(
-                    "¡Ahora sí! Era el perrito de la reja saludándonos con su guau.",
-                    "¡Qué buen oído! El perrito de la puerta hacía guau.",
-                    "¡Me ayudaste mucho! Ese era el saludo del perrito: guau.",
-                    "¡Respuesta encontrada! El perrito de la reja decía guau."
+                    "¡Ladrido registrado! Seven ya sabe cómo suena ese amigo de cuatro patas."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "El perrito de la reja sigue esperando. Escuchémoslo otra vez. ¿Qué sonido hace?",
-                    "Volvamos a la puerta y pongamos atención al perrito. Inténtalo de nuevo.",
-                    "Todavía no es ese. Imagina al perrito saludando y probemos otra vez."
+                    "Mi radar sigue buscando el ladrido correcto. Probemos una vez más."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Está bien, lo intentaste. El perrito de la reja saluda con un guau.",
-                    "No pasa nada. El sonido del perrito de la puerta era guau.",
-                    "Gracias por intentarlo. El perrito saludaba haciendo guau."
+                    "El sonido del perrito quedó pendiente en mi mapa espacial."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "DOG_PLAY_PARK",
+                id = "DOG_S03",
                 intro = listOf(
-                    "Un perrito está corriendo en el parque detrás de su pelota y quiere llamarnos a jugar. ¿Qué sonido hace el perro?",
-                    "Imagina un perrito muy juguetón en el parque que nos quiere invitar a correr. ¿Qué sonido hace el perro?"
+                    "Mi nave escuchó que algunos perritos dicen algo cuando están felices o alertas. Dime: ¿qué sonido hace el perro?"
                 ),
                 correctFeedback = listOf(
-                    "¡Ese era el sonido! El perrito del parque nos llamó a jugar: guau.",
-                    "¡Encontraste la pista! El perrito juguetón hacía guau.",
-                    "¡El animalito ya está feliz! El perrito siguió jugando y haciendo guau.",
-                    "¡Qué buena ayuda! El perrito del parque te respondió con un guau."
+                    "¡Eso sonó como un perrito! Mi antena está dando saltitos espaciales."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "El perrito del parque todavía espera para jugar. Probemos otra vez.",
-                    "Aún no es ese sonido. Imagina al perrito con su pelota e inténtalo de nuevo.",
-                    "Pensemos otra vez en el perrito juguetón. ¿Qué sonido hará?"
+                    "Seven no captó todavía el sonido del perrito. ¿Me ayudas de nuevo?"
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen esfuerzo. El perrito del parque nos llamaba con un guau.",
-                    "Lo intentaste con ánimo. El sonido del perrito juguetón era guau.",
-                    "Está bien. Al final el perrito siguió jugando y haciendo guau."
+                    "Mi antena no logró reconocer el ladrido, pero la misión continúa."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S04",
+                intro = listOf(
+                    "En la Tierra hay un animal que puede ser muy buen amigo de los niños. Seven quiere aprender: ¿qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Guau guardado! Seven aprendió un nuevo sonido terrestre."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi traductor alienígena no encontró el sonido esperado. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven guardará este reto para practicarlo después."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S05",
+                intro = listOf(
+                    "Me dijeron que los perros a veces hacen ruido cuando saludan o cuidan su casa. Ayúdame: ¿qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Señal perruna recibida! Mi nave ya reconoce ese sonido."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La señal llegó un poquito confundida. Seven necesita escuchar otro intento."
+                ),
+                incorrectNextFeedback = listOf(
+                    "No logramos completar el sonido del perro, pero gracias por ayudar a Seven."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S06",
+                intro = listOf(
+                    "Seven encontró huellitas en su pantalla espacial. Parecen de un perro. ¿Qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Huellitas y guau conectados! Seven acaba de entenderlo."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi nave encontró las huellitas, pero no el sonido. Probemos de nuevo."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El sonido de esas huellitas quedó sin registrar por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S07",
+                intro = listOf(
+                    "Mi radar dice que el perro es un animal muy conocido en la Tierra. Seven pregunta: ¿qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Ladrido confirmado! Seven está aprendiendo muy rápido contigo."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi radar no confirmó el ladrido todavía. Vamos con otro intento."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El radar de Seven no confirmó ese sonido, pero seguimos con la misión."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S08",
+                intro = listOf(
+                    "Seven está armando una colección de sonidos terrestres. Empecemos con uno famoso: ¿qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Sonido famoso guardado! El perro ya está en mi colección espacial."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La colección aún no tiene ese sonido. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La colección de Seven dejó el sonido del perro incompleto por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S09",
+                intro = listOf(
+                    "Mi nave escuchó un 'guau' perdido en la Tierra, pero Seven no sabe de quién es. ¿Qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Misterio resuelto! Ese 'guau' era del perro."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "El misterio sigue abierto. Seven necesita otra respuesta."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no resolvió este misterio, pero buscará más señales después."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOG_S10",
+                intro = listOf(
+                    "Seven quiere saludar a un perrito terrestre, pero primero debe conocer su sonido. ¿Qué sonido hace el perro?"
+                ),
+                correctFeedback = listOf(
+                    "¡Ahora Seven puede saludar al perrito con un guau espacial!"
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Seven todavía no sabe cómo saludarlo. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no pudo aprender ese saludo perruno esta vez."
                 )
             )
         )
 
         private val DOMESTIC_SCENARIOS = listOf(
             AnimalNarrativeScenario(
-                id = "DOMESTIC_NEW_HOME",
+                id = "DOM_S01",
                 intro = listOf(
-                    "Segunda misión: una familia preparó una camita y un plato porque va a recibir una mascota nueva. Menciona un animal doméstico.",
-                    "Imagina que tocan la puerta y llega una mascota para vivir con una familia. Menciona un animal doméstico."
+                    "Me contaron que algunos animalitos viven cerca de las familias y reciben mucho cariño. Seven quiere saber: menciona un animal doméstico."
                 ),
                 correctFeedback = listOf(
-                    "¡Eso era! Ese animalito puede vivir feliz con una familia en casa.",
-                    "¡Qué buena ayuda! Esa mascota encontró su nuevo hogar.",
-                    "¡Encontraste la pista! Ese animal sí puede ser una mascota de casa.",
-                    "¡Me ayudaste mucho! Esa mascota ya tiene su camita lista."
+                    "¡Animal de casa registrado! Seven ya conoce un compañero terrestre."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Pensemos otra vez en un animal que una familia pueda cuidar en casa.",
-                    "Aún no es ese. Imagina una mascota durmiendo en su camita e inténtalo de nuevo.",
-                    "Probemos una vez más con un animal que viva cerca de las personas."
+                    "Mi radar no encontró un animal de casa en esa señal. Probemos otra vez."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. Un animal doméstico puede ser el perro, el gato o el conejo.",
-                    "Está bien. Algunas mascotas de casa son el perro, el gato o el hámster.",
-                    "Gracias por intentarlo. La tortuga, el pez o el conejo también viven en casa."
+                    "Seven no logró registrar un animal doméstico esta vez, pero seguirá aprendiendo."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "DOMESTIC_PET_FRIEND",
+                id = "DOM_S02",
                 intro = listOf(
-                    "Busquemos un amiguito animal que acompaña a las personas y recibe muchos mimos. Menciona un animal doméstico.",
-                    "Hay animalitos que viven con nosotros y nos hacen compañía cada día. Menciona un animal doméstico."
+                    "Seven está investigando animalitos que pueden vivir con las personas. Ayúdame: menciona un animal doméstico."
                 ),
                 correctFeedback = listOf(
-                    "¡Ahora sí! Ese animalito puede ser un gran compañero en casa.",
-                    "¡Me ayudaste mucho! Esa mascota acompaña muy bien a una familia.",
-                    "¡Ese era! Ese animal puede vivir cerquita de las personas.",
-                    "¡Qué buena idea! Ese amiguito animal nos hace muy buena compañía."
+                    "¡Compañero terrestre guardado! Mi nave ya tiene un nuevo dato."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Pensemos en un animalito que nos haga compañía en casa. Inténtalo otra vez.",
-                    "Aún no es ese. Recuerda alguna mascota que hayas visto y probemos de nuevo.",
-                    "Sigue buscando un amiguito animal que viva con una familia."
+                    "Mi computadora espacial necesita otro ejemplo de animal doméstico."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. Un buen compañero de casa puede ser el perro o el gato.",
-                    "Está bien. El conejo, el hámster o el pez también acompañan a una familia.",
-                    "Gracias por participar. Muchas mascotas, como el gato, viven cerca de nosotros."
+                    "El registro de animales domésticos quedó pendiente por ahora."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "DOMESTIC_HOUSE_VISIT",
+                id = "DOM_S03",
                 intro = listOf(
-                    "Entramos a una casita imaginaria y vemos a una mascota esperando en su rincón. Menciona un animal doméstico.",
-                    "Abrimos la puerta de una casa y dentro vive un animalito muy querido. Menciona un animal doméstico."
+                    "En mi planeta no tenemos mascotas como en la Tierra. Seven quiere aprender: menciona un animal doméstico."
                 ),
                 correctFeedback = listOf(
-                    "¡Respuesta encontrada! Esa mascota vive muy bien dentro de una casa.",
-                    "¡Qué buena idea! Ese animal puede acompañar a la familia de la casa.",
-                    "¡Lo resolvimos juntos! Ese animalito sí puede ser una mascota.",
-                    "¡Eso era! Esa mascota encaja perfecto en la casita imaginaria."
+                    "¡Mascota terrestre aprendida! Seven está muy curioso por conocer más."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Miremos de nuevo dentro de la casa. ¿Qué mascota podría vivir ahí?",
-                    "Aún no es ese. Imagina el rincón de una mascota en casa e inténtalo otra vez.",
-                    "Pensemos una vez más en un animal que viva dentro de una casa."
+                    "Seven todavía no reconoció una mascota terrestre. Intentemos otra vez."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. En una casa pueden vivir un perro, un gato o un conejo.",
-                    "Está bien. Una mascota de casa puede ser el gato, el pez o el hámster.",
-                    "Gracias por intentarlo. Muchos animalitos, como el perro, viven en casa."
+                    "Seven no logró guardar esa mascota, pero continuará la exploración."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S04",
+                intro = listOf(
+                    "Mi nave vio casas terrestres y cree que algunos animalitos viven allí. Dime un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Animalito de casa detectado! Mi mapa terrestre creció un poquito."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi mapa no encontró ese animalito de casa. Probemos de nuevo."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El mapa de Seven quedó sin ese animal doméstico por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S05",
+                intro = listOf(
+                    "Seven quiere saber qué animalitos acompañan a las personas en la Tierra. Menciona un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Buen dato terrestre! Seven ya sabe de un animal que puede acompañar a las personas."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi antena necesita otro dato sobre animales que viven cerca de las personas."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no pudo completar esta parte, pero gracias por intentarlo."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S06",
+                intro = listOf(
+                    "Estoy creando una lista espacial de mascotas de la Tierra. Ayúdame con una: menciona un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Mascota añadida a la lista espacial de Seven!"
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La lista espacial todavía necesita una mascota válida. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La lista de mascotas quedó incompleta por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S07",
+                intro = listOf(
+                    "Mi radar encontró platos pequeños, camitas y juguetes. Creo que son para mascotas. Menciona un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Registro de mascota completado! Seven entendió ese dato."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi radar de mascotas se confundió. Ayúdame con otro intento."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no pudo cerrar el registro de mascota esta vez."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S08",
+                intro = listOf(
+                    "Seven escuchó que algunos niños tienen animalitos en casa. Quiero aprender uno: menciona un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Animal doméstico aprendido! Seven está guardando ese dato con cuidado."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi nave no reconoció ese animal como doméstico. Probemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El dato quedó pendiente en mi memoria espacial."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S09",
+                intro = listOf(
+                    "En la Tierra, algunas criaturas viven con las familias. Seven pregunta: menciona un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Criatura familiar registrada! Mi nave está muy contenta."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La nave necesita otro ejemplo de criatura que viva con familias."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven dejará esta criatura familiar para otra exploración."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "DOM_S10",
+                intro = listOf(
+                    "Seven quiere completar su álbum de animales cercanos a las personas. Menciona un animal doméstico."
+                ),
+                correctFeedback = listOf(
+                    "¡Álbum actualizado! Seven agregó un animal doméstico."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "El álbum aún no puede guardar esa respuesta. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El álbum de Seven quedó sin completar esta página."
                 )
             )
         )
 
         private val CAT_SCENARIOS = listOf(
             AnimalNarrativeScenario(
-                id = "CAT_LOST_VOICE",
+                id = "CAT_S01",
                 intro = listOf(
-                    "Tercera misión: el gatito de la aventura perdió su miau y no encuentra su voz. Ayúdame a recordarlo. ¿Qué sonido hace el gato?",
-                    "Mi gatito de juguete se quedó sin su vocecita y está triste. Recuperemos su sonido juntos. ¿Qué sonido hace el gato?"
+                    "Me contaron que hay un animalito con bigotes que camina suavecito. Seven quiere saber: ¿qué sonido hace el gato?"
                 ),
                 correctFeedback = listOf(
-                    "¡Qué buena ayuda! El gatito recuperó su miau y ya tiene su voz.",
-                    "¡Lo resolvimos juntos! El gatito volvió a maullar: miau.",
-                    "¡El animalito ya está feliz! Ayudaste al gatito a recordar su miau.",
-                    "¡Eso era! El gatito encontró su voz otra vez: miau."
+                    "¡Miau registrado! Seven ya conoce el sonido del gato terrestre."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "El gatito todavía no encuentra su sonido. Pensemos otra vez, con calma.",
-                    "Su vocecita sigue escondida. Imagina al gatito buscando su voz e inténtalo de nuevo.",
-                    "Aún no aparece su sonido. Probemos una vez más, sin apuro."
+                    "Mi antena escuchó algo, pero no encontró el miau. Intentemos otra vez."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. El gatito maúlla y hace miau; ya recuperó su voz.",
-                    "Gracias por ayudarlo. El sonido que el gatito buscaba era miau.",
-                    "Lo intentaste con cariño. Al final el gatito recordó su miau."
+                    "Seven no logró guardar el sonido del gato esta vez."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "CAT_WINDOW",
+                id = "CAT_S02",
                 intro = listOf(
-                    "Shhh... escuché un sonido suave cerca de la ventana. Creo que hay un gatito. ¿Qué sonido hace el gato?",
-                    "Veo unos bigotes asomándose por la ventana. Parece un gatito curioso. ¿Qué sonido hace el gato?"
+                    "Seven vio un animal con cola y bigotes en su pantalla espacial. Ayúdame: ¿qué sonido hace el gato?"
                 ),
                 correctFeedback = listOf(
-                    "¡Ahora sí! Era el gatito de la ventana haciendo miau.",
-                    "¡Qué buen oído! Escuchaste al gatito de la ventana: hacía miau.",
-                    "¡Encontraste la pista! El gatito de la ventana decía miau.",
-                    "¡Eso era! El sonido junto a la ventana era el miau del gatito."
+                    "¡Sonido gatuno detectado! Mi nave acaba de aprender un miau."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Escuchemos otra vez al gatito de la ventana. ¿Qué sonido hace?",
-                    "El gatito sigue junto a la ventana. Pongamos atención e inténtalo de nuevo.",
-                    "Todavía no es ese. Acerquémonos despacito a la ventana y probemos otra vez."
+                    "Mi radar gatuno sigue confundido. Probemos de nuevo."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Está bien, lo intentaste. El gatito de la ventana hace miau.",
-                    "No pasa nada. Ese sonido cerca de la ventana era un miau.",
-                    "Gracias por intentarlo. El gatito de la ventana maullaba: miau."
+                    "El radar de Seven no pudo registrar el sonido del gato."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "CAT_HUNGRY",
+                id = "CAT_S03",
                 intro = listOf(
-                    "Un gatito se acercó despacito a su plato porque tiene hambre y quiere pedir comida. ¿Qué sonido hace el gato?",
-                    "Imagina un gatito suave frotándose en tus piernas para pedir su comida. ¿Qué sonido hace el gato?"
+                    "Mi nave escuchó que los gatos hacen un sonido muy suave. Dime: ¿qué sonido hace el gato?"
                 ),
                 correctFeedback = listOf(
-                    "¡Ese era el sonido! El gatito pidió su comida con un miau.",
-                    "¡Me ayudaste mucho! El gatito hambriento hacía miau.",
-                    "¡Respuesta encontrada! Así pedía comida el gatito: miau.",
-                    "¡Qué buena ayuda! El gatito recibió su comida después de su miau."
+                    "¡Miau confirmado! Seven está aprendiendo sonidos suaves de la Tierra."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "El gatito todavía tiene hambre y espera. ¿Qué sonido hará para pedir comida?",
-                    "Aún no es ese. Imagina al gatito junto a su plato e inténtalo otra vez.",
-                    "Pensemos de nuevo en el gatito pidiendo su comida. Probemos una vez más."
+                    "Mi traductor no encontró el miau todavía. Intentemos otra vez."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. El gatito pedía su comida haciendo miau.",
-                    "Lo intentaste con ganas. El sonido del gatito hambriento era miau.",
-                    "Está bien. Al final el gatito pidió comida con un miau."
+                    "El miau quedó pendiente en la memoria de Seven."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S04",
+                intro = listOf(
+                    "Seven quiere saludar a un gatito, pero no sabe cómo suena. ¿Qué sonido hace el gato?"
+                ),
+                correctFeedback = listOf(
+                    "¡Ahora Seven puede saludar al gatito con un miau espacial!"
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Seven aún no sabe cómo saludar al gatito. Ayúdame otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no aprendió el saludo del gatito esta vez."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S05",
+                intro = listOf(
+                    "Me dijeron que los gatos son silenciosos, pero a veces hacen un sonido especial. ¿Qué sonido hace el gato?"
+                ),
+                correctFeedback = listOf(
+                    "¡Ese sonido especial quedó guardado! Seven ya conoce el miau."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La señal llegó borrosa y Seven no reconoció el sonido especial."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no pudo guardar el sonido especial del gato por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S06",
+                intro = listOf(
+                    "Seven encontró unas patitas suaves en su mapa terrestre. Creo que son de un gato. ¿Qué sonido hace el gato?"
+                ),
+                correctFeedback = listOf(
+                    "¡Patitas suaves y miau conectados! Mi nave lo entendió."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi mapa encontró las patitas, pero no el sonido. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El sonido de esas patitas quedó sin registrar por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S07",
+                intro = listOf(
+                    "Mi computadora espacial dice que los gatos pueden vivir en casas. Seven pregunta: ¿qué sonido hace el gato?"
+                ),
+                correctFeedback = listOf(
+                    "¡Miau aprendido! Seven ya sabe un poquito más de los gatos."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi computadora no escuchó el miau esperado. Probemos de nuevo."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven dejará el sonido del gato para practicarlo después."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S08",
+                intro = listOf(
+                    "Seven está creando una colección de sonidos animales. Ahora necesita uno de gato: ¿qué sonido hace?"
+                ),
+                correctFeedback = listOf(
+                    "¡Colección actualizada! El miau ya está en la nave."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La colección todavía no puede guardar ese sonido. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La colección quedó sin el sonido del gato por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S09",
+                intro = listOf(
+                    "La nave de Seven detectó bigotes, orejas y una cola. Falta el sonido. ¿Qué sonido hace el gato?"
+                ),
+                correctFeedback = listOf(
+                    "¡Miau detectado! El dibujo del gato ya tiene sonido."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "El dibujo sigue sin sonido. Seven necesita otro intento."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El dibujo del gato quedó sin sonido en esta misión."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "CAT_S10",
+                intro = listOf(
+                    "Seven cree que un gatito se escondió cerca de su nave. Para encontrarlo necesita saber: ¿qué sonido hace el gato?"
+                ),
+                correctFeedback = listOf(
+                    "¡Miau encontrado! Seven pudo ubicar al gatito imaginario."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "El gatito imaginario sigue escondido. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El gatito imaginario seguirá escondido por ahora."
                 )
             )
         )
 
         private val FARM_SCENARIOS = listOf(
             AnimalNarrativeScenario(
-                id = "FARM_OPEN_GATE",
+                id = "FARM_S01",
                 intro = listOf(
-                    "Última misión: abrimos la tranquera de la granja y muchos animales nos esperan adentro. Menciona un animal de la granja.",
-                    "Llegamos a la granja imaginaria y se escuchan muchos animales tras la cerca. Menciona un animal de la granja."
+                    "Me han contado que en la granja hay muchos animalitos que ayudan con comida. Seven quiere aprender uno: menciona un animal de la granja."
                 ),
                 correctFeedback = listOf(
-                    "¡Ese era! Ese animalito vive muy bien en nuestra granja.",
-                    "¡Qué buena ayuda! La granja ya tiene a ese animal en su lugar.",
-                    "¡Encontraste la pista! Ese animal sí lo vemos en la granja.",
-                    "¡El animalito ya está feliz! Ese animal encontró su lugar en la granja."
+                    "¡Animal de granja registrado! La nave de Seven ya conoce un habitante de ese lugar."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Miremos de nuevo dentro de la granja. ¿Qué animal podría vivir ahí?",
-                    "Aún no es ese. Imagina los corrales llenos de animales e inténtalo otra vez.",
-                    "Pensemos una vez más en un animal que viva en la granja."
+                    "Mi mapa de la granja no encontró ese animal todavía. Intentemos otra vez."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. En la granja viven la vaca, la gallina y el caballo.",
-                    "Está bien. Algunos animales de granja son la oveja, el cerdo y el pato.",
-                    "Gracias por intentarlo. La cabra, la vaca o la gallina también viven en la granja."
+                    "Seven no logró completar el mapa de la granja esta vez."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "FARM_MILK_EGGS",
+                id = "FARM_S02",
                 intro = listOf(
-                    "En la granja hay animales que nos dan leche o ponen huevos cada mañana. Menciona un animal de la granja.",
-                    "Imagina una granja con corrales, pasto y animales que nos dan alimento. Menciona un animal de la granja."
+                    "Seven escuchó que en las granjas viven animales muy importantes para las personas. Ayúdame: menciona un animal de la granja."
                 ),
                 correctFeedback = listOf(
-                    "¡Ahora sí! Ese animal trabaja muy bien en nuestra granja.",
-                    "¡Me ayudaste mucho! Ese animalito pertenece a la granja.",
-                    "¡Respuesta encontrada! Ese animal lo encontramos en el campo o la granja.",
-                    "¡Eso era! Ese animal de la granja nos da su alimento cada día."
+                    "¡Habitante de granja guardado! Seven está entendiendo ese lugar terrestre."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Pensemos en un animal que viva en la granja y nos dé alimento. Inténtalo otra vez.",
-                    "Aún no es ese. Imagina el corral por la mañana y probemos de nuevo.",
-                    "Sigue pensando en un animal de la granja. ¿Cuál podría ser?"
+                    "Mi radar de granja necesita otro animal. Probemos de nuevo."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. En la granja, la vaca da leche y la gallina pone huevos.",
-                    "Está bien. Animales de granja son la vaca, la gallina, la oveja y el cerdo.",
-                    "Gracias por participar. El caballo, el pato y la cabra también viven en la granja."
+                    "El radar de granja quedó incompleto por ahora."
                 )
             ),
             AnimalNarrativeScenario(
-                id = "FARM_FIELD_WALK",
+                id = "FARM_S03",
                 intro = listOf(
-                    "Caminamos por el campo de la granja y vemos animales grandes y pequeños por todos lados. Menciona un animal de la granja.",
-                    "El último reto nos lleva a recorrer la granja entre el pasto y los corrales. Menciona un animal de la granja."
+                    "Mi nave vio un lugar con pasto, corrales y muchos sonidos. Creo que se llama granja. Menciona un animal que viva allí."
                 ),
                 correctFeedback = listOf(
-                    "¡Eso era! Ese animalito lo encontramos paseando por la granja.",
-                    "¡Qué buen oído de explorador! Ese animal vive en la granja.",
-                    "¡Lo resolvimos juntos! Ese animal pertenece a nuestra granja imaginaria.",
-                    "¡Encontraste la pista! Ese animal pasea tranquilo por la granja."
+                    "¡Registro de corral completado! Seven aprendió un animal de granja."
                 ),
                 incorrectRetryFeedback = listOf(
-                    "Sigamos caminando por la granja. ¿Qué animal podríamos encontrar?",
-                    "Aún no es ese. Imagina el campo lleno de animales e inténtalo otra vez.",
-                    "Pensemos una vez más en un animal que pasee por la granja."
+                    "El corral de mi mapa sigue vacío. Ayúdame con otro intento."
                 ),
                 incorrectNextFeedback = listOf(
-                    "Buen intento. Por la granja pasean la vaca, el caballo y la oveja.",
-                    "Está bien. En el campo viven gallinas, cerdos, patos y cabras.",
-                    "Gracias por intentarlo. La vaca, la gallina y el caballo viven en la granja."
+                    "El corral espacial quedó sin animal esta vez."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S04",
+                intro = listOf(
+                    "Seven quiere conocer los animales que viven lejos de la ciudad, en un lugar llamado granja. Dime uno."
+                ),
+                correctFeedback = listOf(
+                    "¡Animal rural aprendido! Seven guardó ese dato terrestre."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi nave no ubicó ese animal en la granja. Intentemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven no pudo ubicar ese animal en la granja por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S05",
+                intro = listOf(
+                    "Me dijeron que en la granja algunos animales dan leche, huevos o lana. Seven quiere conocer uno."
+                ),
+                correctFeedback = listOf(
+                    "¡Dato de granja guardado! Seven está aprendiendo de los animales que ayudan a las personas."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi computadora de granja sigue buscando un animal de ese lugar."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La computadora de granja quedó sin completar este registro."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S06",
+                intro = listOf(
+                    "Seven encontró un dibujo de una granja en su nave, pero faltan los animales. Ayúdame nombrando uno."
+                ),
+                correctFeedback = listOf(
+                    "¡Dibujo completado un poquito más! Seven agregó un animal a la granja."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "El dibujo de la granja todavía necesita un animal. Probemos otra vez."
+                ),
+                incorrectNextFeedback = listOf(
+                    "El dibujo de la granja quedó incompleto por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S07",
+                intro = listOf(
+                    "Mi radar detectó sonidos de vacas, gallinas y otros animales. Seven pregunta: menciona un animal de la granja."
+                ),
+                correctFeedback = listOf(
+                    "¡Sonido de granja conectado con su animal! Seven entendió un nuevo dato."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Mi radar escuchó sonidos, pero no encontró el animal esperado."
+                ),
+                incorrectNextFeedback = listOf(
+                    "Seven dejará esos sonidos de granja para otra misión."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S08",
+                intro = listOf(
+                    "Seven quiere visitar una granja imaginaria de la Tierra, pero primero debe conocer sus animales. Menciona uno."
+                ),
+                correctFeedback = listOf(
+                    "¡Entrada a la granja desbloqueada! Seven ya conoce un animal de allí."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La entrada a la granja sigue cerrada. Necesito otro intento."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La entrada a la granja quedó cerrada por ahora."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S09",
+                intro = listOf(
+                    "En mi planeta no hay granjas como en la Tierra. Seven necesita tu ayuda: dime un animal de granja."
+                ),
+                correctFeedback = listOf(
+                    "¡Exploración de granja iniciada! Seven ya aprendió un animal nuevo."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "Seven todavía no entiende qué animal vive en la granja. Probemos de nuevo."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La exploración de granja quedó pendiente."
+                )
+            ),
+            AnimalNarrativeScenario(
+                id = "FARM_S10",
+                intro = listOf(
+                    "Mi nave quiere llenar una cajita de datos sobre la granja. Ayúdame con un animal que viva allí."
+                ),
+                correctFeedback = listOf(
+                    "¡Cajita de datos actualizada! Seven guardó un animal de granja."
+                ),
+                incorrectRetryFeedback = listOf(
+                    "La cajita de datos sigue esperando un animal de granja."
+                ),
+                incorrectNextFeedback = listOf(
+                    "La cajita de datos quedó incompleta esta vez."
                 )
             )
         )
 
-        /** Escenarios narrativos disponibles por clave de mediacion de animales. */
         val SCENARIOS: Map<LocalMediationKey, List<AnimalNarrativeScenario>> = mapOf(
             LocalMediationKey.ANIMAL_DOG_SOUND to DOG_SCENARIOS,
             LocalMediationKey.ANIMAL_DOMESTIC to DOMESTIC_SCENARIOS,

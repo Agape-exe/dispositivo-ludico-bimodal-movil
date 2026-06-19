@@ -866,7 +866,7 @@ private fun BimodalSession(
             )
             val sceneText =
                 if (LocalMediationKey.fromKey(mediationKey) == LocalMediationKey.NONE) {
-                    "$introText $questionText"
+                    animalBank.getGenericIntroWithQuestion(questionText)
                 } else {
                     introText
                 }
