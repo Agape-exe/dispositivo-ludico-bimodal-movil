@@ -43,7 +43,8 @@ fun MainScreen(
     onNavigateToSemanticTest: () -> Unit,
     onNavigateToTeacherActivities: () -> Unit,
     onNavigateToToyVoiceSettings: () -> Unit,
-    onNavigateToBimodal: () -> Unit
+    onNavigateToBimodal: () -> Unit,
+    onNavigateToClassicTimer: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -199,9 +200,18 @@ fun MainScreen(
 
         Button(
             onClick = onNavigateToBimodal,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
         ) {
             Text("Modo bimodal inteligente")
+        }
+
+        Button(
+            onClick = onNavigateToClassicTimer,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Modo temporizador fijo")
         }
     }
 }

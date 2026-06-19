@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.taller.app.ui.BimodalInteractionScreen
+import com.taller.app.ui.ClassicTimerInteractionScreen
 import com.taller.app.ui.FaceDetectionScreen
 import com.taller.app.ui.MainScreen
 import com.taller.app.ui.Screen
@@ -36,6 +37,10 @@ class MainActivity : ComponentActivity() {
                         onNavigateToBimodal = {
                             selectedActivityId = 0L
                             currentScreen = Screen.BIMODAL_INTERACTION
+                        },
+                        onNavigateToClassicTimer = {
+                            selectedActivityId = 0L
+                            currentScreen = Screen.CLASSIC_TIMER_INTERACTION
                         }
                     )
                     Screen.FACE_DETECTION -> FaceDetectionScreen(
@@ -62,6 +67,10 @@ class MainActivity : ComponentActivity() {
                         onBack = { currentScreen = Screen.MAIN }
                     )
                     Screen.BIMODAL_INTERACTION -> BimodalInteractionScreen(
+                        activityId = selectedActivityId,
+                        onBack = { currentScreen = Screen.MAIN }
+                    )
+                    Screen.CLASSIC_TIMER_INTERACTION -> ClassicTimerInteractionScreen(
                         activityId = selectedActivityId,
                         onBack = { currentScreen = Screen.MAIN }
                     )

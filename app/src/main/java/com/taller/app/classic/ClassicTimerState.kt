@@ -1,0 +1,15 @@
+package com.taller.app.classic
+
+enum class ClassicTimerState {
+    IDLE,
+    LOADING_ACTIVITY,
+    READY,
+    SESSION_STARTING,
+    PRESENTING_QUESTION,
+    WAITING_FIXED_RESPONSE,
+    ANSWER_RECEIVED,
+    TIME_EXPIRED,
+    SESSION_COMPLETED,
+    SESSION_CANCELLED,
+    ERROR
+}
