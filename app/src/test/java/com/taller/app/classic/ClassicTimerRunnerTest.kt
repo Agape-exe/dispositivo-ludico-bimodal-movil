@@ -20,13 +20,14 @@ class ClassicTimerRunnerTest {
         runner = ClassicTimerRunner(now = { 1_000L })
     }
 
-    private fun question(id: String, maxTimeSeconds: Int = 10) = LearningQuestion(
+    private fun question(id: String, maxTimeSeconds: Int = 10, mediationKey: String? = null) = LearningQuestion(
         id = id,
         questionText = "Pregunta $id",
         expectedAnswer = "respuesta",
         keywords = listOf("respuesta"),
         maxTimeSeconds = maxTimeSeconds,
-        maxAttempts = 1
+        maxAttempts = 1,
+        mediationKey = mediationKey
     )
 
     private fun activity(vararg questions: LearningQuestion) = LearningActivity(
@@ -268,6 +269,13 @@ class ClassicTimerRunnerTest {
         load(activity(question("q1", maxTimeSeconds = -1)))
         reachWaitingResponse()
         assertEquals(CLASSIC_DEFAULT_MAX_TIME_SECONDS, runner.progress?.effectiveMaxTimeSeconds)
+    }
+
+    @Test
+    fun progressCarriesMediationKey() {
+        load(activity(question("q1", mediationKey = "ANIMAL_DOG_SOUND")))
+        reachWaitingResponse()
+        assertEquals("ANIMAL_DOG_SOUND", runner.progress?.currentQuestionMediationKey)
     }
 
     @Test

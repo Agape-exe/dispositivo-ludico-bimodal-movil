@@ -56,6 +56,7 @@ import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
+import com.taller.app.model.LocalMediationKey
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
 import com.taller.app.voice.LocalToyVoiceProvider
@@ -85,8 +86,12 @@ private fun speechTimeoutMsFor(text: String): Long =
     (SPEECH_TIMEOUT_MIN_MS + text.length * SPEECH_TIMEOUT_PER_CHAR_MS)
         .coerceAtMost(SPEECH_TIMEOUT_MAX_MS)
 
-/** Pausa fija (ms) después de recibir respuesta antes de avanzar. */
-private const val POST_ANSWER_DELAY_MS = 2_000L
+/**
+ * Transición fija corta (ms) entre rondas, tras la frase de respuesta o de
+ * tiempo agotado. Mantiene el ritmo ágil sin pausas largas. No se aplica en la
+ * última ronda, donde el cierre encadena directamente.
+ */
+private const val ROUND_TRANSITION_DELAY_MS = 800L
 
 /**
  * Pantalla del modo clásico con temporizador fijo.
@@ -494,9 +499,11 @@ private fun ClassicSession(
         if (presentKey == null) return@LaunchedEffect
         val isLast = progress?.isLastQuestion ?: false
         val questionText = progress?.currentQuestionText ?: return@LaunchedEffect
-        Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION idx=$presentKey isLast=$isLast")
-        val transitionPhrase = phraseBank.getQuestionTransition(isLast)
-        speakAndAwait("$transitionPhrase $questionText")
+        val round = progress?.questionNumber ?: (presentKey + 1)
+        val mediationKey = LocalMediationKey.fromKey(progress?.currentQuestionMediationKey)
+        Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION round=$round isLast=$isLast key=$mediationKey")
+        // Transición + pregunta en una sola reproducción para reducir demora.
+        speakAndAwait(phraseBank.getRoundPrompt(round, questionText, isLast, mediationKey))
         if (runner.state == ClassicTimerState.PRESENTING_QUESTION) {
             dispatch { runner.startResponseWindow() }
         }
@@ -517,9 +524,12 @@ private fun ClassicSession(
     }
     LaunchedEffect(answerKey) {
         if (answerKey == null) return@LaunchedEffect
-        Log.d(CLASSIC_LOG_TAG, "ANSWER_RECEIVED idx=$answerKey")
-        speakAndAwait(phraseBank.getAnswerReceived())
-        delay(POST_ANSWER_DELAY_MS)
+        val isLast = progress?.isLastQuestion ?: false
+        Log.d(CLASSIC_LOG_TAG, "ANSWER_RECEIVED idx=$answerKey isLast=$isLast")
+        // Última ronda: frase de cierre de participación sin anunciar otra pregunta,
+        // y avance inmediato al cierre (sin transición intermedia).
+        speakAndAwait(phraseBank.getAnswerReceived(isLast))
+        if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
         if (runner.state == ClassicTimerState.ANSWER_RECEIVED) {
             dispatch { runner.advanceQuestion() }
         }
@@ -534,8 +544,11 @@ private fun ClassicSession(
     LaunchedEffect(timeoutKey) {
         if (timeoutKey == null) return@LaunchedEffect
         val hadPartial = progress?.hadPartialResponseOnTimeout ?: false
-        Log.d(CLASSIC_LOG_TAG, "TIME_EXPIRED idx=$timeoutKey hadPartial=$hadPartial")
-        speakAndAwait(phraseBank.getTimeExpired(hadPartial))
+        val isLast = progress?.isLastQuestion ?: false
+        Log.d(CLASSIC_LOG_TAG, "TIME_EXPIRED idx=$timeoutKey hadPartial=$hadPartial isLast=$isLast")
+        // En la última ronda la frase no anuncia otra pregunta; encadena al cierre.
+        speakAndAwait(phraseBank.getTimeExpired(hadPartial, isLast))
+        if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
         if (runner.state == ClassicTimerState.TIME_EXPIRED) {
             dispatch { runner.advanceQuestion() }
         }

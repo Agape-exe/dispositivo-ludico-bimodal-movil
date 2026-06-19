@@ -1,158 +1,207 @@
 package com.taller.app.classic
 
+import com.taller.app.model.LocalMediationKey
+
 /**
- * Banco local de frases neutras para el modo de temporizador fijo.
+ * Banco local de frases neutras para el modo de temporizador fijo ("ronda rápida").
  *
- * Las frases son agradables pero no adaptativas: no dicen "correcto",
- * "incorrecto" ni revelan el resultado semántico de la respuesta del niño.
- * Selección anti-repetición: nunca repite la última frase usada en cada
- * categoría si hay al menos dos opciones disponibles.
+ * Las frases son dinámicas y participativas, pero nunca adaptativas: no dicen
+ * "correcto", "incorrecto", "exacto" ni revelan el resultado semántico de la
+ * respuesta del niño. El modo clásico reconoce la participación, no evalúa el
+ * desempeño.
+ *
+ * Decisiones de diseño de C01.1:
+ * - La transición y la pregunta se combinan en una sola frase ([getRoundPrompt])
+ *   para reducir capas de voz y demora.
+ * - La última ronda usa frases propias que no anuncian "otra pregunta"
+ *   ([getRoundPrompt] con `isLast`, [getAnswerReceived] con `isLast`,
+ *   [getTimeExpired] con `isLast`).
+ * - Selección anti-repetición: nunca repite la última frase usada en cada
+ *   categoría si hay al menos dos opciones disponibles.
  */
 class FixedTimerNeutralPhraseBank {
 
-    private val lastUsed = mutableMapOf<Category, Int>()
+    private val lastUsed = mutableMapOf<String, Int>()
 
-    enum class Category {
-        SESSION_START,
-        QUESTION_TRANSITION,
-        ANSWER_RECEIVED,
-        TIME_EXPIRED_WITH_RESPONSE,
-        TIME_EXPIRED_NO_RESPONSE,
-        NEXT_QUESTION,
-        LAST_QUESTION,
-        SESSION_COMPLETED
-    }
+    private val sessionStart = listOf(
+        "Vamos a jugar una ronda rápida de animales. Yo diré una pista y tú respondes con tu voz.",
+        "Empezamos una ronda rápida. Escucha cada pista y responde cuando estés listo.",
+        "Hoy jugaremos con pistas de animales. Responde antes de que termine el tiempo.",
+        "Vamos a responder algunas rondas de animales. Yo pregunto y tú participas.",
+        "Comenzamos el juego de rondas. Escucha bien y responde con voz clara."
+    )
 
-    private val phrases = mapOf(
-        Category.SESSION_START to listOf(
-            "Hola, vamos a responder algunas preguntas sobre animales. Escucha con atención y responde con voz clara.",
-            "Vamos a jugar con preguntas de animales. Responde cuando escuches cada pregunta.",
-            "Empecemos una actividad corta sobre animales. Yo haré preguntas y tú puedes responder.",
-            "Hoy tenemos algunas preguntas de animales. Responde con calma cuando estés listo.",
-            "Vamos a iniciar. Escucha cada pregunta y responde con tu voz.",
-            "Preparémonos para una ronda de preguntas sobre animales.",
-            "Hola, hoy vamos a participar en una actividad de animales.",
-            "Vamos a responder una pregunta a la vez. Escucha bien.",
-            "Empecemos con calma. Yo haré la pregunta y tú respondes.",
-            "Iniciamos la actividad. Responde cuando escuches cada pregunta."
+    /** Plantillas genéricas de ronda. Usan {n} (número de ronda) y {question}. */
+    private val roundQuestionPrompt = listOf(
+        "Ronda {n}. Escucha esta pista animal: {question}",
+        "Ronda {n}. Vamos con una pista rápida: {question}",
+        "Ronda {n}. Ahora piensa en animales: {question}",
+        "Ronda {n}. Responde con tu voz: {question}",
+        "Ronda {n}. Aquí viene una pista: {question}",
+        "Ronda {n}. Vamos a jugar con esta pregunta: {question}",
+        "Ronda {n}. Escucha y responde: {question}",
+        "Ronda {n}. Atención a esta pista: {question}",
+        "Ronda {n}. Vamos con el siguiente reto: {question}"
+    )
+
+    /**
+     * Lead-ins naturales por [LocalMediationKey]. Cada plantilla combina ronda +
+     * pista temática + {question}, sin evaluar ni adelantar la respuesta.
+     */
+    private val mediationPrompts: Map<LocalMediationKey, List<String>> = mapOf(
+        LocalMediationKey.ANIMAL_DOG_SOUND to listOf(
+            "Ronda {n}. Piensa en un perrito: {question}",
+            "Ronda {n}. Imagina un perro moviendo la colita: {question}",
+            "Ronda {n}. Escucha esta pista de perrito: {question}"
         ),
-        Category.QUESTION_TRANSITION to listOf(
-            "Ahora viene una pregunta de animales.",
-            "Escucha con atención esta pregunta.",
-            "Vamos con una nueva pregunta.",
-            "Preparando la siguiente pregunta.",
-            "Ahora pensemos en otro animal.",
-            "Sigamos con la actividad.",
-            "Aquí viene una pregunta.",
-            "Vamos con la siguiente parte.",
-            "Escucha bien.",
-            "Responde cuando estés listo."
+        LocalMediationKey.ANIMAL_DOMESTIC to listOf(
+            "Ronda {n}. Pensemos en una mascota: {question}",
+            "Ronda {n}. Imagina una casita con una mascota: {question}",
+            "Ronda {n}. Busca en tu mente una mascota: {question}"
         ),
-        Category.ANSWER_RECEIVED to listOf(
-            "¡Listo, escuché tu respuesta!",
-            "¡Respuesta recibida! Sigamos con la actividad.",
-            "¡Ya participaste en esta pregunta!",
-            "¡Genial, seguimos jugando!",
-            "¡Tu voz llegó hasta mí!",
-            "¡Listo! Pasemos a otra pregunta.",
-            "¡Gracias por responder! Continuemos con calma.",
-            "¡Respuesta escuchada! Ahora viene otra.",
-            "¡Qué buena energía! Sigamos.",
-            "¡Perfecto, ya tenemos tu respuesta!",
-            "¡Vamos avanzando en la actividad!",
-            "¡Escuché tu idea! Ahora seguimos.",
-            "¡Listo, ronda respondida!",
-            "¡Gracias por participar en esta parte!",
-            "¡Sigamos descubriendo animales!",
-            "¡Respuesta recibida por mi radar de juguete!",
-            "¡Ya te escuché! Vamos con la próxima.",
-            "¡Buen intento! Sigamos con la actividad.",
-            "¡Gracias por ayudarme con esta pregunta!",
-            "¡Seguimos jugando con los animales!"
+        LocalMediationKey.ANIMAL_CAT_SOUND to listOf(
+            "Ronda {n}. Piensa en un gatito: {question}",
+            "Ronda {n}. Imagina un gato caminando suavecito: {question}",
+            "Ronda {n}. Escucha esta pista de gatito: {question}"
         ),
-        Category.TIME_EXPIRED_WITH_RESPONSE to listOf(
-            "Se terminó el tiempo de esta pregunta. Sigamos.",
-            "Tiempo cumplido. Vamos con la siguiente.",
-            "Esta ronda terminó. Continuemos con otra pregunta.",
-            "El tiempo terminó y seguimos avanzando.",
-            "Terminó el tiempo. Vamos a descubrir otra pregunta.",
-            "Pasamos a la siguiente parte.",
-            "Esta pregunta ya terminó. Sigamos.",
-            "Ronda completada. Vamos con otra.",
-            "El reloj terminó su vuelta. Continuemos.",
-            "Siguiente pista de animales."
-        ),
-        Category.TIME_EXPIRED_NO_RESPONSE to listOf(
-            "Se terminó el tiempo. No pasa nada, vamos con la siguiente.",
-            "Esta vez no escuché respuesta, pero seguimos jugando.",
-            "El tiempo terminó. Intentemos la próxima pregunta.",
-            "No pasa nada, continuemos con otra.",
-            "Esta pregunta ya terminó. Vamos a la siguiente.",
-            "El reloj avanzó rápido esta vez. Sigamos.",
-            "No escuché tu voz en esta ronda. Vamos con otra oportunidad.",
-            "Está bien, seguimos con calma.",
-            "El tiempo terminó, pero la actividad continúa.",
-            "Vamos a intentarlo en la siguiente pregunta."
-        ),
-        Category.NEXT_QUESTION to listOf(
-            "Ahora viene otra pregunta de animales.",
-            "Sigamos con una nueva pista.",
-            "Vamos con la siguiente ronda.",
-            "Preparando otra pregunta.",
-            "Escucha con atención la siguiente.",
-            "Ahora pensemos en otro animal.",
-            "Seguimos explorando el mundo de los animales.",
-            "Vamos con una pregunta más.",
-            "La actividad continúa.",
-            "Aquí viene la siguiente pregunta."
-        ),
-        Category.LAST_QUESTION to listOf(
-            "Llegamos a la última pregunta de la actividad.",
-            "Esta será la última pregunta de animales.",
-            "Vamos con la última ronda.",
-            "Última pregunta, escucha con atención.",
-            "Terminemos la actividad con una pregunta más.",
-            "Nos queda una última parte.",
-            "Vamos con el último reto de animales.",
-            "Esta es la última pregunta.",
-            "Falta poquito para terminar.",
-            "Vamos a cerrar con una última pregunta."
-        ),
-        Category.SESSION_COMPLETED to listOf(
-            "Terminamos la actividad. Gracias por participar.",
-            "Muy bien, completamos todas las preguntas.",
-            "La actividad terminó. Gracias por jugar conmigo.",
-            "Hemos terminado por hoy. Me gustó escucharte.",
-            "Gracias por responder las preguntas de animales.",
-            "La actividad de animales terminó por ahora.",
-            "Completamos la ronda. Gracias por participar.",
-            "Terminamos esta parte. Lo hiciste con mucho ánimo.",
-            "Gracias por acompañarme en esta actividad.",
-            "Ya terminamos. Nos vemos en otra aventura."
+        LocalMediationKey.ANIMAL_FARM to listOf(
+            "Ronda {n}. Imagina una granja: {question}",
+            "Ronda {n}. Pensemos en una granja con corrales: {question}",
+            "Ronda {n}. Vamos con una pista de granja: {question}"
         )
     )
 
-    fun get(category: Category): String {
-        val list = phrases[category] ?: return ""
-        if (list.isEmpty()) return ""
+    /** Plantillas de última ronda. No anuncian otra pregunta. Usan {question}. */
+    private val lastRoundPrompt = listOf(
+        "Última ronda. Escucha con atención: {question}",
+        "Llegamos a la última ronda: {question}",
+        "Última pista de animales: {question}",
+        "Vamos a cerrar con esta ronda: {question}",
+        "Falta poquito. Última pregunta: {question}"
+    )
 
-        val last = lastUsed[category] ?: -1
-        val candidates = list.indices.filter { it != last }
-        val chosen = if (candidates.isNotEmpty()) candidates.random() else list.indices.random()
-        lastUsed[category] = chosen
-        return list[chosen]
+    private val answerReceived = listOf(
+        "¡Respuesta recibida por mi radar animal!",
+        "¡Listo, tu voz llegó hasta mí!",
+        "¡Ronda respondida!",
+        "¡Escuché tu idea, seguimos!",
+        "¡Tu respuesta quedó lista para esta ronda!",
+        "¡Muy bien, seguimos con la actividad!",
+        "¡Listo, pasamos a otra pista!",
+        "¡Participación recibida!",
+        "¡Ya te escuché!",
+        "¡Vamos avanzando!"
+    )
+
+    private val lastAnswerReceived = listOf(
+        "¡Última respuesta recibida! Completamos todas las rondas.",
+        "¡Listo, escuché tu última respuesta!",
+        "¡Última ronda respondida!",
+        "¡Tu voz llegó en la última ronda!",
+        "¡Gracias, completamos la actividad!",
+        "¡Ronda final recibida!",
+        "¡Muy bien, llegamos al final!",
+        "¡Última participación registrada!",
+        "¡Ya terminamos las rondas!",
+        "¡Gracias por responder hasta el final!"
+    )
+
+    private val timeExpiredWithResponse = listOf(
+        "El tiempo de esta ronda terminó. Seguimos.",
+        "Tiempo cumplido. Vamos con otra pista.",
+        "Esta ronda terminó. Continuemos.",
+        "El reloj terminó su vuelta. Sigamos.",
+        "Ronda completada. Vamos con la siguiente."
+    )
+
+    private val timeExpiredNoResponse = listOf(
+        "El tiempo terminó. No pasa nada, seguimos con otra ronda.",
+        "Esta vez no escuché respuesta. Vamos con la siguiente.",
+        "Se acabó el tiempo. Intentemos la próxima.",
+        "El reloj fue rápido esta vez. Sigamos.",
+        "No escuché tu voz en esta ronda. Continuemos con calma."
+    )
+
+    /** Tiempo agotado en la última ronda: no anuncia otra pregunta. */
+    private val lastTimeExpired = listOf(
+        "El tiempo de la última ronda terminó. Completamos la actividad.",
+        "Se acabó el tiempo de esta última pista. Llegamos al final.",
+        "El reloj terminó en la ronda final. Ya terminamos las rondas.",
+        "Cerramos la última ronda. Gracias por participar.",
+        "La última ronda terminó. Completamos todas las pistas."
+    )
+
+    private val sessionCompleted = listOf(
+        "La actividad terminó. Gracias por participar.",
+        "Terminamos la ronda rápida de animales.",
+        "Completamos todas las rondas. Gracias por jugar.",
+        "La actividad finalizó. Me gustó escucharte.",
+        "Gracias por participar en el juego de animales.",
+        "Cerramos la actividad por ahora.",
+        "Terminamos el recorrido de animales.",
+        "Gracias por acompañarme en esta ronda.",
+        "La ronda rápida terminó.",
+        "Ya terminamos. Nos vemos en otra actividad."
+    )
+
+    // ----- API ------------------------------------------------------------------
+
+    fun getSessionStart(): String = pick("session_start", sessionStart)
+
+    /**
+     * Frase combinada de transición + pregunta para una ronda.
+     *
+     * Reduce las capas de voz a una sola reproducción. En la última ronda usa
+     * [lastRoundPrompt], que nunca anuncia otra pregunta.
+     */
+    fun getRoundPrompt(
+        round: Int,
+        questionText: String,
+        isLast: Boolean,
+        mediationKey: LocalMediationKey = LocalMediationKey.NONE
+    ): String {
+        val template = when {
+            isLast -> pick("last_round_prompt", lastRoundPrompt)
+            mediationKey != LocalMediationKey.NONE ->
+                pick("mediation_${mediationKey.name}", mediationPrompts[mediationKey] ?: roundQuestionPrompt)
+            else -> pick("round_prompt", roundQuestionPrompt)
+        }
+        return fill(template, round, questionText)
     }
 
-    fun getSessionStart(): String = get(Category.SESSION_START)
+    /**
+     * Frase neutra al recibir respuesta. En la última ronda usa
+     * [lastAnswerReceived], que cierra sin prometer otra pregunta.
+     */
+    fun getAnswerReceived(isLast: Boolean = false): String =
+        if (isLast) pick("last_answer_received", lastAnswerReceived)
+        else pick("answer_received", answerReceived)
 
-    fun getQuestionTransition(isLast: Boolean): String =
-        if (isLast) get(Category.LAST_QUESTION) else get(Category.QUESTION_TRANSITION)
+    /**
+     * Frase neutra al agotarse el tiempo. En la última ronda usa
+     * [lastTimeExpired], que no anuncia otra pregunta.
+     */
+    fun getTimeExpired(hadPartialResponse: Boolean, isLast: Boolean = false): String = when {
+        isLast -> pick("last_time_expired", lastTimeExpired)
+        hadPartialResponse -> pick("time_expired_with", timeExpiredWithResponse)
+        else -> pick("time_expired_no", timeExpiredNoResponse)
+    }
 
-    fun getAnswerReceived(): String = get(Category.ANSWER_RECEIVED)
+    fun getSessionCompleted(): String = pick("session_completed", sessionCompleted)
 
-    fun getTimeExpired(hadPartialResponse: Boolean): String =
-        if (hadPartialResponse) get(Category.TIME_EXPIRED_WITH_RESPONSE)
-        else get(Category.TIME_EXPIRED_NO_RESPONSE)
+    // ----- Internal -------------------------------------------------------------
 
-    fun getSessionCompleted(): String = get(Category.SESSION_COMPLETED)
+    private fun fill(template: String, round: Int, questionText: String): String =
+        template
+            .replace("{n}", round.toString())
+            .replace("{question}", questionText.trim())
+
+    private fun pick(bucket: String, list: List<String>): String {
+        if (list.isEmpty()) return ""
+        val last = lastUsed[bucket] ?: -1
+        val candidates = list.indices.filter { it != last }
+        val chosen = if (candidates.isNotEmpty()) candidates.random() else list.indices.random()
+        lastUsed[bucket] = chosen
+        return list[chosen]
+    }
 }
