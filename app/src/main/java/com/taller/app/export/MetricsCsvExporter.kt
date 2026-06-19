@@ -2,9 +2,20 @@ package com.taller.app.export
 
 class MetricsCsvExporter {
 
+    fun exportSessionsCsv(sessions: List<ExportSessionDto>): String {
+        val sb = StringBuilder()
+        sb.append(BOM)
+        sb.appendLine(SESSIONS_HEADER.joinToString(SEP))
+        for (session in sessions) {
+            sb.appendLine(buildSessionsRow(session))
+        }
+        return sb.toString()
+    }
+
     fun exportAttemptsCsv(sessions: List<ExportSessionDto>): String {
         val sb = StringBuilder()
-        sb.appendLine(ATTEMPTS_HEADER.joinToString(","))
+        sb.append(BOM)
+        sb.appendLine(ATTEMPTS_HEADER.joinToString(SEP))
         for (session in sessions) {
             for (attempt in session.attempts) {
                 sb.appendLine(buildAttemptsRow(session, attempt))
@@ -15,7 +26,8 @@ class MetricsCsvExporter {
 
     fun exportEventsCsv(sessions: List<ExportSessionDto>): String {
         val sb = StringBuilder()
-        sb.appendLine(EVENTS_HEADER.joinToString(","))
+        sb.append(BOM)
+        sb.appendLine(EVENTS_HEADER.joinToString(SEP))
         for (session in sessions) {
             for (event in session.technicalEvents) {
                 sb.appendLine(buildEventsRow(session.sessionId, event))
@@ -23,6 +35,26 @@ class MetricsCsvExporter {
         }
         return sb.toString()
     }
+
+    private fun buildSessionsRow(s: ExportSessionDto): String = listOf(
+        f(s.sessionId),
+        f(s.activityId),
+        f(s.activityName),
+        f(s.operationMode),
+        f(s.startedAtMs),
+        f(s.finishedAtMs),
+        f(s.finalState),
+        f(s.totalDurationMs),
+        f(s.summary.totalQuestions),
+        f(s.summary.completedQuestions),
+        f(s.summary.totalAttempts),
+        f(s.summary.correctCount),
+        f(s.summary.incorrectCount),
+        f(s.summary.noResponseCount),
+        f(s.summary.notInterpretableCount),
+        f(s.summary.timeoutCount),
+        f(s.summary.technicalErrorCount)
+    ).joinToString(SEP)
 
     private fun buildAttemptsRow(session: ExportSessionDto, a: ExportAttemptDto): String =
         listOf(
@@ -59,7 +91,7 @@ class MetricsCsvExporter {
             f(a.totalResponseLatencyMs),
             f(a.responseToFeedbackLatencyMs),
             f(a.fullPipelineLatencyMs)
-        ).joinToString(",")
+        ).joinToString(SEP)
 
     private fun buildEventsRow(sessionId: Long, e: ExportTechnicalEventDto): String =
         listOf(
@@ -72,12 +104,12 @@ class MetricsCsvExporter {
             f(e.message),
             f(e.timestampMs),
             f(e.latencyMs)
-        ).joinToString(",")
+        ).joinToString(SEP)
 
     private fun f(value: Any?): String {
         if (value == null) return ""
         val s = value.toString()
-        return if (s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r')) {
+        return if (s.contains(';') || s.contains('"') || s.contains('\n') || s.contains('\r')) {
             "\"${s.replace("\"", "\"\"")}\""
         } else {
             s
@@ -85,6 +117,17 @@ class MetricsCsvExporter {
     }
 
     companion object {
+        internal const val SEP = ";"
+        internal const val BOM = "﻿"
+
+        val SESSIONS_HEADER = listOf(
+            "session_id", "activity_id", "activity_name", "operation_mode",
+            "started_at_ms", "finished_at_ms", "final_state", "total_duration_ms",
+            "total_questions", "completed_questions", "total_attempts",
+            "correct_count", "incorrect_count", "no_response_count",
+            "not_interpretable_count", "timeout_count", "technical_error_count"
+        )
+
         val ATTEMPTS_HEADER = listOf(
             "session_id", "activity_id", "activity_name", "operation_mode",
             "session_started_at_ms", "session_finished_at_ms", "session_final_state",

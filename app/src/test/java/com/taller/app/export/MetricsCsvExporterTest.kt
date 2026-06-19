@@ -10,22 +10,70 @@ class MetricsCsvExporterTest {
     private val exporter = MetricsCsvExporter()
 
     // -------------------------------------------------------------------------
+    // BOM
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun exportAttempts_iniciaCONBOM() {
+        val csv = exporter.exportAttemptsCsv(emptyList())
+        assertTrue("Debe iniciar con BOM UTF-8", csv.startsWith("﻿"))
+    }
+
+    @Test
+    fun exportEvents_iniciaCONBOM() {
+        val csv = exporter.exportEventsCsv(emptyList())
+        assertTrue("Debe iniciar con BOM UTF-8", csv.startsWith("﻿"))
+    }
+
+    @Test
+    fun exportSessions_iniciaCONBOM() {
+        val csv = exporter.exportSessionsCsv(emptyList())
+        assertTrue("Debe iniciar con BOM UTF-8", csv.startsWith("﻿"))
+    }
+
+    // -------------------------------------------------------------------------
+    // Separador punto y coma
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun encabezadoIntentos_usaPuntoYComaComoSeparador() {
+        val csv = exporter.exportAttemptsCsv(emptyList())
+        val header = headerLine(csv)
+        assertTrue(header.contains(";"))
+        assertFalse("No debe usar coma como separador", header.contains(","))
+    }
+
+    @Test
+    fun encabezadoEventos_usaPuntoYComaComoSeparador() {
+        val csv = exporter.exportEventsCsv(emptyList())
+        val header = headerLine(csv)
+        assertTrue(header.contains(";"))
+        assertFalse(header.contains(","))
+    }
+
+    @Test
+    fun encabezadoSesiones_usaPuntoYComaComoSeparador() {
+        val csv = exporter.exportSessionsCsv(emptyList())
+        val header = headerLine(csv)
+        assertTrue(header.contains(";"))
+        assertFalse(header.contains(","))
+    }
+
+    // -------------------------------------------------------------------------
     // Estructura básica — intentos
     // -------------------------------------------------------------------------
 
     @Test
-    fun exportEmpty_soloEncabezado() {
+    fun exportAttempts_empty_soloEncabezado() {
         val csv = exporter.exportAttemptsCsv(emptyList())
         val lines = csv.trim().lines()
         assertEquals(1, lines.size)
-        assertTrue(lines[0].startsWith("session_id"))
+        assertTrue(headerLine(csv).startsWith("session_id"))
     }
 
     @Test
     fun encabezadoIntentos_contieneColumnasRequeridas() {
-        val csv = exporter.exportAttemptsCsv(emptyList())
-        val header = csv.trim().lines().first()
-        val cols = header.split(",")
+        val cols = headerCols(exporter.exportAttemptsCsv(emptyList()))
         assertTrue(cols.contains("session_id"))
         assertTrue(cols.contains("attempt_id"))
         assertTrue(cols.contains("semantic_result"))
@@ -39,40 +87,38 @@ class MetricsCsvExporterTest {
     @Test
     fun unSesionUnIntento_generaFilaDeDatos() {
         val csv = exporter.exportAttemptsCsv(listOf(bimodalSession()))
-        val lines = csv.trim().lines()
-        assertEquals(2, lines.size)
+        assertEquals(2, csv.trim().lines().size)
     }
 
     @Test
     fun dosIntentos_generaDosFila() {
-        val session = bimodalSession().copy(attempts = listOf(bimodalAttempt(), bimodalAttempt().copy(attemptId = 2L)))
+        val session = bimodalSession().copy(
+            attempts = listOf(bimodalAttempt(), bimodalAttempt().copy(attemptId = 2L))
+        )
         val csv = exporter.exportAttemptsCsv(listOf(session))
-        val lines = csv.trim().lines()
-        assertEquals(3, lines.size)
+        assertEquals(3, csv.trim().lines().size)
     }
 
     // -------------------------------------------------------------------------
-    // Modo bimodal
+    // Modo bimodal — intentos
     // -------------------------------------------------------------------------
 
     @Test
     fun bimodal_semanticResultPresente() {
         val csv = exporter.exportAttemptsCsv(listOf(bimodalSession()))
-        val dataRow = csv.trim().lines()[1]
-        val cols = dataRow.split(",")
-        val header = exporter.exportAttemptsCsv(emptyList()).trim().lines()[0].split(",")
-        val idx = header.indexOf("semantic_result")
-        assertEquals("CORRECT", cols[idx])
+        val cols = headerCols(exporter.exportAttemptsCsv(emptyList()))
+        val idx = cols.indexOf("semantic_result")
+        val dataCol = dataRowCols(csv)[idx]
+        assertEquals("CORRECT", dataCol)
     }
 
     @Test
     fun bimodal_classicResultVacio() {
         val csv = exporter.exportAttemptsCsv(listOf(bimodalSession()))
-        val dataRow = csv.trim().lines()[1]
-        val cols = dataRow.split(",")
-        val header = exporter.exportAttemptsCsv(emptyList()).trim().lines()[0].split(",")
-        val idx = header.indexOf("classic_result")
-        assertEquals("", cols[idx])
+        val cols = headerCols(exporter.exportAttemptsCsv(emptyList()))
+        val idx = cols.indexOf("classic_result")
+        val dataCol = dataRowCols(csv)[idx]
+        assertEquals("", dataCol)
     }
 
     @Test
@@ -83,50 +129,47 @@ class MetricsCsvExporterTest {
     }
 
     // -------------------------------------------------------------------------
-    // Modo clásico
+    // Modo clásico — intentos
     // -------------------------------------------------------------------------
 
     @Test
     fun clasico_semanticResultVacio() {
         val csv = exporter.exportAttemptsCsv(listOf(classicSession()))
-        val dataRow = csv.trim().lines()[1]
-        val cols = dataRow.split(",")
-        val header = exporter.exportAttemptsCsv(emptyList()).trim().lines()[0].split(",")
-        val idx = header.indexOf("semantic_result")
-        assertEquals("", cols[idx])
+        val cols = headerCols(exporter.exportAttemptsCsv(emptyList()))
+        val idx = cols.indexOf("semantic_result")
+        val dataCol = dataRowCols(csv)[idx]
+        assertEquals("", dataCol)
     }
 
     @Test
     fun clasico_classicResultPresente() {
         val csv = exporter.exportAttemptsCsv(listOf(classicSession()))
-        val dataRow = csv.trim().lines()[1]
-        val cols = dataRow.split(",")
-        val header = exporter.exportAttemptsCsv(emptyList()).trim().lines()[0].split(",")
-        val idx = header.indexOf("classic_result")
-        assertEquals("ANSWERED", cols[idx])
+        val cols = headerCols(exporter.exportAttemptsCsv(emptyList()))
+        val idx = cols.indexOf("classic_result")
+        val dataCol = dataRowCols(csv)[idx]
+        assertEquals("ANSWERED", dataCol)
     }
 
     @Test
     fun clasico_noTieneSemanticResultComoCorrectoOIncorrecto() {
         val csv = exporter.exportAttemptsCsv(listOf(classicSession()))
-        val dataRow = csv.trim().lines()[1]
-        val cols = dataRow.split(",")
-        val header = exporter.exportAttemptsCsv(emptyList()).trim().lines()[0].split(",")
-        val idx = header.indexOf("semantic_result")
-        assertFalse(cols[idx].equals("CORRECT", ignoreCase = true))
-        assertFalse(cols[idx].equals("INCORRECT", ignoreCase = true))
+        val cols = headerCols(exporter.exportAttemptsCsv(emptyList()))
+        val idx = cols.indexOf("semantic_result")
+        val dataCol = dataRowCols(csv)[idx]
+        assertFalse(dataCol.equals("CORRECT", ignoreCase = true))
+        assertFalse(dataCol.equals("INCORRECT", ignoreCase = true))
     }
 
     // -------------------------------------------------------------------------
-    // Escaping CSV
+    // Escaping CSV (punto y coma, comillas, saltos de línea)
     // -------------------------------------------------------------------------
 
     @Test
-    fun transcriptConComa_seEncierraEnComillas() {
-        val attempt = bimodalAttempt().copy(transcription = "uno, dos")
+    fun transcriptConPuntoYComa_seEncierraEnComillas() {
+        val attempt = bimodalAttempt().copy(transcription = "uno; dos")
         val session = bimodalSession().copy(attempts = listOf(attempt))
         val csv = exporter.exportAttemptsCsv(listOf(session))
-        assertTrue(csv.contains("\"uno, dos\""))
+        assertTrue(csv.contains("\"uno; dos\""))
     }
 
     @Test
@@ -145,19 +188,91 @@ class MetricsCsvExporterTest {
         assertTrue(csv.contains("\"linea1\nlinea2\""))
     }
 
+    @Test
+    fun transcriptConComa_noRequiereEscape() {
+        val attempt = bimodalAttempt().copy(transcription = "uno, dos")
+        val session = bimodalSession().copy(attempts = listOf(attempt))
+        val csv = exporter.exportAttemptsCsv(listOf(session))
+        assertTrue(csv.contains("uno, dos"))
+    }
+
     // -------------------------------------------------------------------------
-    // Consistencia de columnas
+    // Consistencia de columnas — intentos
     // -------------------------------------------------------------------------
 
     @Test
-    fun todasLasFilasTienenMismasCantidadDeColumnas() {
+    fun todasLasFilasIntentostienenMismaCantidadDeColumnas() {
         val sessions = listOf(bimodalSession(), classicSession())
         val csv = exporter.exportAttemptsCsv(sessions)
-        val lines = csv.trim().lines()
-        val headerCount = MetricsCsvExporter.ATTEMPTS_HEADER.size
-        lines.forEach { line ->
-            val count = countCsvColumns(line)
-            assertEquals("Fila con columnas incorrectas: $line", headerCount, count)
+        val expectedCols = MetricsCsvExporter.ATTEMPTS_HEADER.size
+        csv.trim().lines().forEach { line ->
+            assertEquals(
+                "Columnas incorrectas en: $line",
+                expectedCols,
+                countSemicolonColumns(line)
+            )
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CSV de sesiones
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun exportSessions_empty_soloEncabezado() {
+        val csv = exporter.exportSessionsCsv(emptyList())
+        assertEquals(1, csv.trim().lines().size)
+        assertTrue(headerLine(csv).startsWith("session_id"))
+    }
+
+    @Test
+    fun encabezadoSesiones_contieneColumnasRequeridas() {
+        val cols = headerCols(exporter.exportSessionsCsv(emptyList()))
+        assertTrue(cols.contains("session_id"))
+        assertTrue(cols.contains("activity_id"))
+        assertTrue(cols.contains("operation_mode"))
+        assertTrue(cols.contains("total_attempts"))
+        assertTrue(cols.contains("correct_count"))
+        assertTrue(cols.contains("timeout_count"))
+    }
+
+    @Test
+    fun exportSessions_unaSesion_generaFila() {
+        val csv = exporter.exportSessionsCsv(listOf(bimodalSession()))
+        assertEquals(2, csv.trim().lines().size)
+    }
+
+    @Test
+    fun exportSessions_bimodal_correctCountPresente() {
+        val csv = exporter.exportSessionsCsv(listOf(bimodalSession()))
+        val cols = headerCols(exporter.exportSessionsCsv(emptyList()))
+        val idx = cols.indexOf("correct_count")
+        val dataCol = dataRowCols(csv)[idx]
+        assertEquals("1", dataCol)
+    }
+
+    @Test
+    fun exportSessions_clasico_correctCountVacio() {
+        val csv = exporter.exportSessionsCsv(listOf(classicSession()))
+        val cols = headerCols(exporter.exportSessionsCsv(emptyList()))
+        val idxCorrect = cols.indexOf("correct_count")
+        val idxIncorrect = cols.indexOf("incorrect_count")
+        val dataRow = dataRowCols(csv)
+        assertEquals("", dataRow[idxCorrect])
+        assertEquals("", dataRow[idxIncorrect])
+    }
+
+    @Test
+    fun todasLasFilasSesionestieneMismaCantidadDeColumnas() {
+        val sessions = listOf(bimodalSession(), classicSession())
+        val csv = exporter.exportSessionsCsv(sessions)
+        val expectedCols = MetricsCsvExporter.SESSIONS_HEADER.size
+        csv.trim().lines().forEach { line ->
+            assertEquals(
+                "Columnas incorrectas en: $line",
+                expectedCols,
+                countSemicolonColumns(line)
+            )
         }
     }
 
@@ -166,18 +281,15 @@ class MetricsCsvExporterTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun eventosEmpty_soloEncabezado() {
+    fun exportEvents_empty_soloEncabezado() {
         val csv = exporter.exportEventsCsv(emptyList())
-        val lines = csv.trim().lines()
-        assertEquals(1, lines.size)
-        assertTrue(lines[0].startsWith("session_id"))
+        assertEquals(1, csv.trim().lines().size)
+        assertTrue(headerLine(csv).startsWith("session_id"))
     }
 
     @Test
     fun encabezadoEventos_contieneColumnasRequeridas() {
-        val csv = exporter.exportEventsCsv(emptyList())
-        val header = csv.trim().lines().first()
-        val cols = header.split(",")
+        val cols = headerCols(exporter.exportEventsCsv(emptyList()))
         assertTrue(cols.contains("session_id"))
         assertTrue(cols.contains("event_id"))
         assertTrue(cols.contains("event_type"))
@@ -186,30 +298,55 @@ class MetricsCsvExporterTest {
     }
 
     @Test
-    fun eventos_filasPorEvento() {
+    fun eventos_generaFilaPorEvento() {
         val session = bimodalSession().copy(technicalEvents = listOf(event1(), event2()))
         val csv = exporter.exportEventsCsv(listOf(session))
-        val lines = csv.trim().lines()
-        assertEquals(3, lines.size)
+        assertEquals(3, csv.trim().lines().size)
     }
 
     @Test
-    fun eventoConLatencia_aparece() {
+    fun eventoConLatencia_apareceEnCsv() {
         val session = bimodalSession().copy(technicalEvents = listOf(event2()))
         val csv = exporter.exportEventsCsv(listOf(session))
         assertTrue(csv.contains("320"))
     }
 
     @Test
-    fun eventoSinLatencia_campoVacio() {
+    fun eventoSinLatencia_ultimoCampoVacio() {
         val session = bimodalSession().copy(technicalEvents = listOf(event1()))
         val csv = exporter.exportEventsCsv(listOf(session))
         val dataRow = csv.trim().lines()[1]
-        assertTrue(dataRow.endsWith(","))
+        assertTrue(dataRow.endsWith(";"))
     }
 
     // -------------------------------------------------------------------------
     // Helpers
+    // -------------------------------------------------------------------------
+
+    private fun headerLine(csv: String): String =
+        csv.trim().lines().first().removePrefix("﻿")
+
+    private fun headerCols(csv: String): List<String> =
+        headerLine(csv).split(";")
+
+    private fun dataRowCols(csv: String): List<String> =
+        csv.trim().lines()[1].split(";")
+
+    private fun countSemicolonColumns(line: String): Int {
+        val clean = line.removePrefix("﻿")
+        var count = 1
+        var inQuotes = false
+        for (ch in clean) {
+            when {
+                ch == '"' -> inQuotes = !inQuotes
+                ch == ';' && !inQuotes -> count++
+            }
+        }
+        return count
+    }
+
+    // -------------------------------------------------------------------------
+    // Fixtures
     // -------------------------------------------------------------------------
 
     private fun bimodalSession() = ExportSessionDto(
@@ -311,36 +448,14 @@ class MetricsCsvExporterTest {
     )
 
     private fun event1() = ExportTechnicalEventDto(
-        eventId = 1L,
-        questionId = 10L,
-        attemptId = 1L,
-        operationMode = "BIMODAL_INTELLIGENT",
-        eventType = "STT_STARTED",
-        message = null,
-        timestampMs = 1150L,
-        latencyMs = null
+        eventId = 1L, questionId = 10L, attemptId = 1L,
+        operationMode = "BIMODAL_INTELLIGENT", eventType = "STT_STARTED",
+        message = null, timestampMs = 1150L, latencyMs = null
     )
 
     private fun event2() = ExportTechnicalEventDto(
-        eventId = 2L,
-        questionId = 10L,
-        attemptId = 1L,
-        operationMode = "BIMODAL_INTELLIGENT",
-        eventType = "STT_FINAL",
-        message = null,
-        timestampMs = 1800L,
-        latencyMs = 320L
+        eventId = 2L, questionId = 10L, attemptId = 1L,
+        operationMode = "BIMODAL_INTELLIGENT", eventType = "STT_FINAL",
+        message = null, timestampMs = 1800L, latencyMs = 320L
     )
-
-    private fun countCsvColumns(line: String): Int {
-        var count = 1
-        var inQuotes = false
-        for (ch in line) {
-            when {
-                ch == '"' -> inQuotes = !inQuotes
-                ch == ',' && !inQuotes -> count++
-            }
-        }
-        return count
-    }
 }
