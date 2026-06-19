@@ -98,6 +98,32 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         }
     }
 
+    val sessionsCsvLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            isExporting = true
+            exportStatus = null
+            try {
+                val sessions = repository.buildExportSessions()
+                val content = csvExporter.exportSessionsCsv(sessions)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(content.toByteArray(Charsets.UTF_8))
+                    } ?: error("No se pudo abrir el archivo de destino")
+                }
+                exportStatus = "CSV de sesiones exportado (${sessions.size} filas)"
+                exportIsError = false
+            } catch (e: Exception) {
+                exportStatus = "Error al exportar CSV de sesiones: ${e.message}"
+                exportIsError = true
+            } finally {
+                isExporting = false
+            }
+        }
+    }
+
     val attemptsCsvLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")
     ) { uri ->
@@ -218,12 +244,25 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         Button(
             onClick = {
                 val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+                sessionsCsvLauncher.launch("sessions_$ts.csv")
+            },
+            enabled = !isExporting,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Exportar CSV — sesiones")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
                 attemptsCsvLauncher.launch("interaction_attempts_$ts.csv")
             },
             enabled = !isExporting,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Exportar CSV — intentos por sesión")
+            Text("Exportar CSV — intentos por pregunta")
         }
 
         Spacer(modifier = Modifier.height(8.dp))
