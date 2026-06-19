@@ -467,6 +467,9 @@ private fun ClassicSession(
     // ----- Temporizador visual ---------------------------------------------------
     var timerSecondsLeft by remember(activity) { mutableIntStateOf(0) }
 
+    // Cuenta regresiva visual + salvaguarda de timeout: si el contador llega a 0
+    // y el flujo sigue en WAITING_FIXED_RESPONSE (p. ej. STT nunca inicio o fallo),
+    // dispara onTimeExpired directamente para garantizar que el flujo avance.
     LaunchedEffect(state) {
         if (state != ClassicTimerState.WAITING_FIXED_RESPONSE) return@LaunchedEffect
         val total = progress?.effectiveMaxTimeSeconds ?: 10
@@ -475,18 +478,29 @@ private fun ClassicSession(
             delay(1_000L)
             timerSecondsLeft -= 1
         }
+        // Tiempo agotado: notificar aunque STT no este activo o haya fallado.
+        if (!answerDelivered.value && runner.state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
+            answerDelivered.value = true
+            if (sttState == SttState.LISTENING) speechService.stopListening()
+            dispatch { runner.onTimeExpired(hadPartialAtTimeout.value) }
+            Log.d(CLASSIC_LOG_TAG, "timeout-visual: hadPartial=${hadPartialAtTimeout.value}")
+        }
     }
 
-    // Temporizador de respuesta: agota el tiempo y notifica al runner
+    // Temporizador de respuesta via STT: complementario al visual. Dispara
+    // onTimeExpired cuando STT lleva el tiempo maximo escuchando. El flag
+    // answerDelivered evita doble avance si el visual ya disparo primero.
     LaunchedEffect(sttState) {
         if (sttState != SttState.LISTENING) return@LaunchedEffect
         val seconds = progress?.effectiveMaxTimeSeconds ?: 10
         delay(seconds * 1000L)
-        answerDelivered.value = true
-        speechService.stopListening()
-        if (runner.state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
-            dispatch { runner.onTimeExpired(hadPartialAtTimeout.value) }
-            Log.d(CLASSIC_LOG_TAG, "timeout: hadPartial=${hadPartialAtTimeout.value}")
+        if (!answerDelivered.value) {
+            answerDelivered.value = true
+            speechService.stopListening()
+            if (runner.state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
+                dispatch { runner.onTimeExpired(hadPartialAtTimeout.value) }
+                Log.d(CLASSIC_LOG_TAG, "timeout-stt: hadPartial=${hadPartialAtTimeout.value}")
+            }
         }
     }
 
@@ -610,6 +624,18 @@ private fun ClassicSession(
                     classicResult = if (hadPartial) "TIMEOUT_PARTIAL" else "TIMEOUT_NO_RESPONSE",
                     transcript = sttFinal.ifBlank { null },
                     usedStt = sttFinal.isNotBlank()
+                )
+            }
+        }
+        if (timeoutSid > 0L) {
+            val eventType = if (hadPartial) "CLASSIC_TIMEOUT_HANDLED" else "CLASSIC_NO_RESPONSE_HANDLED"
+            runCatching {
+                dataLogger.logTechnicalEvent(
+                    sessionId = timeoutSid,
+                    questionId = progress?.currentQuestionId?.toLongOrNull(),
+                    attemptId = if (timeoutAid > 0L) timeoutAid else null,
+                    operationMode = "CLASSIC",
+                    eventType = eventType
                 )
             }
         }
