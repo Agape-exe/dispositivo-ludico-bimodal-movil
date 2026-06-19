@@ -87,13 +87,7 @@ class AnimalMediationBank(
         activeScenarioByKey[LocalMediationKey.fromKey(mediationKey)]?.id
 
     /**
-     * Mini escena narrativa antes de una pregunta segun su clave de mediacion.
-     *
-     * Selecciona y RECUERDA un escenario para esta pregunta (evitando repetir el
-     * escenario anterior de la misma clave cuando hay alternativas). Las escenas de
-     * animales ya incluyen el enunciado de la pregunta; para [LocalMediationKey.NONE]
-     * o claves no reconocidas devuelve una introduccion general (la pregunta se
-     * concatena aparte en el llamador).
+     Mini escena narrativa antes de una pregunta segun su clave de mediacion.
      */
     fun getQuestionIntroduction(mediationKey: String?): String {
         val key = LocalMediationKey.fromKey(mediationKey)
@@ -107,8 +101,6 @@ class AnimalMediationBank(
     /**
      * Retroalimentacion para una respuesta correcta segun la clave de mediacion,
      * dentro del escenario activo de la pregunta.
-     *
-     * En la ultima pregunta ([isLastQuestion]) se excluyen las frases con continuidad.
      */
     fun getCorrectFeedback(mediationKey: String?, isLastQuestion: Boolean = false): String {
         val key = LocalMediationKey.fromKey(mediationKey)
