@@ -46,6 +46,11 @@ class InteractionDataLoggerTest {
         override fun getRecent(limit: Int): Flow<List<SessionEntity>> =
             flowOf(sessions.takeLast(limit))
 
+        override suspend fun getAllOnce(): List<SessionEntity> =
+            sessions.sortedBy { it.startedAt }
+
+        override suspend fun count(): Int = sessions.size
+
         override suspend fun updateEnd(
             id: Long, endedAt: Long, durationSeconds: Long,
             finalStatus: String, completed: Boolean
@@ -93,6 +98,8 @@ class InteractionDataLoggerTest {
         override suspend fun getBySessionIdOnce(sessionId: Long): List<AttemptEntity> =
             attempts.filter { it.sessionId == sessionId }
 
+        override suspend fun count(): Int = attempts.size
+
         override suspend fun updateFinished(
             attemptId: Long, finalState: String, wasFinal: Boolean,
             transcript: String?, semanticResult: String?, classicResult: String?,
@@ -134,6 +141,8 @@ class InteractionDataLoggerTest {
 
         override suspend fun getBySessionIdOnce(sessionId: Long): List<TechnicalEventEntity> =
             events.filter { it.sessionId == sessionId }
+
+        override suspend fun count(): Int = events.size
     }
 
     // -------------------------------------------------------------------------

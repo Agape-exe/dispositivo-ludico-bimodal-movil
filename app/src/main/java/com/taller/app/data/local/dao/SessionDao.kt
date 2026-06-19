@@ -22,6 +22,12 @@ interface SessionDao {
     @Query("SELECT * FROM sessions ORDER BY startedAt DESC LIMIT :limit")
     fun getRecent(limit: Int = 20): Flow<List<SessionEntity>>
 
+    @Query("SELECT * FROM sessions ORDER BY startedAt ASC")
+    suspend fun getAllOnce(): List<SessionEntity>
+
+    @Query("SELECT COUNT(*) FROM sessions")
+    suspend fun count(): Int
+
     @Query(
         "UPDATE sessions SET endedAt = :endedAt, durationSeconds = :durationSeconds, " +
         "finalStatus = :finalStatus, completed = :completed WHERE id = :id"

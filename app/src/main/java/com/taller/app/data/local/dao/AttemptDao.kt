@@ -18,6 +18,9 @@ interface AttemptDao {
     @Query("SELECT * FROM attempts WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getBySessionIdOnce(sessionId: Long): List<AttemptEntity>
 
+    @Query("SELECT COUNT(*) FROM attempts")
+    suspend fun count(): Int
+
     @Query(
         "UPDATE attempts SET finalAttemptState = :finalState, wasFinalAttempt = :wasFinal, " +
         "transcription = :transcript, semanticResult = :semanticResult, " +

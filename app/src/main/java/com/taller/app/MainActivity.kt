@@ -11,6 +11,7 @@ import com.taller.app.ui.BimodalInteractionScreen
 import com.taller.app.ui.ClassicTimerInteractionScreen
 import com.taller.app.ui.FaceDetectionScreen
 import com.taller.app.ui.MainScreen
+import com.taller.app.ui.MetricsExportScreen
 import com.taller.app.ui.Screen
 import com.taller.app.ui.SemanticTestScreen
 import com.taller.app.ui.SpeechTestScreen
@@ -41,7 +42,8 @@ class MainActivity : ComponentActivity() {
                         onNavigateToClassicTimer = {
                             selectedActivityId = 0L
                             currentScreen = Screen.CLASSIC_TIMER_INTERACTION
-                        }
+                        },
+                        onNavigateToMetricsExport = { currentScreen = Screen.METRICS_EXPORT }
                     )
                     Screen.FACE_DETECTION -> FaceDetectionScreen(
                         onBack = { currentScreen = Screen.MAIN }
@@ -72,6 +74,9 @@ class MainActivity : ComponentActivity() {
                     )
                     Screen.CLASSIC_TIMER_INTERACTION -> ClassicTimerInteractionScreen(
                         activityId = selectedActivityId,
+                        onBack = { currentScreen = Screen.MAIN }
+                    )
+                    Screen.METRICS_EXPORT -> MetricsExportScreen(
                         onBack = { currentScreen = Screen.MAIN }
                     )
                 }

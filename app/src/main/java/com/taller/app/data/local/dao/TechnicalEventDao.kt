@@ -17,4 +17,7 @@ interface TechnicalEventDao {
 
     @Query("SELECT * FROM technical_events WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getBySessionIdOnce(sessionId: Long): List<TechnicalEventEntity>
+
+    @Query("SELECT COUNT(*) FROM technical_events")
+    suspend fun count(): Int
 }
