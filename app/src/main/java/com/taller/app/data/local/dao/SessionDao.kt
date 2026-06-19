@@ -33,4 +33,30 @@ interface SessionDao {
         finalStatus: String,
         completed: Boolean
     )
+
+    @Query(
+        "UPDATE sessions SET endedAt = :endedAt, durationSeconds = :durationSeconds, " +
+        "totalDurationMs = :totalDurationMs, finalStatus = :finalStatus, completed = :completed, " +
+        "completedQuestions = :completedQuestions, totalAttempts = :totalAttempts, " +
+        "correctCount = :correctCount, incorrectCount = :incorrectCount, " +
+        "noResponseCount = :noResponseCount, notInterpretableCount = :notInterpretableCount, " +
+        "timeoutCount = :timeoutCount, technicalErrorCount = :technicalErrorCount " +
+        "WHERE id = :id"
+    )
+    suspend fun updateFinal(
+        id: Long,
+        endedAt: Long,
+        durationSeconds: Long,
+        totalDurationMs: Long,
+        finalStatus: String,
+        completed: Boolean,
+        completedQuestions: Int,
+        totalAttempts: Int,
+        correctCount: Int?,
+        incorrectCount: Int?,
+        noResponseCount: Int,
+        notInterpretableCount: Int?,
+        timeoutCount: Int,
+        technicalErrorCount: Int
+    )
 }

@@ -12,7 +12,10 @@ data class TechnicalEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val sessionId: Long? = null,
     val questionId: Long? = null,
+    val attemptId: Long? = null,
+    val operationMode: String = "",
     val eventType: String,
     val message: String? = null,
+    val latencyMs: Long? = null,
     val timestamp: Long
 )

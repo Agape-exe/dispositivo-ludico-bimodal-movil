@@ -17,4 +17,41 @@ interface AttemptDao {
 
     @Query("SELECT * FROM attempts WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getBySessionIdOnce(sessionId: Long): List<AttemptEntity>
+
+    @Query(
+        "UPDATE attempts SET finalAttemptState = :finalState, wasFinalAttempt = :wasFinal, " +
+        "transcription = :transcript, semanticResult = :semanticResult, " +
+        "classicResult = :classicResult, responseReceivedAtMs = :responseReceivedAtMs, " +
+        "finishedAtMs = :finishedAtMs, realResponseTimeMs = :realResponseTimeMs, " +
+        "advancedFeedbackType = :advancedFeedbackType, usedSpeechToText = :usedStt, " +
+        "sttStartAtMs = :sttStart, sttFinalAtMs = :sttFinalAt, " +
+        "semanticStartAtMs = :semStart, semanticEndAtMs = :semEnd, " +
+        "logicalResponseAtMs = :logicAt, feedbackStartAtMs = :feedbackAt, " +
+        "totalResponseLatencyMs = :responseLatency, " +
+        "responseToFeedbackLatencyMs = :feedbackLatency, " +
+        "fullPipelineLatencyMs = :pipelineLatency " +
+        "WHERE id = :attemptId"
+    )
+    suspend fun updateFinished(
+        attemptId: Long,
+        finalState: String,
+        wasFinal: Boolean,
+        transcript: String?,
+        semanticResult: String?,
+        classicResult: String?,
+        responseReceivedAtMs: Long?,
+        finishedAtMs: Long,
+        realResponseTimeMs: Long?,
+        advancedFeedbackType: String?,
+        usedStt: Boolean,
+        sttStart: Long?,
+        sttFinalAt: Long?,
+        semStart: Long?,
+        semEnd: Long?,
+        logicAt: Long?,
+        feedbackAt: Long?,
+        responseLatency: Long?,
+        feedbackLatency: Long?,
+        pipelineLatency: Long?
+    )
 }
