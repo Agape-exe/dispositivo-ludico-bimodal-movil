@@ -198,6 +198,7 @@ class ClassicTimerRunner(
             currentQuestionIndex = currentIndex,
             currentQuestionId = question.id,
             currentQuestionText = question.questionText,
+            currentQuestionMediationKey = question.mediationKey,
             maxTimeSeconds = question.maxTimeSeconds,
             sessionStartedAt = sessionStartedAt,
             questionStartedAt = existing?.questionStartedAt,

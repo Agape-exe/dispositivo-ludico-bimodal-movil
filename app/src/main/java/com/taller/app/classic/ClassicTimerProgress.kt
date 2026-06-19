@@ -10,6 +10,7 @@ data class ClassicTimerProgress(
     val currentQuestionIndex: Int,
     val currentQuestionId: String,
     val currentQuestionText: String,
+    val currentQuestionMediationKey: String? = null,
     val maxTimeSeconds: Int,
     val sessionStartedAt: Long,
     val questionStartedAt: Long? = null,
