@@ -44,7 +44,8 @@ fun MainScreen(
     onNavigateToTeacherActivities: () -> Unit,
     onNavigateToToyVoiceSettings: () -> Unit,
     onNavigateToBimodal: () -> Unit,
-    onNavigateToClassicTimer: () -> Unit
+    onNavigateToClassicTimer: () -> Unit,
+    onNavigateToMetricsExport: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -209,9 +210,18 @@ fun MainScreen(
 
         Button(
             onClick = onNavigateToClassicTimer,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
         ) {
             Text("Modo temporizador fijo")
+        }
+
+        Button(
+            onClick = onNavigateToMetricsExport,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Exportar métricas / registros técnicos")
         }
     }
 }
