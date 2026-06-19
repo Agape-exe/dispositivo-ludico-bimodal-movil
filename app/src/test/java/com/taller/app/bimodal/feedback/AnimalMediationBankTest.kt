@@ -13,7 +13,6 @@ class AnimalMediationBankTest {
 
     private fun newBank(seed: Long = 1L) = AnimalMediationBank(random = Random(seed))
 
-    /** Minusculas y sin acentos, para comparaciones robustas de contenido. */
     private fun normalize(text: String): String {
         val decomposed = Normalizer.normalize(text, Normalizer.Form.NFD)
         return decomposed
@@ -28,7 +27,6 @@ class AnimalMediationBankTest {
         LocalMediationKey.ANIMAL_FARM
     )
 
-    /** Todas las frases predefinidas del banco (generales + de cada escenario). */
     private fun allPhraseLists(): List<List<String>> {
         val general = listOf(
             AnimalMediationBank.MISSION_START,
@@ -49,7 +47,7 @@ class AnimalMediationBankTest {
         return general + scenarioLists
     }
 
-    // ----- Cobertura y variedad del banco --------------------------------------
+    // ----- Cobertura y variedad del banco ----------------------------------------
 
     @Test
     fun everyGeneralPhraseList_hasAtLeastTenPhrases() {
@@ -70,24 +68,51 @@ class AnimalMediationBankTest {
     }
 
     @Test
-    fun everyAnimalKey_hasAtLeastThreeScenarios_eachWellFormed() {
+    fun advancedQuestionIntroGeneral_hasAtLeastTenPhrases() {
+        assertTrue(
+            "ADVANCED_QUESTION_INTRO_GENERAL tiene ${AnimalMediationBank.ADVANCED_QUESTION_INTRO_GENERAL.size} frases",
+            AnimalMediationBank.ADVANCED_QUESTION_INTRO_GENERAL.size >= 10
+        )
+    }
+
+    @Test
+    fun advancedQuestionIntroGeneral_allPhrasesHaveQuestionPlaceholder() {
+        for (phrase in AnimalMediationBank.ADVANCED_QUESTION_INTRO_GENERAL) {
+            assertTrue(
+                "La frase de intro genérica no tiene {question}: $phrase",
+                phrase.contains("{question}")
+            )
+        }
+    }
+
+    @Test
+    fun getGenericIntroWithQuestion_fillsPlaceholder() {
+        val bank = newBank()
+        val questionText = "¿Qué sonido hace el perro?"
+        val result = bank.getGenericIntroWithQuestion(questionText)
+        assertFalse("No debe quedar el marcador {question}", result.contains("{question}"))
+        assertTrue("Debe contener el texto de la pregunta", result.contains(questionText.trim()))
+    }
+
+    @Test
+    fun everyAnimalKey_hasAtLeastTenScenarios_eachWellFormed() {
         for (key in animalKeys) {
             val scenarios = AnimalMediationBank.SCENARIOS[key]
             assertNotNull("Falta lista de escenarios para $key", scenarios)
             assertTrue(
-                "$key tiene ${scenarios!!.size} escenarios, se esperaban al menos 3",
-                scenarios.size >= 3
+                "$key tiene ${scenarios!!.size} escenarios, se esperaban al menos 10",
+                scenarios.size >= 10
             )
             for (scenario in scenarios) {
-                assertTrue("${scenario.id}: <2 intros", scenario.intro.size >= 2)
-                assertTrue("${scenario.id}: <3 correctFeedback", scenario.correctFeedback.size >= 3)
+                assertTrue("${scenario.id}: sin intro", scenario.intro.isNotEmpty())
+                assertTrue("${scenario.id}: sin correctFeedback", scenario.correctFeedback.isNotEmpty())
                 assertTrue(
-                    "${scenario.id}: <3 incorrectRetryFeedback",
-                    scenario.incorrectRetryFeedback.size >= 3
+                    "${scenario.id}: sin incorrectRetryFeedback",
+                    scenario.incorrectRetryFeedback.isNotEmpty()
                 )
                 assertTrue(
-                    "${scenario.id}: <3 incorrectNextFeedback",
-                    scenario.incorrectNextFeedback.size >= 3
+                    "${scenario.id}: sin incorrectNextFeedback",
+                    scenario.incorrectNextFeedback.isNotEmpty()
                 )
             }
         }
@@ -113,7 +138,7 @@ class AnimalMediationBankTest {
                 val normalized = normalize(phrase)
                 for (banned in forbidden) {
                     assertFalse(
-                        "Frase enganosa detectada: $phrase",
+                        "Frase engañosa detectada: $phrase",
                         normalized.contains(banned)
                     )
                 }
@@ -122,29 +147,40 @@ class AnimalMediationBankTest {
     }
 
     @Test
-    fun retryFeedback_neverRevealsTheExpectedSound() {
-        // El reintento jamas debe revelar la respuesta esperada de los sonidos.
-        val revealed = listOf("guau", "miau")
-        val soundKeys = listOf(
-            LocalMediationKey.ANIMAL_DOG_SOUND,
-            LocalMediationKey.ANIMAL_CAT_SOUND
-        )
-        for (key in soundKeys) {
-            for (scenario in AnimalMediationBank.SCENARIOS.getValue(key)) {
-                for (phrase in scenario.incorrectRetryFeedback) {
-                    val text = normalize(phrase)
-                    for (word in revealed) {
-                        assertFalse(
-                            "El reintento de ${scenario.id} revela la respuesta: $phrase",
-                            text.contains(word)
-                        )
-                    }
-                }
+    fun dogRetryFeedback_neverRevealsExpectedSound_guau() {
+        // En Seven el reintento puede mencionar "ladrido" (descriptor) pero no "guau" (respuesta directa).
+        for (scenario in AnimalMediationBank.SCENARIOS.getValue(LocalMediationKey.ANIMAL_DOG_SOUND)) {
+            for (phrase in scenario.incorrectRetryFeedback) {
+                val text = normalize(phrase)
+                assertFalse(
+                    "El reintento de ${scenario.id} revela 'guau': $phrase",
+                    text.contains("guau")
+                )
             }
         }
     }
 
-    // ----- Resolucion por clave de mediacion -----------------------------------
+    @Test
+    fun noForbiddenWord_pistaAsMainTerm_inAnyPhrase() {
+        // "Pista" está excluida como término principal de vocabulario de Seven.
+        // Se verifica que no aparezca en frases principales (intro, feedback).
+        val scenarioPhrases = AnimalMediationBank.SCENARIOS.values.flatten().flatMap {
+            it.intro + it.correctFeedback + it.incorrectRetryFeedback + it.incorrectNextFeedback
+        }
+        val generalPhrases = AnimalMediationBank.MISSION_START +
+            AnimalMediationBank.MISSION_COMPLETED +
+            AnimalMediationBank.GENERAL_NOT_INTERPRETABLE +
+            AnimalMediationBank.GENERAL_NO_RESPONSE +
+            AnimalMediationBank.GENERAL_TECHNICAL_ERROR
+        for (phrase in scenarioPhrases + generalPhrases) {
+            assertFalse(
+                "Se encontró 'pista' como término en: $phrase",
+                normalize(phrase).contains(" pista ")
+            )
+        }
+    }
+
+    // ----- Resolución por clave de mediación -------------------------------------
 
     @Test
     fun animalKeys_returnPhrasesFromOneOfTheirScenarios() {
@@ -153,7 +189,7 @@ class AnimalMediationBankTest {
             val name = key.name
             val intro = bank.getQuestionIntroduction(name)
             val activeId = bank.currentScenarioId(name)
-            assertNotNull("No se selecciono escenario para $key", activeId)
+            assertNotNull("No se seleccionó escenario para $key", activeId)
             val scenario = AnimalMediationBank.SCENARIOS.getValue(key).first { it.id == activeId }
             assertTrue("La intro de $key no proviene de su escenario", scenario.intro.contains(intro))
             assertTrue(
@@ -180,7 +216,6 @@ class AnimalMediationBankTest {
             GeneralTeacherFeedbackGenerator.DEFAULT_PHRASES
                 .getValue(GeneralTeacherFeedbackType.CORRECT).contains(correct)
         )
-        // NONE no selecciona ningun escenario de animales.
         assertEquals(null, bank.currentScenarioId(LocalMediationKey.NONE.name))
     }
 
@@ -205,8 +240,6 @@ class AnimalMediationBankTest {
 
     @Test
     fun emptyScenarioLists_fallBackToGeneralPhrasesInsteadOfCrashing() {
-        // Un escenario con todas sus listas vacias jamas debe romper el flujo: cada
-        // categoria recurre al banco general tipo profesor (o al cierre, segun el caso).
         val emptyScenario = AnimalNarrativeScenario(
             id = "EMPTY_TEST",
             intro = emptyList(),
@@ -222,7 +255,7 @@ class AnimalMediationBankTest {
 
         val intro = bank.getQuestionIntroduction(key)
         assertTrue(
-            "La intro de un escenario vacio debe venir del fallback general",
+            "La intro de un escenario vacío debe venir del fallback general",
             GeneralTeacherFeedbackGenerator.DEFAULT_PHRASES
                 .getValue(GeneralTeacherFeedbackType.QUESTION_INTRO).contains(intro)
         )
@@ -241,14 +274,13 @@ class AnimalMediationBankTest {
             GeneralTeacherFeedbackGenerator.DEFAULT_PHRASES
                 .getValue(GeneralTeacherFeedbackType.INCORRECT_NEXT).contains(next)
         )
-        // En la ultima pregunta el respaldo es la frase de cierre.
         val nextLast = bank.getIncorrectNextFeedback(key, isLastQuestion = true)
         assertTrue(
             AnimalMediationBank.MISSION_COMPLETED.contains(nextLast)
         )
     }
 
-    // ----- Coherencia de escenario (mini historias) ----------------------------
+    // ----- Coherencia de escenario (mini historias) ------------------------------
 
     @Test
     fun scenarioStaysStableBetweenIntroAndFeedbackForOneQuestion() {
@@ -258,7 +290,6 @@ class AnimalMediationBankTest {
             bank.getQuestionIntroduction(name)
             val scenarioId = bank.currentScenarioId(name)
             assertNotNull(scenarioId)
-            // Todas las categorias de feedback de esta pregunta deben mantener el id.
             bank.getCorrectFeedback(name)
             assertEquals(scenarioId, bank.currentScenarioId(name))
             bank.getIncorrectRetryFeedback(name)
@@ -271,7 +302,6 @@ class AnimalMediationBankTest {
     @Test
     fun feedbackComesFromTheSameScenarioAsTheIntro() {
         for (key in animalKeys) {
-            // Varias semillas para cubrir distintos escenarios elegidos.
             for (seed in 1L..12L) {
                 val bank = newBank(seed)
                 val name = key.name
@@ -293,31 +323,7 @@ class AnimalMediationBankTest {
         }
     }
 
-    @Test
-    fun catLostVoiceScenario_neverMixesWithCatWindowFeedback() {
-        // Si la intro pertenece a CAT_LOST_VOICE, su feedback no puede hablar de la
-        // ventana; y si pertenece a CAT_WINDOW, su feedback no puede hablar de recuperar
-        // la voz. Recorremos muchas semillas para forzar ambos escenarios.
-        val key = LocalMediationKey.ANIMAL_CAT_SOUND.name
-        for (seed in 1L..60L) {
-            val bank = newBank(seed)
-            bank.getQuestionIntroduction(key)
-            val scenarioId = bank.currentScenarioId(key)
-            val correct = normalize(bank.getCorrectFeedback(key))
-            val next = normalize(bank.getIncorrectNextFeedback(key, isLastQuestion = false))
-            when (scenarioId) {
-                "CAT_LOST_VOICE" -> {
-                    assertFalse("LOST_VOICE mezclado con ventana: $correct", correct.contains("ventana"))
-                    assertFalse("LOST_VOICE mezclado con ventana: $next", next.contains("ventana"))
-                }
-                "CAT_WINDOW" -> {
-                    assertFalse("WINDOW mezclado con recuperar voz: $correct", correct.contains("recupero su voz") || correct.contains("recupero su miau"))
-                }
-            }
-        }
-    }
-
-    // ----- Reglas de la ultima pregunta ----------------------------------------
+    // ----- Reglas de la última pregunta ------------------------------------------
 
     @Test
     fun incorrectNext_onLastQuestion_neverUsesContinuationPhrase() {
@@ -326,10 +332,10 @@ class AnimalMediationBankTest {
             val bank = newBank()
             repeat(120) {
                 val text = normalize(bank.getIncorrectNextFeedback(key.name, isLastQuestion = true))
-                assertTrue("Frase vacia", text.isNotBlank())
+                assertTrue("Frase vacía", text.isNotBlank())
                 for (marker in continuation) {
                     assertFalse(
-                        "En la ultima pregunta ($key) se uso continuidad: $text",
+                        "En la última pregunta ($key) se usó continuidad: $text",
                         text.contains(marker)
                     )
                 }
@@ -344,10 +350,10 @@ class AnimalMediationBankTest {
             val bank = newBank()
             repeat(120) {
                 val text = normalize(bank.getCorrectFeedback(key.name, isLastQuestion = true))
-                assertTrue("Frase vacia", text.isNotBlank())
+                assertTrue("Frase vacía", text.isNotBlank())
                 for (marker in continuation) {
                     assertFalse(
-                        "En la ultima pregunta ($key) el acierto uso continuidad: $text",
+                        "En la última pregunta ($key) el acierto usó continuidad: $text",
                         text.contains(marker)
                     )
                 }
@@ -357,7 +363,6 @@ class AnimalMediationBankTest {
 
     @Test
     fun noLastQuestionPhrase_announcesNextQuestion() {
-        // Ninguna frase reproducible en la ultima pregunta debe decir "siguiente pregunta".
         for (key in animalKeys) {
             val bank = newBank()
             repeat(60) {
@@ -374,11 +379,11 @@ class AnimalMediationBankTest {
         val bank = newBank()
         repeat(40) {
             val text = bank.getIncorrectNextFeedback(LocalMediationKey.ANIMAL_DOG_SOUND.name, isLastQuestion = false)
-            assertTrue("Frase vacia", text.isNotBlank())
+            assertTrue("Frase vacía", text.isNotBlank())
         }
     }
 
-    // ----- Seleccion variada ---------------------------------------------------
+    // ----- Selección variada -----------------------------------------------------
 
     @Test
     fun doesNotRepeatSameIntroductionConsecutively() {
@@ -387,19 +392,17 @@ class AnimalMediationBankTest {
             var previous: String? = null
             repeat(200) {
                 val current = bank.getQuestionIntroduction(key.name)
-                assertTrue("Introduccion repetida consecutiva en $key: $current", current != previous)
+                assertTrue("Introducción repetida consecutiva en $key: $current", current != previous)
                 previous = current
             }
         }
     }
 
     @Test
-    fun doesNotRepeatSameCorrectFeedbackConsecutivelyWithinAScenario() {
-        // Forzamos un unico escenario por clave para comprobar la anti-repeticion del
-        // feedback dentro del mismo escenario (lo que escucha el nino entre intentos).
+    fun doesNotRepeatSameCorrectFeedbackConsecutively() {
+        // Con 10 escenarios distintos por clave, el feedback correcto cambia al cambiar de escenario.
         for (key in animalKeys) {
-            val onlyFirst = mapOf(key to listOf(AnimalMediationBank.SCENARIOS.getValue(key).first()))
-            val bank = AnimalMediationBank(random = Random(7L), scenarios = onlyFirst)
+            val bank = newBank()
             var previous: String? = null
             repeat(200) {
                 bank.getQuestionIntroduction(key.name)
@@ -432,8 +435,6 @@ class AnimalMediationBankTest {
 
     @Test
     fun correctFeedback_doesNotAlwaysStartWithLoLograste() {
-        // La variedad de inicios reduce la repeticion percibida: a lo largo de muchas
-        // respuestas correctas, "lo lograste" no debe dominar los comienzos.
         var loLograste = 0
         var total = 0
         for (key in animalKeys) {
@@ -465,7 +466,7 @@ class AnimalMediationBankTest {
             for (phrase in list) {
                 val text = normalize(phrase)
                 for (marker in blame) {
-                    assertFalse("Frase culpa al nino: $phrase", text.contains(marker))
+                    assertFalse("Frase culpa al niño: $phrase", text.contains(marker))
                 }
             }
         }

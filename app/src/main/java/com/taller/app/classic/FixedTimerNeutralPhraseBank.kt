@@ -3,156 +3,182 @@ package com.taller.app.classic
 import com.taller.app.model.LocalMediationKey
 
 /**
- * Banco local de frases neutras para el modo de temporizador fijo ("ronda rápida").
+ * Banco local de frases de Seven para el modo de temporizador fijo ("ronda rápida").
  *
- * Las frases son dinámicas y participativas, pero nunca adaptativas: no dicen
- * "correcto", "incorrecto", "exacto" ni revelan el resultado semántico de la
- * respuesta del niño. El modo clásico reconoce la participación, no evalúa el
- * desempeño.
+ * Seven mantiene su identidad de alien explorador en el modo clásico, pero sin
+ * evaluar semánticamente la respuesta del niño. Las frases son divertidas y
+ * participativas, pero nunca adaptativas: no dicen "correcto", "incorrecto" ni
+ * revelan el resultado semántico.
  *
- * Decisiones de diseño de C01.1:
- * - La transición y la pregunta se combinan en una sola frase ([getRoundPrompt])
- *   para reducir capas de voz y demora.
- * - La última ronda usa frases propias que no anuncian "otra pregunta"
- *   ([getRoundPrompt] con `isLast`, [getAnswerReceived] con `isLast`,
- *   [getTimeExpired] con `isLast`).
+ * Vocabulario de Seven en modo clásico: reto, ronda, ronda espacial, señal,
+ * exploración, registro. No se usa "pista" como término principal.
+ *
+ * Decisiones de diseño:
+ * - La transición y la pregunta se combinan en una sola frase ([getRoundPrompt]).
+ * - La última ronda usa frases que no anuncian "otra pregunta".
  * - Selección anti-repetición: nunca repite la última frase usada en cada
  *   categoría si hay al menos dos opciones disponibles.
+ * - [getNextRound] es un anuncio opcional entre rondas (sin la pregunta).
  */
 class FixedTimerNeutralPhraseBank {
 
     private val lastUsed = mutableMapOf<String, Int>()
 
+    // ----- Inicio de sesión (CLASSIC_SESSION_START) --------------------------------
+
     private val sessionStart = listOf(
-        "Vamos a jugar una ronda rápida de animales. Yo diré una pista y tú respondes con tu voz.",
-        "Empezamos una ronda rápida. Escucha cada pista y responde cuando estés listo.",
-        "Hoy jugaremos con pistas de animales. Responde antes de que termine el tiempo.",
-        "Vamos a responder algunas rondas de animales. Yo pregunto y tú participas.",
-        "Comenzamos el juego de rondas. Escucha bien y responde con voz clara."
+        "Seven activará una ronda rápida de exploración. Responde con tu voz antes de que termine el tiempo.",
+        "Iniciamos rondas espaciales. Seven escuchará tus respuestas y seguirá avanzando.",
+        "Comienza la exploración rápida de Seven. Cada ronda tendrá un reto con tiempo.",
+        "Seven preparó una ronda de retos terrestres. Responde cuando escuches cada reto.",
+        "Activando temporizador espacial. Escucha cada reto y responde con tu voz.",
+        "Seven iniciará una misión rápida. Cada ronda durará solo unos segundos.",
+        "Mi nave está lista para recibir señales. Vamos con rondas rápidas.",
+        "Comienza la ronda de exploración. Seven escuchará tus respuestas una por una.",
+        "Seven encendió su reloj espacial. Responde cada reto antes de que termine.",
+        "Empezamos una misión con tiempo. Seven recibirá tus señales en cada ronda."
     )
 
-    /** Plantillas genéricas de ronda. Usan {n} (número de ronda) y {question}. */
+    // ----- Ronda con pregunta (CLASSIC_ROUND_PROMPT) --------------------------------
+    // Usan {n} como número de ronda y {question} como texto de la pregunta.
+
     private val roundQuestionPrompt = listOf(
-        "Ronda {n}. Escucha esta pista animal: {question}",
-        "Ronda {n}. Vamos con una pista rápida: {question}",
-        "Ronda {n}. Ahora piensa en animales: {question}",
-        "Ronda {n}. Responde con tu voz: {question}",
-        "Ronda {n}. Aquí viene una pista: {question}",
-        "Ronda {n}. Vamos a jugar con esta pregunta: {question}",
-        "Ronda {n}. Escucha y responde: {question}",
-        "Ronda {n}. Atención a esta pista: {question}",
-        "Ronda {n}. Vamos con el siguiente reto: {question}"
+        "Ronda espacial {n}. Responde este reto: {question}",
+        "Ronda {n}. Seven necesita escuchar tu señal: {question}",
+        "Ronda rápida {n}. El reto es: {question}",
+        "Exploración {n}. Responde con tu voz: {question}",
+        "Ronda espacial {n}. Seven está atento: {question}",
+        "Reto rápido {n}. Dime tu respuesta: {question}",
+        "Ronda {n}. Mi nave escuchará tu voz: {question}",
+        "Exploración rápida {n}. Vamos con este reto: {question}",
+        "Ronda {n}. Seven activa su antena: {question}",
+        "Ronda espacial {n}. Tienes unos segundos: {question}"
     )
 
-    /**
-     * Lead-ins naturales por [LocalMediationKey]. Cada plantilla combina ronda +
-     * pista temática + {question}, sin evaluar ni adelantar la respuesta.
-     */
+    // Última ronda: no anuncia otra pregunta. Usan {question} (sin número de ronda).
+    private val lastRoundPrompt = listOf(
+        "Última ronda espacial. Responde este reto: {question}",
+        "Seven llega a la ronda final. Escucha: {question}",
+        "Última señal para Seven. El reto es: {question}",
+        "Ronda final de exploración. Responde: {question}",
+        "Seven cierra su misión con este reto: {question}"
+    )
+
+    // ----- Lead-ins temáticos por mediationKey (CLASSIC_ROUND_PROMPT) -------------
+
     private val mediationPrompts: Map<LocalMediationKey, List<String>> = mapOf(
         LocalMediationKey.ANIMAL_DOG_SOUND to listOf(
-            "Ronda {n}. Piensa en un perrito: {question}",
-            "Ronda {n}. Imagina un perro moviendo la colita: {question}",
-            "Ronda {n}. Escucha esta pista de perrito: {question}"
+            "Ronda {n}. Seven piensa en un perrito: {question}",
+            "Ronda {n}. Imagina un perro moviendo la cola: {question}",
+            "Ronda espacial {n}. Escucha este reto de perrito: {question}"
         ),
         LocalMediationKey.ANIMAL_DOMESTIC to listOf(
-            "Ronda {n}. Pensemos en una mascota: {question}",
-            "Ronda {n}. Imagina una casita con una mascota: {question}",
-            "Ronda {n}. Busca en tu mente una mascota: {question}"
+            "Ronda {n}. Seven busca una mascota terrestre: {question}",
+            "Ronda espacial {n}. Imagina una casita con mascota: {question}",
+            "Ronda {n}. Seven quiere conocer una mascota: {question}"
         ),
         LocalMediationKey.ANIMAL_CAT_SOUND to listOf(
-            "Ronda {n}. Piensa en un gatito: {question}",
-            "Ronda {n}. Imagina un gato caminando suavecito: {question}",
-            "Ronda {n}. Escucha esta pista de gatito: {question}"
+            "Ronda {n}. Seven piensa en un gatito: {question}",
+            "Ronda espacial {n}. Imagina un gato caminando suavecito: {question}",
+            "Ronda {n}. Escucha este reto de gatito: {question}"
         ),
         LocalMediationKey.ANIMAL_FARM to listOf(
-            "Ronda {n}. Imagina una granja: {question}",
-            "Ronda {n}. Pensemos en una granja con corrales: {question}",
-            "Ronda {n}. Vamos con una pista de granja: {question}"
+            "Ronda {n}. Seven imagina una granja: {question}",
+            "Ronda espacial {n}. Pensemos en una granja con corrales: {question}",
+            "Ronda {n}. Vamos con un reto de la granja: {question}"
         )
     )
 
-    /** Plantillas de última ronda. No anuncian otra pregunta. Usan {question}. */
-    private val lastRoundPrompt = listOf(
-        "Última ronda. Escucha con atención: {question}",
-        "Llegamos a la última ronda: {question}",
-        "Última pista de animales: {question}",
-        "Vamos a cerrar con esta ronda: {question}",
-        "Falta poquito. Última pregunta: {question}"
-    )
+    // ----- Respuesta recibida (CLASSIC_ANSWER_RECEIVED) ---------------------------
 
     private val answerReceived = listOf(
-        "¡Respuesta recibida por mi radar animal!",
-        "¡Listo, tu voz llegó hasta mí!",
-        "¡Ronda respondida!",
-        "¡Escuché tu idea, seguimos!",
-        "¡Tu respuesta quedó lista para esta ronda!",
-        "¡Muy bien, seguimos con la actividad!",
-        "¡Listo, pasamos a otra pista!",
-        "¡Participación recibida!",
-        "¡Ya te escuché!",
-        "¡Vamos avanzando!"
+        "Señal recibida por la nave de Seven.",
+        "Tu voz llegó hasta mi radar espacial.",
+        "Respuesta registrada en la nave.",
+        "Seven recibió tu señal.",
+        "Dato recibido para la exploración.",
+        "Tu señal entró a mi computadora espacial.",
+        "Seven escuchó tu respuesta.",
+        "Registro de voz completado.",
+        "Señal guardada para esta ronda.",
+        "Tu respuesta llegó a la nave de Seven."
     )
+
+    // ----- Última respuesta recibida (CLASSIC_LAST_ANSWER_RECEIVED) ---------------
 
     private val lastAnswerReceived = listOf(
-        "¡Última respuesta recibida! Completamos todas las rondas.",
-        "¡Listo, escuché tu última respuesta!",
-        "¡Última ronda respondida!",
-        "¡Tu voz llegó en la última ronda!",
-        "¡Gracias, completamos la actividad!",
-        "¡Ronda final recibida!",
-        "¡Muy bien, llegamos al final!",
-        "¡Última participación registrada!",
-        "¡Ya terminamos las rondas!",
-        "¡Gracias por responder hasta el final!"
+        "Última señal recibida. Seven completó todas las rondas.",
+        "Tu última respuesta llegó a la nave.",
+        "Última ronda registrada por Seven.",
+        "Señal final recibida. La exploración rápida terminó.",
+        "Seven guardó la última respuesta de esta misión.",
+        "Último dato recibido en la computadora espacial.",
+        "La última ronda quedó registrada.",
+        "Seven recibió tu última señal.",
+        "Última respuesta guardada. La misión está por cerrar.",
+        "Registro final completado por la nave de Seven."
     )
 
-    private val timeExpiredWithResponse = listOf(
-        "El tiempo de esta ronda terminó. Seguimos.",
-        "Tiempo cumplido. Vamos con otra pista.",
-        "Esta ronda terminó. Continuemos.",
-        "El reloj terminó su vuelta. Sigamos.",
-        "Ronda completada. Vamos con la siguiente."
+    // ----- Tiempo agotado (CLASSIC_TIMEOUT_OR_NO_RESPONSE) -----------------------
+
+    private val timeoutPhrases = listOf(
+        "El tiempo de esta ronda terminó. Seven seguirá con la exploración.",
+        "Mi reloj espacial llegó al final de esta ronda.",
+        "La ronda terminó y Seven continuará con la siguiente.",
+        "El temporizador espacial se apagó por esta vez.",
+        "Esta ronda llegó a su fin. Sigamos explorando.",
+        "Seven no recibió señal a tiempo. Continuaremos la misión.",
+        "El tiempo se acabó para esta ronda espacial.",
+        "La nave cerró esta ronda. Vamos a seguir.",
+        "El reloj de Seven marcó el final de esta parte.",
+        "Esta señal no llegó a tiempo, pero la exploración continúa."
     )
 
-    private val timeExpiredNoResponse = listOf(
-        "El tiempo terminó. No pasa nada, seguimos con otra ronda.",
-        "Esta vez no escuché respuesta. Vamos con la siguiente.",
-        "Se acabó el tiempo. Intentemos la próxima.",
-        "El reloj fue rápido esta vez. Sigamos.",
-        "No escuché tu voz en esta ronda. Continuemos con calma."
+    // Para la última ronda se filtran las que anuncian continuación.
+    private val lastTimeoutPhrases = timeoutPhrases.filterNot { phrase ->
+        val lower = phrase.lowercase()
+        listOf("siguiente", "otra ronda", "próxima", "intentemos").any { lower.contains(it) }
+    }
+
+    // ----- Transición entre rondas (CLASSIC_NEXT_ROUND) ---------------------------
+
+    private val nextRoundPhrases = listOf(
+        "Preparando la siguiente ronda espacial.",
+        "Seven activa otro reto rápido.",
+        "Mi nave está lista para una nueva ronda.",
+        "Continuamos con otra exploración.",
+        "Vamos con el siguiente reto de Seven.",
+        "Nueva ronda en camino.",
+        "La antena de Seven se prepara otra vez.",
+        "Sigamos con otra ronda rápida.",
+        "Seven abre un nuevo registro espacial.",
+        "La misión continúa con otro reto."
     )
 
-    /** Tiempo agotado en la última ronda: no anuncia otra pregunta. */
-    private val lastTimeExpired = listOf(
-        "El tiempo de la última ronda terminó. Completamos la actividad.",
-        "Se acabó el tiempo de esta última pista. Llegamos al final.",
-        "El reloj terminó en la ronda final. Ya terminamos las rondas.",
-        "Cerramos la última ronda. Gracias por participar.",
-        "La última ronda terminó. Completamos todas las pistas."
-    )
+    // ----- Cierre de sesión (CLASSIC_SESSION_COMPLETED) ---------------------------
 
     private val sessionCompleted = listOf(
-        "La actividad terminó. Gracias por participar.",
-        "Terminamos la ronda rápida de animales.",
-        "Completamos todas las rondas. Gracias por jugar.",
-        "La actividad finalizó. Me gustó escucharte.",
-        "Gracias por participar en el juego de animales.",
-        "Cerramos la actividad por ahora.",
-        "Terminamos el recorrido de animales.",
-        "Gracias por acompañarme en esta ronda.",
-        "La ronda rápida terminó.",
-        "Ya terminamos. Nos vemos en otra actividad."
+        "La ronda rápida terminó. Gracias por ayudar a Seven.",
+        "Seven completó la exploración con tiempo.",
+        "La misión rápida llegó a su final.",
+        "Terminamos todas las rondas espaciales.",
+        "Seven guardó las señales de esta exploración.",
+        "La actividad terminó. Gracias por participar con Seven.",
+        "Exploración finalizada. La nave cerró sus registros.",
+        "Seven terminó la ronda de retos terrestres.",
+        "Misión con temporizador completada.",
+        "Todas las rondas fueron registradas por Seven."
     )
 
-    // ----- API ------------------------------------------------------------------
+    // ----- API -------------------------------------------------------------------
 
     fun getSessionStart(): String = pick("session_start", sessionStart)
 
     /**
      * Frase combinada de transición + pregunta para una ronda.
      *
-     * Reduce las capas de voz a una sola reproducción. En la última ronda usa
-     * [lastRoundPrompt], que nunca anuncia otra pregunta.
+     * En la última ronda usa [lastRoundPrompt], que no anuncia otra pregunta.
+     * Con [mediationKey] válida usa lead-ins temáticos de Seven.
      */
     fun getRoundPrompt(
         round: Int,
@@ -179,17 +205,18 @@ class FixedTimerNeutralPhraseBank {
 
     /**
      * Frase neutra al agotarse el tiempo. En la última ronda usa
-     * [lastTimeExpired], que no anuncia otra pregunta.
+     * [lastTimeoutPhrases], que no anuncia otra pregunta.
      */
-    fun getTimeExpired(hadPartialResponse: Boolean, isLast: Boolean = false): String = when {
-        isLast -> pick("last_time_expired", lastTimeExpired)
-        hadPartialResponse -> pick("time_expired_with", timeExpiredWithResponse)
-        else -> pick("time_expired_no", timeExpiredNoResponse)
-    }
+    fun getTimeExpired(hadPartialResponse: Boolean, isLast: Boolean = false): String =
+        if (isLast) pick("last_time_expired", lastTimeoutPhrases)
+        else pick("time_expired", timeoutPhrases)
+
+    /** Anuncio opcional entre rondas, sin incluir la pregunta. */
+    fun getNextRound(): String = pick("next_round", nextRoundPhrases)
 
     fun getSessionCompleted(): String = pick("session_completed", sessionCompleted)
 
-    // ----- Internal -------------------------------------------------------------
+    // ----- Interno ---------------------------------------------------------------
 
     private fun fill(template: String, round: Int, questionText: String): String =
         template
