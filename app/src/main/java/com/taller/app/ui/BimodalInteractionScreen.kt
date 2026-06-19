@@ -42,11 +42,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +66,7 @@ import com.taller.app.bimodal.BimodalLatencyStats
 import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
+import com.taller.app.bimodal.FacePausePhraseBank
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
@@ -103,6 +106,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.taller.app.logger.InteractionDataLogger
 import kotlinx.coroutines.withTimeoutOrNull
@@ -371,6 +375,10 @@ private fun BimodalSession(
     // vive una sola instancia por actividad cargada.
     val animalBank = remember(activity) { AnimalMediationBank(generalFallback = feedbackGenerator) }
 
+    // Frases de pausa facial: Seven anuncia que perdio el rostro, que lo recupero y
+    // propone retomar la pregunta. No requiere red ni IA. Una instancia por actividad.
+    val facePhraseBank = remember(activity) { FacePausePhraseBank() }
+
     // Diagnostico de la ultima mediacion para la interfaz tecnica: origen efectivo
     // (siempre local en esta actividad), latencia de seleccion, tipo y motivo del
     // respaldo, si lo hubo. No contiene texto del nino.
@@ -407,6 +415,14 @@ private fun BimodalSession(
     val scope = rememberCoroutineScope()
     var logSessionId by remember(activity) { mutableStateOf(-1L) }
     var logAttemptId by remember(activity) { mutableStateOf(-1L) }
+
+    // Version del job de pausa facial: se incrementa cada vez que el orquestador
+    // entra a PAUSED_FACE_LOST durante una pregunta activa. Usar esta clave como
+    // clave del LaunchedEffect correspondiente garantiza que el job de pausa se
+    // reinicia en cada nueva perdida, pero NO se cancela cuando el rostro vuelve
+    // (porque la clave no cambia al salir de PAUSED_FACE_LOST). Esto permite que
+    // Seven termine de decir las frases de recuperacion sin ser interrumpido.
+    var faceLostJobVersion by remember(activity) { mutableIntStateOf(0) }
 
     fun sync() {
         state = orchestrator.state
@@ -612,10 +628,27 @@ private fun BimodalSession(
     fun onPresenceTransition(present: Boolean) {
         facePresent = present
         if (present) {
-            if (orchestrator.state == BimodalInteractionState.WAITING_FOR_FACE) {
-                dispatch { orchestrator.onFaceDetected() }
+            when (orchestrator.state) {
+                BimodalInteractionState.WAITING_FOR_FACE ->
+                    dispatch { orchestrator.onFaceDetected() }
+                BimodalInteractionState.PAUSED_FACE_LOST ->
+                    // Rostro recuperado durante una pregunta activa: el orquestador
+                    // retoma PRESENTING_QUESTION sin reiniciar el intento.
+                    dispatch { orchestrator.onFaceDetected() }
+                else -> Unit
             }
         } else {
+            // Si la perdida ocurre durante una pregunta activa, incrementamos la
+            // version del job de pausa ANTES del dispatch para que el LaunchedEffect
+            // correspondiente arranque con la version correcta desde el principio.
+            val pauseableStates = setOf(
+                BimodalInteractionState.PRESENTING_QUESTION,
+                BimodalInteractionState.WAITING_FOR_RESPONSE,
+                BimodalInteractionState.LISTENING
+            )
+            if (orchestrator.state in pauseableStates) {
+                faceLostJobVersion++
+            }
             dispatch { orchestrator.onFaceLost() }
         }
     }
@@ -809,10 +842,13 @@ private fun BimodalSession(
     // Cuando el flujo presenta una pregunta, el juguete la lee y, al terminar,
     // abre automaticamente la escucha si hay permiso de microfono. La clave cambia
     // en cada (re)presentacion (incluido un reintento) para releer la pregunta.
-    val presentationKey = if (state == BimodalInteractionState.PRESENTING_QUESTION) {
-        progress?.let { "${it.currentQuestionIndex}:${it.currentAttempt}" }
-    } else {
-        null
+    // PAUSED_FACE_LOST tambien mantiene la clave activa para que la voz que ya
+    // empezo no se corte a media frase cuando se pierde el rostro.
+    val presentationKey = when (state) {
+        BimodalInteractionState.PRESENTING_QUESTION,
+        BimodalInteractionState.PAUSED_FACE_LOST ->
+            progress?.let { "${it.currentQuestionIndex}:${it.currentAttempt}" }
+        else -> null
     }
     LaunchedEffect(presentationKey) {
         if (presentationKey == null) return@LaunchedEffect
@@ -923,6 +959,74 @@ private fun BimodalSession(
                 elevenLabsVoiceProvider.stop()
             }
             startVoiceCapture()
+        }
+    }
+
+    // ----- Pausa y reanudacion por perdida de rostro durante pregunta activa --------
+    // Se dispara cada vez que faceLostJobVersion cambia (es decir, cada vez que el
+    // rostro se pierde mientras hay una pregunta activa). La clave es un contador, no
+    // un booleano, para que el job NO se cancele cuando el rostro vuelve (al retornar
+    // a PRESENTING_QUESTION el contador no cambia). Esto permite que Seven termine la
+    // frase de recuperacion sin ser interrumpido. Si el rostro se pierde de nuevo
+    // durante la recuperacion, la version incrementa y el job anterior se cancela.
+    LaunchedEffect(faceLostJobVersion) {
+        if (faceLostJobVersion == 0) return@LaunchedEffect
+
+        val sid = logSessionId
+        val aid = logAttemptId
+        val questionText = currentQuestion?.questionText ?: ""
+        val qId = progress?.currentQuestionId?.toLongOrNull()
+
+        // Evento tecnico: rostro perdido durante pregunta (sin datos del nino).
+        if (sid > 0L) {
+            runCatching {
+                dataLogger.logTechnicalEvent(
+                    sessionId = sid,
+                    questionId = qId,
+                    attemptId = if (aid > 0L) aid else null,
+                    operationMode = "ADVANCED",
+                    eventType = "FACE_LOST"
+                )
+            }
+        }
+
+        // Espera a que termine cualquier locución en curso para no cortar a Seven
+        // a media frase (p. ej. si el rostro se pierde durante la introduccion).
+        snapshotFlow { toyVoiceSpeaking }.first { !it }
+
+        // Si el orquestador sigue en pausa, Seven avisa que no detecta el rostro.
+        if (orchestrator.state == BimodalInteractionState.PAUSED_FACE_LOST) {
+            speakAndAwait(facePhraseBank.getFaceLostPhrase())
+        }
+
+        // Espera a que el rostro vuelva (PAUSED_FACE_LOST → PRESENTING_QUESTION o
+        // la sesion termine/cancele). La resolucion la hace onPresenceTransition,
+        // que invoca orchestrator.onFaceDetected() al confirmar el rostro.
+        if (orchestrator.state == BimodalInteractionState.PAUSED_FACE_LOST) {
+            snapshotFlow { state }.first { it != BimodalInteractionState.PAUSED_FACE_LOST }
+        }
+
+        // Rostro recuperado: confirmar, retomar la misma pregunta y reabrir escucha.
+        if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION) {
+            if (sid > 0L) {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = sid,
+                        questionId = qId,
+                        attemptId = if (aid > 0L) aid else null,
+                        operationMode = "ADVANCED",
+                        eventType = "FACE_RETURNED"
+                    )
+                }
+            }
+            speakAndAwait(facePhraseBank.getFaceReturnedPhrase())
+            if (questionText.isNotBlank()) {
+                speakAndAwait(facePhraseBank.getResumeQuestionPhrase(questionText))
+            }
+            // Reabre la escucha para el mismo intento.
+            if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
+                startVoiceCapture()
+            }
         }
     }
 
@@ -1553,6 +1657,10 @@ private fun BimodalSession(
                         StatusLine("Esperando que el niño se ubique frente a la cámara…")
                     }
 
+                    BimodalInteractionState.PAUSED_FACE_LOST -> {
+                        StatusLine("Buscando el rostro del niño… la sesión sigue activa.")
+                    }
+
                     BimodalInteractionState.FACE_DETECTED,
                     BimodalInteractionState.PRESENTING_QUESTION -> {
                         when {
@@ -1993,7 +2101,12 @@ private fun FacePresenceCard(
 
     val analyzerExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val cameraProviderHolder = remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    val presenceTracker = remember { FacePresenceTracker() }
+    // Umbrales asimetricos: ~667 ms para confirmar aparicion (20 frames a 30 fps)
+    // y ~1333 ms para confirmar desaparicion (40 frames). Reduce falsos positivos de
+    // perdida de rostro por movimientos rapidos y evita pausas innecesarias.
+    val presenceTracker = remember {
+        FacePresenceTracker(framesToConfirmPresent = 20, framesToConfirmAbsent = 40)
+    }
 
     // Permite que el analizador (creado una sola vez) use siempre el callback
     // mas reciente sin necesidad de reconstruirlo en cada recomposicion.
@@ -2280,6 +2393,7 @@ private fun stateLabel(state: BimodalInteractionState): String = when (state) {
     BimodalInteractionState.LOADING_ACTIVITY -> "Cargando actividad"
     BimodalInteractionState.READY -> "Lista para iniciar"
     BimodalInteractionState.WAITING_FOR_FACE -> "Esperando rostro"
+    BimodalInteractionState.PAUSED_FACE_LOST -> "Pausado (sin rostro)"
     BimodalInteractionState.FACE_DETECTED -> "Rostro detectado"
     BimodalInteractionState.PRESENTING_QUESTION -> "Presentando pregunta"
     BimodalInteractionState.WAITING_FOR_RESPONSE -> "Esperando respuesta"

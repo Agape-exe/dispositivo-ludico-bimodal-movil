@@ -174,18 +174,31 @@ class BimodalFlowOrchestrator(
     }
 
     private fun handleFaceDetected() {
-        if (state != BimodalInteractionState.WAITING_FOR_FACE) return
-        transition(BimodalInteractionState.FACE_DETECTED)
-        presentCurrentQuestion()
+        when (state) {
+            BimodalInteractionState.WAITING_FOR_FACE -> {
+                transition(BimodalInteractionState.FACE_DETECTED)
+                presentCurrentQuestion()
+            }
+            BimodalInteractionState.PAUSED_FACE_LOST -> {
+                // Rostro recuperado tras pausa: retoma la misma pregunta y el mismo
+                // intento sin reiniciar el tiempo de inicio ni crear un nuevo intento.
+                updateProgress()
+                transition(BimodalInteractionState.PRESENTING_QUESTION)
+            }
+            else -> Unit
+        }
     }
 
     private fun handleFaceLost() {
         when (state) {
-            BimodalInteractionState.FACE_DETECTED,
+            BimodalInteractionState.FACE_DETECTED ->
+                // Todavia no habia empezado a hablar: vuelve a esperar rostro.
+                transition(BimodalInteractionState.WAITING_FOR_FACE)
             BimodalInteractionState.PRESENTING_QUESTION,
             BimodalInteractionState.WAITING_FOR_RESPONSE,
             BimodalInteractionState.LISTENING ->
-                transition(BimodalInteractionState.WAITING_FOR_FACE)
+                // Pregunta activa: pausa sin consumir intento ni marcar error del nino.
+                transition(BimodalInteractionState.PAUSED_FACE_LOST)
             else -> Unit
         }
     }

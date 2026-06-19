@@ -22,6 +22,13 @@ enum class BimodalInteractionState {
     /** Esperando la presencia (rostro) del nino frente al dispositivo. */
     WAITING_FOR_FACE,
 
+    /**
+     * Sesion activa pausada porque el rostro se perdio mientras se presentaba
+     * la pregunta o se escuchaba la respuesta. No cuenta como error del nino.
+     * Al volver a detectar rostro, retoma la pregunta sin repetir la introduccion.
+     */
+    PAUSED_FACE_LOST,
+
     /** Presencia detectada (estado de transito hacia la presentacion). */
     FACE_DETECTED,
 

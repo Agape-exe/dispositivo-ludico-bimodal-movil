@@ -10,7 +10,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun appearance_isConfirmedOnlyAfterEnoughConsecutiveFrames() {
-        val tracker = FacePresenceTracker(framesToConfirm = 3)
+        val tracker = FacePresenceTracker(3)
 
         // Frames 1 y 2 con rostro: aun no se confirma la aparicion.
         assertEquals(Transition.NONE, tracker.onFaceCount(1))
@@ -24,7 +24,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun appearance_emitsTransitionOnlyOnce() {
-        val tracker = FacePresenceTracker(framesToConfirm = 2)
+        val tracker = FacePresenceTracker(2)
 
         assertEquals(Transition.NONE, tracker.onFaceCount(1))
         assertEquals(Transition.APPEARED, tracker.onFaceCount(1))
@@ -37,7 +37,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun disappearance_isConfirmedAfterEnoughEmptyFrames() {
-        val tracker = FacePresenceTracker(framesToConfirm = 2)
+        val tracker = FacePresenceTracker(2)
 
         // Confirmar presencia primero.
         tracker.onFaceCount(1)
@@ -54,7 +54,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun briefFlicker_doesNotChangeConfirmedPresence() {
-        val tracker = FacePresenceTracker(framesToConfirm = 3)
+        val tracker = FacePresenceTracker(3)
 
         // Confirmar presencia.
         tracker.onFaceCount(1)
@@ -71,7 +71,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun interruptedDisappearance_restartsTheStreak() {
-        val tracker = FacePresenceTracker(framesToConfirm = 3)
+        val tracker = FacePresenceTracker(3)
 
         tracker.onFaceCount(1)
         tracker.onFaceCount(1)
@@ -91,7 +91,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun withThresholdOne_appearanceAndDisappearanceAreImmediate() {
-        val tracker = FacePresenceTracker(framesToConfirm = 1)
+        val tracker = FacePresenceTracker(1)
 
         assertEquals(Transition.APPEARED, tracker.onFaceCount(2))
         assertTrue(tracker.isPresent)
@@ -101,7 +101,7 @@ class FacePresenceTrackerTest {
 
     @Test
     fun reset_clearsPresenceAndPendingCandidate() {
-        val tracker = FacePresenceTracker(framesToConfirm = 2)
+        val tracker = FacePresenceTracker(2)
 
         tracker.onFaceCount(1)
         assertEquals(Transition.APPEARED, tracker.onFaceCount(1))

@@ -5,20 +5,24 @@ package com.taller.app.vision
  * transiciones de presencia estables.
  *
  * ML Kit puede informar la presencia o ausencia de un rostro muchas veces por
- * segundo y con parpadeos puntuales. Esta clase aplica un pequeño debounce: solo
- * confirma un cambio de presencia cuando se observa el mismo resultado durante
- * [framesToConfirm] frames consecutivos, y emite una unica transicion en ese
- * momento. Mientras la presencia no cambia, devuelve [Transition.NONE].
+ * segundo y con parpadeos puntuales. Esta clase aplica un debounce asimetrico:
+ * confirma la APARICION de un rostro tras [framesToConfirmPresent] frames
+ * consecutivos con deteccion, y la DESAPARICION tras [framesToConfirmAbsent]
+ * frames consecutivos sin deteccion. Solo emite una transicion cuando el umbral
+ * correspondiente se alcanza. Mientras la presencia no cambia, devuelve
+ * [Transition.NONE].
  *
  * Es logica pura, independiente de Android y de la camara, para poder probarse
  * con pruebas unitarias. El llamador debe invocar [onFaceCount] siempre desde el
  * mismo hilo (el ejecutor del analizador), ya que mantiene estado interno.
  *
- * @param framesToConfirm cantidad de frames consecutivos necesarios para
- *        confirmar un cambio de presencia. Debe ser >= 1.
+ * @param framesToConfirmPresent frames consecutivos para confirmar aparicion (>= 1).
+ * @param framesToConfirmAbsent frames consecutivos para confirmar desaparicion (>= 1).
+ *        Por defecto igual a [framesToConfirmPresent] para comportamiento simetrico.
  */
 class FacePresenceTracker(
-    private val framesToConfirm: Int = 3
+    private val framesToConfirmPresent: Int = 3,
+    private val framesToConfirmAbsent: Int = framesToConfirmPresent
 ) {
 
     /** Resultado de procesar un frame. */
@@ -34,7 +38,8 @@ class FacePresenceTracker(
     }
 
     init {
-        require(framesToConfirm >= 1) { "framesToConfirm debe ser >= 1" }
+        require(framesToConfirmPresent >= 1) { "framesToConfirmPresent debe ser >= 1" }
+        require(framesToConfirmAbsent >= 1) { "framesToConfirmAbsent debe ser >= 1" }
     }
 
     /** Presencia confirmada actual (con debounce ya aplicado). */
@@ -66,7 +71,8 @@ class FacePresenceTracker(
             candidateStreak = 1
         }
 
-        if (candidateStreak >= framesToConfirm) {
+        val threshold = if (detected) framesToConfirmPresent else framesToConfirmAbsent
+        if (candidateStreak >= threshold) {
             isPresent = detected
             candidateStreak = 0
             return if (detected) Transition.APPEARED else Transition.DISAPPEARED
