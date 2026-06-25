@@ -46,6 +46,14 @@ class AnimalMediationBank(
 
     fun getSessionStartPhrase(): String = pick("MISSION_START", MISSION_START)
 
+    /**
+     * Saludo inicial de Seven al detectar por primera vez el rostro del niño en el
+     * modo inteligente. La pantalla lo reproduce una sola vez por sesión, antes del
+     * inicio de misión y de la introducción de la pregunta.
+     */
+    fun getInitialFaceGreetingPhrase(): String =
+        pick("ADVANCED_INITIAL_FACE_GREETING", ADVANCED_INITIAL_FACE_GREETING)
+
     fun getSessionCompletedPhrase(): String = pick("MISSION_COMPLETED", MISSION_COMPLETED)
 
     fun getNotInterpretableFeedback(): String =
@@ -206,6 +214,24 @@ class AnimalMediationBank(
             "Mi computadora espacial dice que tú conoces mejor este planeta. ¿Me ayudas en la misión?",
             "¡Bienvenido a la exploración de Seven! Hoy descubriremos animalitos terrestres.",
             "Seven tiene una misión especial: aprender de los animales con ayuda de un niño experto de la Tierra."
+        )
+
+        // ----- Saludo inicial al detectar el rostro (ADVANCED_INITIAL_FACE_GREETING) -----
+        // Solo se reproduce una vez por sesión, cuando Seven detecta por primera vez al
+        // niño, antes del inicio de misión. No es un saludo de reaparición (eso lo
+        // cubre FacePausePhraseBank), sino el saludo de bienvenida de la sesión.
+
+        val ADVANCED_INITIAL_FACE_GREETING: List<String> = listOf(
+            "¡Hola, amiguito explorador! Seven puede verte perfectamente. Necesito tu ayuda para responder unos retos de la Tierra.",
+            "¡Hey, ya te veo! Soy Seven, tu amigo del espacio. ¿Me ayudas a aprender cosas nuevas?",
+            "¡Señal visual recibida! Seven te encontró y está listo para empezar la misión.",
+            "¡Hola! Mi cámara espacial ya puede verte. Ahora necesito tu voz para aprender sobre la Tierra.",
+            "¡Ahí estás! Seven estaba buscándote. Gracias por venir a ayudarme en esta exploración.",
+            "¡Qué bueno verte! Soy Seven y tengo una misión especial para resolver contigo.",
+            "¡Rostro detectado por mi radar espacial! Seven está feliz de empezar contigo.",
+            "¡Hola, explorador terrestre! Puedo verte muy bien. Prepárate para ayudar a mi nave.",
+            "¡Perfecto, ya apareciste en mi pantalla espacial! Seven necesita tu ayuda para descubrir nuevos datos.",
+            "¡Bienvenido! Seven puede verte y está listo para escuchar tus respuestas."
         )
 
         // ----- Cierre de misión (ADVANCED_SESSION_COMPLETED) --------------------

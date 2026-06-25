@@ -68,6 +68,37 @@ class AnimalMediationBankTest {
     }
 
     @Test
+    fun advancedInitialFaceGreeting_hasAtLeastTenPhrases() {
+        assertTrue(
+            "ADVANCED_INITIAL_FACE_GREETING tiene ${AnimalMediationBank.ADVANCED_INITIAL_FACE_GREETING.size} frases",
+            AnimalMediationBank.ADVANCED_INITIAL_FACE_GREETING.size >= 10
+        )
+    }
+
+    @Test
+    fun getInitialFaceGreetingPhrase_returnsPhraseFromItsBank() {
+        val bank = newBank()
+        repeat(40) {
+            val phrase = bank.getInitialFaceGreetingPhrase()
+            assertTrue(
+                "El saludo inicial no proviene de su banco: $phrase",
+                AnimalMediationBank.ADVANCED_INITIAL_FACE_GREETING.contains(phrase)
+            )
+        }
+    }
+
+    @Test
+    fun getInitialFaceGreetingPhrase_doesNotRepeatConsecutively() {
+        val bank = newBank()
+        var previous: String? = null
+        repeat(200) {
+            val current = bank.getInitialFaceGreetingPhrase()
+            assertTrue("Saludo inicial repetido consecutivo: $current", current != previous)
+            previous = current
+        }
+    }
+
+    @Test
     fun advancedQuestionIntroGeneral_hasAtLeastTenPhrases() {
         assertTrue(
             "ADVANCED_QUESTION_INTRO_GENERAL tiene ${AnimalMediationBank.ADVANCED_QUESTION_INTRO_GENERAL.size} frases",
