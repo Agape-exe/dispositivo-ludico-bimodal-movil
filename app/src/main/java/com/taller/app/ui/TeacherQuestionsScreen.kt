@@ -9,10 +9,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -25,11 +29,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,9 +46,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
@@ -65,38 +71,27 @@ fun TeacherQuestionsScreen(activityId: Long, onBack: () -> Unit) {
     val questions by questionDao.getByActivityId(activityId).collectAsState(initial = emptyList())
     var activity by remember { mutableStateOf<ActivityEntity?>(null) }
     var activityNotFound by remember { mutableStateOf(false) }
+    var view by remember { mutableStateOf(QuestionView.LIST) }
+    var editingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
 
     LaunchedEffect(activityId) {
         val found = activityDao.getById(activityId)
         if (found == null) activityNotFound = true else activity = found
     }
 
-    var view by remember { mutableStateOf(QuestionView.LIST) }
-    var editingQuestion by remember { mutableStateOf<QuestionEntity?>(null) }
-
     BackHandler {
         if (view == QuestionView.FORM) view = QuestionView.LIST else onBack()
     }
 
     when {
-        activityNotFound -> {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "La actividad no existe o fue eliminada.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = onBack) { Text("Volver") }
-                }
-            }
+        activityNotFound -> MissingActivityView(onBack)
+        activity == null -> Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = TeacherPrimaryPurple)
         }
-        activity == null -> {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        }
+
         view == QuestionView.LIST -> QuestionListView(
             activity = activity!!,
             questions = questions,
@@ -105,14 +100,15 @@ fun TeacherQuestionsScreen(activityId: Long, onBack: () -> Unit) {
                 editingQuestion = null
                 view = QuestionView.FORM
             },
-            onEdit = { question ->
-                editingQuestion = question
+            onEdit = {
+                editingQuestion = it
                 view = QuestionView.FORM
             },
             onDelete = { question ->
                 scope.launch { questionDao.deleteById(question.id) }
             }
         )
+
         else -> QuestionFormView(
             activityId = activityId,
             existing = editingQuestion,
@@ -128,6 +124,24 @@ fun TeacherQuestionsScreen(activityId: Long, onBack: () -> Unit) {
 }
 
 @Composable
+private fun MissingActivityView(onBack: () -> Unit) {
+    TeacherPanelContainer {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "La actividad no existe o fue eliminada.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+                BottomBackButton(onClick = onBack, modifier = Modifier.width(150.dp))
+            }
+        }
+    }
+}
+
+@Composable
 private fun QuestionListView(
     activity: ActivityEntity,
     questions: List<QuestionEntity>,
@@ -138,64 +152,54 @@ private fun QuestionListView(
 ) {
     var questionToDelete by remember { mutableStateOf<QuestionEntity?>(null) }
 
-    if (questionToDelete != null) {
+    questionToDelete?.let { question ->
         AlertDialog(
             onDismissRequest = { questionToDelete = null },
-            title = { Text("Eliminar pregunta") },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = Color.White,
+            title = { Text("Eliminar pregunta", color = TeacherTitleColor) },
             text = { Text("¿Deseas eliminar esta pregunta? Esta acción no se puede deshacer.") },
             confirmButton = {
-                TextButton(onClick = {
-                    onDelete(questionToDelete!!)
-                    questionToDelete = null
-                }) {
+                TextButton(
+                    onClick = {
+                        onDelete(question)
+                        questionToDelete = null
+                    }
+                ) {
                     Text("Eliminar", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { questionToDelete = null }) {
-                    Text("Cancelar")
+                    Text("Cancelar", color = TeacherPrimaryPurple)
                 }
             }
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Preguntas",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = activity.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            OutlinedButton(onClick = onBack) {
-                Text("Volver")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = onCreate,
+    TeacherPanelContainer(modifier = Modifier.navigationBarsPadding()) {
+        Spacer(modifier = Modifier.height(38.dp))
+        SectionTitle(
+            text = "Preguntas",
+            centered = true,
             modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("+ Nueva pregunta")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = activity.name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = TeacherSecondaryTextColor,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+        PastelActionButton(
+            text = "+ Nueva pregunta",
+            onClick = onCreate,
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        )
+        Spacer(modifier = Modifier.height(22.dp))
 
         if (questions.isEmpty()) {
             Box(
@@ -205,82 +209,95 @@ private fun QuestionListView(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Esta actividad todavía no tiene preguntas.\nAgrega la primera con el botón de arriba.",
+                    text = "Esta actividad todavía no tiene preguntas.\nAgrega la primera para comenzar.",
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TeacherSecondaryTextColor,
+                    textAlign = TextAlign.Center
                 )
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(questions, key = { it.id }) { question ->
-                    QuestionCard(
+                    TeacherQuestionCard(
                         question = question,
                         onEdit = { onEdit(question) },
                         onDelete = { questionToDelete = question }
                     )
                 }
+                item { Spacer(modifier = Modifier.height(4.dp)) }
             }
         }
+
+        BottomBackButton(
+            onClick = onBack,
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .padding(vertical = 18.dp)
+                .width(150.dp)
+        )
     }
 }
 
 @Composable
-private fun QuestionCard(
+private fun TeacherQuestionCard(
     question: QuestionEntity,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val mediationKey = LocalMediationKey.fromKey(question.mediationKey)
-
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = TeacherCardLavender),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(20.dp)) {
             Text(
                 text = "${question.orderIndex}. ${question.questionText}",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Bold,
+                color = TeacherTextColor
             )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Respuesta: ${question.expectedAnswer}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "Palabras clave: ${question.keywords}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "Tiempo: ${question.maxTimeSeconds}s · Intentos: ${question.maxAttempts}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline
-            )
-            if (mediationKey != LocalMediationKey.NONE) {
-                Text(
-                    text = "Mediación: ${mediationKey.displayName}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
             Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
-                    Text("Editar")
-                }
+            Text(
+                text = "Respuesta esperada:",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = TeacherPrimaryPurple
+            )
+            Text(
+                text = question.expectedAnswer,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TeacherSecondaryTextColor
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
-                    onClick = onDelete,
-                    modifier = Modifier.weight(1f),
+                    onClick = onEdit,
+                    shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
+                        containerColor = Color.White,
+                        contentColor = TeacherPrimaryPurple
+                    ),
+                    border = null,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Eliminar")
+                    Text("Editar", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = onDelete,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TeacherSmallPurple,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Eliminar", fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -296,7 +313,6 @@ private fun QuestionFormView(
     onCancel: () -> Unit
 ) {
     val key = existing?.id
-
     var orderIndex by remember(key) { mutableStateOf(existing?.orderIndex?.toString() ?: "1") }
     var questionText by remember(key) { mutableStateOf(existing?.questionText ?: "") }
     var expectedAnswer by remember(key) { mutableStateOf(existing?.expectedAnswer ?: "") }
@@ -324,139 +340,87 @@ private fun QuestionFormView(
             !orderIndexError && !timeError && !attemptsError
     }
 
-    Column(
+    TeacherPanelContainer(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
+            .imePadding()
+            .navigationBarsPadding()
             .verticalScroll(rememberScrollState())
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = if (existing == null) "Nueva pregunta" else "Editar pregunta",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            OutlinedButton(onClick = onCancel) {
-                Text("Cancelar")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Datos de la pregunta",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary
+        Spacer(modifier = Modifier.height(34.dp))
+        TeacherFormHeader(
+            title = if (existing == null) "Nueva Pregunta" else "Editar Pregunta",
+            onCancel = onCancel
         )
+        Spacer(modifier = Modifier.height(26.dp))
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
+        PastelTextField(
             value = orderIndex,
             onValueChange = { orderIndex = it; orderIndexError = false },
-            label = { Text("Orden de la pregunta *") },
+            label = "Orden de la pregunta *",
             isError = orderIndexError,
-            supportingText = if (orderIndexError) {
-                { Text("Debe ser un número mayor o igual a 1") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
+            supportingText = if (orderIndexError) "Debe ser un número mayor o igual a 1" else null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
             value = questionText,
             onValueChange = { questionText = it; questionTextError = false },
-            label = { Text("Texto de la pregunta *") },
+            label = "Texto de la pregunta *",
             isError = questionTextError,
-            supportingText = if (questionTextError) {
-                { Text("El texto de la pregunta es obligatorio") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 2
+            supportingText = if (questionTextError) "El texto de la pregunta es obligatorio" else null,
+            singleLine = false,
+            minLines = 3
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
             value = expectedAnswer,
             onValueChange = { expectedAnswer = it; expectedAnswerError = false },
-            label = { Text("Respuesta esperada principal *") },
+            label = "Respuesta esperada principal *",
             isError = expectedAnswerError,
-            supportingText = if (expectedAnswerError) {
-                { Text("La respuesta esperada es obligatoria") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
+            supportingText = if (expectedAnswerError) "La respuesta esperada es obligatoria" else null
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
             value = keywords,
             onValueChange = { keywords = it; keywordsError = false },
-            label = { Text("Respuestas aceptadas / palabras clave *") },
+            label = "Palabras clave *",
             isError = keywordsError,
             supportingText = if (keywordsError) {
-                { Text("Ingresa al menos una palabra clave") }
+                "Ingresa al menos una palabra clave"
             } else {
-                { Text("Separa las respuestas válidas con comas.") }
+                "Separa las respuestas válidas con comas."
             },
-            placeholder = { Text("ej: guau, guau guau, ladra, ladrido") },
-            modifier = Modifier.fillMaxWidth(),
+            placeholder = "ej: guau, ladra, ladrido",
+            singleLine = false,
             minLines = 2
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
             value = maxTimeSeconds,
             onValueChange = { maxTimeSeconds = it; timeError = false },
-            label = { Text("Tiempo máximo de respuesta (segundos) *") },
+            label = "Tiempo máximo (s) *",
             isError = timeError,
-            supportingText = if (timeError) {
-                { Text("Debe ser un número mayor que 0") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
+            supportingText = if (timeError) "Debe ser un número mayor que 0" else null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedTextField(
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
             value = maxAttempts,
             onValueChange = { maxAttempts = it; attemptsError = false },
-            label = { Text("Intentos máximos *") },
+            label = "Intentos máximos *",
             isError = attemptsError,
-            supportingText = if (attemptsError) {
-                { Text("Debe ser un número mayor que 0") }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
+            supportingText = if (attemptsError) "Debe ser un número mayor que 0" else null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
-
-        Spacer(modifier = Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(26.dp))
 
         Text(
-            text = "Mediación local",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary
+            text = "Configuración adicional",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = TeacherPrimaryPurple
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
+        Spacer(modifier = Modifier.height(12.dp))
         ExposedDropdownMenuBox(
             expanded = mediationDropdownExpanded,
             onExpandedChange = { mediationDropdownExpanded = it }
@@ -465,10 +429,22 @@ private fun QuestionFormView(
                 value = mediationKey.displayName,
                 onValueChange = {},
                 readOnly = true,
-                label = { Text("Clave de mediación local") },
-                supportingText = { Text("Permite asociar esta pregunta con frases lúdicas predefinidas del juguete.") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = mediationDropdownExpanded) },
-                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                label = { Text("Mediación local") },
+                supportingText = { Text("Asocia frases lúdicas predefinidas del juguete.") },
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(
+                        expanded = mediationDropdownExpanded
+                    )
+                },
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = TeacherPrimaryPurple,
+                    unfocusedBorderColor = TeacherPrimaryPurple,
+                    focusedLabelColor = TeacherPrimaryPurple,
+                    unfocusedLabelColor = TeacherTitleColor,
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -489,10 +465,10 @@ private fun QuestionFormView(
                 }
             }
         }
+        Spacer(modifier = Modifier.height(28.dp))
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(
+        PastelActionButton(
+            text = if (existing == null) "Guardar pregunta" else "Editar pregunta",
             onClick = {
                 if (validate()) {
                     val now = System.currentTimeMillis()
@@ -508,16 +484,17 @@ private fun QuestionFormView(
                             maxAttempts = maxAttempts.toInt(),
                             createdAt = existing?.createdAt ?: now,
                             updatedAt = now,
-                            mediationKey = if (mediationKey == LocalMediationKey.NONE) null else mediationKey.name
+                            mediationKey = if (mediationKey == LocalMediationKey.NONE) {
+                                null
+                            } else {
+                                mediationKey.name
+                            }
                         )
                     )
                 }
             },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(if (existing == null) "Guardar pregunta" else "Actualizar pregunta")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        )
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
