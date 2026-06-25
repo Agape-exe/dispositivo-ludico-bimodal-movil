@@ -1,6 +1,7 @@
 package com.taller.app.ui
 
 enum class Screen {
+    HOME,
     MAIN,
     FACE_DETECTION,
     SPEECH_TEST,
