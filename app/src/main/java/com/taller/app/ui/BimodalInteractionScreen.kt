@@ -137,6 +137,33 @@ private fun speechTimeoutMsFor(text: String): Long =
         .coerceAtMost(SPEECH_TIMEOUT_MAX_MS)
 
 /**
+ * Divide un texto en segmentos cortos de voz por oraciones (puntuacion fuerte y
+ * saltos de linea), conservando el signo final de cada oracion. Reproducir la
+ * presentacion en segmentos cortos permite que el flujo reaccione rapido a una
+ * perdida de rostro: Seven termina el segmento en curso (breve) en vez de leer toda
+ * la introduccion antes de poder pausar. Si el texto no tiene puntuacion fuerte,
+ * devuelve el texto completo como un unico segmento.
+ */
+private fun splitIntoSpeechSegments(text: String): List<String> {
+    val segments = mutableListOf<String>()
+    val current = StringBuilder()
+    for (ch in text) {
+        current.append(ch)
+        if (ch == '.' || ch == '!' || ch == '?' || ch == '\n') {
+            val segment = current.toString().trim()
+            if (segment.isNotEmpty()) segments.add(segment)
+            current.setLength(0)
+        }
+    }
+    val tail = current.toString().trim()
+    if (tail.isNotEmpty()) segments.add(tail)
+    return segments.ifEmpty {
+        val whole = text.trim()
+        if (whole.isEmpty()) emptyList() else listOf(whole)
+    }
+}
+
+/**
  * Tiempo maximo que el flujo puede permanecer en "preparando la pregunta" antes de
  * que la salvaguarda fuerce la apertura de la escucha. Se fija por encima del tope
  * maximo de una sola reproduccion ([SPEECH_TIMEOUT_MAX_MS]) para no interrumpir una
@@ -835,9 +862,12 @@ private fun BimodalSession(
         }
     }
 
-    // Guarda los indices de pregunta para los que ya se anuncio WAITING_FOR_FACE,
-    // evitando repetir la frase si el rostro se pierde y vuelve en la misma pregunta.
-    val lastAnnouncedWaitingFaceIndex = remember(activity) { intArrayOf(-1) }
+    // Marca si Seven ya dio el saludo inicial de bienvenida en esta sesion. El saludo
+    // suena una sola vez, al detectar el rostro por primera vez (en la primera
+    // presentacion de pregunta), y nunca se repite aunque el rostro se pierda y vuelva.
+    // Se reinicia al (re)iniciar la interaccion para que una sesion nueva pueda
+    // saludar de nuevo.
+    val initialGreetingSpoken = remember(activity) { booleanArrayOf(false) }
 
     // Cuando el flujo presenta una pregunta, el juguete la lee y, al terminar,
     // abre automaticamente la escucha si hay permiso de microfono. La clave cambia
@@ -920,18 +950,54 @@ private fun BimodalSession(
             "Ahora dime: $questionText"
         }
 
-        // Lee la pregunta y SUSPENDE hasta que el audio termina por completo (con tope
-        // de seguridad dentro de speakAndAwait). Solo entonces abre la escucha, de modo
-        // que la voz nunca se solapa con la captura del microfono ni se corta a media
-        // frase. Si el efecto se cancela (cambio de estado o pregunta), speakAndAwait
-        // detiene el audio pendiente.
-        Log.d(BIMODAL_VOICE_TAG, "preparacion: reproduccion intro inicio")
-        speakAndAwait(presentationText)
+        // Saludo inicial: la primera vez que se presenta una pregunta tras detectar el
+        // rostro (solo la primera pregunta y una unica vez por sesion), Seven saluda y
+        // luego anuncia el inicio de la mision, ANTES de la introduccion de la pregunta.
+        // Se marca como dado de inmediato para no repetirlo si el rostro se pierde y
+        // vuelve durante la sesion.
+        val playInitialGreeting =
+            !initialGreetingSpoken[0] && (progress?.currentQuestionIndex ?: 0) == 0
+        if (playInitialGreeting) initialGreetingSpoken[0] = true
+
+        // Reproduce la presentacion en segmentos cortos: saludo inicial, inicio de
+        // mision e introduccion divida por oraciones. Entre segmentos comprueba si hubo
+        // una perdida de rostro (faceLostJobVersion cambia respecto del inicio): de ser
+        // asi, deja de hablar y cede el control al job de pausa, que retomara la pregunta
+        // cuando el rostro vuelva. Asi, si el nino sale del encuadre durante una intro
+        // larga, Seven entra en pausa al terminar el segmento en curso en vez de leer
+        // toda la introduccion antes de poder reaccionar. SUSPENDE en cada segmento hasta
+        // que su audio termina, de modo que la voz nunca se solapa con la captura.
+        val versionAtStart = faceLostJobVersion
+        val presentationSegments = buildList {
+            if (playInitialGreeting) {
+                add(animalBank.getInitialFaceGreetingPhrase())
+                add(animalBank.getSessionStartPhrase())
+            }
+            addAll(splitIntoSpeechSegments(presentationText))
+        }
+        Log.d(
+            BIMODAL_VOICE_TAG,
+            "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos)"
+        )
+        var interruptedByFaceLost = false
+        for (segment in presentationSegments) {
+            if (faceLostJobVersion != versionAtStart) {
+                interruptedByFaceLost = true
+                break
+            }
+            speakAndAwait(segment)
+        }
         Log.d(BIMODAL_VOICE_TAG, "preparacion: reproduccion intro fin estado=${orchestrator.state}")
 
-        // Garantiza la salida de "preparando la pregunta": si seguimos presentando y
-        // hay permiso de microfono, abre la escucha. Si no, queda el boton manual.
-        if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
+        // Garantiza la salida de "preparando la pregunta": si NO hubo perdida de rostro
+        // (en ese caso el job de pausa reabre la escucha al retomar) y seguimos
+        // presentando con permiso de microfono, abre la escucha. Si no, queda el boton
+        // manual.
+        if (!interruptedByFaceLost &&
+            faceLostJobVersion == versionAtStart &&
+            orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION &&
+            audioGranted
+        ) {
             startVoiceCapture()
         }
     }
@@ -1030,32 +1096,12 @@ private fun BimodalSession(
         }
     }
 
-    // ----- Saludo de apertura ------------------------------------------------------
-    // Solo la primera pregunta tiene saludo de bienvenida mientras se espera el
-    // rostro. El paso entre preguntas (rostro reanunciado) no agrega voz, porque la
-    // presentacion de la pregunta ya lee su propia introduccion. La retroalimentacion
-    // de cada respuesta y el cierre de la sesion se reproducen, de forma estrictamente
-    // secuencial, en el efecto de avance automatico de mas abajo.
-    //
-    // La clave es el indice de pregunta para disparar el efecto una sola vez por
-    // pregunta, aunque Compose recomponga o el rostro se pierda y reaparezca.
-    val sessionStartVoiceKey: Int? =
-        if (state == BimodalInteractionState.WAITING_FOR_FACE) {
-            progress?.currentQuestionIndex ?: 0
-        } else {
-            null
-        }
-
-    LaunchedEffect(sessionStartVoiceKey) {
-        val qi = sessionStartVoiceKey ?: return@LaunchedEffect
-        // El saludo de apertura solo corresponde a la primera pregunta.
-        if (qi != 0) return@LaunchedEffect
-        // Solo anunciar una vez por indice de pregunta: si el rostro se pierde y
-        // reaparece en la misma pregunta, no se repite.
-        if (lastAnnouncedWaitingFaceIndex[0] == qi) return@LaunchedEffect
-        lastAnnouncedWaitingFaceIndex[0] = qi
-        speakAndAwait(animalBank.getSessionStartPhrase())
-    }
+    // El saludo inicial de bienvenida y el inicio de mision ya no se reproducen
+    // mientras se espera el rostro: ahora suenan al detectar al nino por primera vez,
+    // dentro de la presentacion de la primera pregunta (ver el efecto de presentacion
+    // mas arriba). Asi Seven saluda cuando realmente ve al nino y respeta el orden
+    // saludo -> inicio de mision -> introduccion de la pregunta. El paso entre
+    // preguntas no agrega voz propia: cada presentacion lee su introduccion.
 
     // ----- Retroalimentacion de voz + avance automatico del flujo -----------------
     // Cuando la pregunta llega a un desenlace (feedback o tiempo agotado), este unico
@@ -1238,6 +1284,8 @@ private fun BimodalSession(
         latencyTracker.reset()
         latencyStats = BimodalLatencyStats()
         logAttemptId = -1L
+        // Una sesion nueva puede volver a dar el saludo inicial de bienvenida.
+        initialGreetingSpoken[0] = false
         dispatch {
             orchestrator.loadActivity(activity)
             orchestrator.markActivityLoaded()
@@ -2101,11 +2149,13 @@ private fun FacePresenceCard(
 
     val analyzerExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val cameraProviderHolder = remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    // Umbrales asimetricos: ~667 ms para confirmar aparicion (20 frames a 30 fps)
-    // y ~1333 ms para confirmar desaparicion (40 frames). Reduce falsos positivos de
-    // perdida de rostro por movimientos rapidos y evita pausas innecesarias.
+    // Umbrales asimetricos reducidos para una reaccion rapida: ~270-400 ms para
+    // confirmar aparicion/recuperacion (8 frames) y ~400-600 ms para confirmar
+    // desaparicion (12 frames), segun los frames efectivos que entregue ML Kit. Es un
+    // debounce pequeno: detecta rapido la perdida y el regreso del rostro sin reaccionar
+    // a parpadeos puntuales ni a falsos negativos por movimientos breves.
     val presenceTracker = remember {
-        FacePresenceTracker(framesToConfirmPresent = 20, framesToConfirmAbsent = 40)
+        FacePresenceTracker(framesToConfirmPresent = 8, framesToConfirmAbsent = 12)
     }
 
     // Permite que el analizador (creado una sola vez) use siempre el callback
