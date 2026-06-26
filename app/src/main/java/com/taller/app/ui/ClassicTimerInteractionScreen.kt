@@ -7,7 +7,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,8 +22,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,10 +45,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.taller.app.classic.ClassicTimerProgress
 import com.taller.app.classic.ClassicTimerRunner
@@ -78,6 +83,13 @@ import com.taller.app.logger.InteractionDataLogger
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CLASSIC_LOG_TAG = "ClassicTimer"
+
+private val ClassicTimerOrange = Color(0xFFF29A00)
+private val ClassicTimerCardYellow = Color(0xFFFFF0A6)
+private val ClassicTimerTitleText = Color(0xFFF29A00)
+private val ClassicTimerPrimaryText = Color(0xFF2E2535)
+private val ClassicTimerSecondaryText = Color(0xFF3F3A4A)
+private val ClassicTimerBackground = Color(0xFFFFFFFF)
 
 private const val SPEECH_TIMEOUT_MIN_MS = 12_000L
 private const val SPEECH_TIMEOUT_MAX_MS = 45_000L
@@ -185,39 +197,41 @@ private fun ClassicActivitySelector(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .background(ClassicTimerBackground)
+            .padding(horizontal = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Modo temporizador fijo",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            OutlinedButton(onClick = onBack) { Text("Volver") }
-        }
+        Spacer(modifier = Modifier.height(48.dp))
 
-        Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "Selecciona una actividad para iniciar el modo de temporizador fijo.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = "Modo\nTemporizador",
+            fontSize = 36.sp,
+            lineHeight = 40.sp,
+            fontWeight = FontWeight.Bold,
+            color = ClassicTimerTitleText,
+            textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(12.dp))
 
+        Text(
+            text = "Selecciona una actividad\npara iniciar el flujo",
+            fontSize = 17.sp,
+            lineHeight = 23.sp,
+            color = ClassicTimerSecondaryText,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(28.dp))
+
         if (infoMessage != null) {
             InfoBanner(infoMessage)
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = ClassicTimerOrange)
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (activities.isEmpty()) {
@@ -227,46 +241,121 @@ private fun ClassicActivitySelector(
                     .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "No hay actividades disponibles.\nCrea una actividad desde el panel docente.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "No hay actividades disponibles.",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = ClassicTimerPrimaryText,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Crea una actividad desde el Panel Docente para iniciar el temporizador.",
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp,
+                        color = ClassicTimerSecondaryText,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(activities, key = { it.id }) { activity ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onPick(activity) },
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = activity.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "Tema: ${activity.topic}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Toca para iniciar el temporizador fijo",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
+                    ClassicActivityCard(
+                        activity = activity,
+                        onStart = { onPick(activity) }
+                    )
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        BottomBackButton(onBack = onBack)
+        Spacer(modifier = Modifier.height(28.dp))
+    }
+}
+
+@Composable
+private fun ClassicActivityCard(
+    activity: ActivityEntity,
+    onStart: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(0.86f),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = ClassicTimerCardYellow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = activity.name,
+                fontSize = 18.sp,
+                lineHeight = 23.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = ClassicTimerPrimaryText,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = activity.topic,
+                fontSize = 14.sp,
+                lineHeight = 19.sp,
+                color = ClassicTimerSecondaryText,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            ClassicStartButton(onStart = onStart)
+        }
+    }
+}
+
+@Composable
+private fun ClassicStartButton(onStart: () -> Unit) {
+    Button(
+        onClick = onStart,
+        shape = RoundedCornerShape(18.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = ClassicTimerOrange,
+            contentColor = Color.White
+        ),
+        modifier = Modifier.width(128.dp)
+    ) {
+        Text(
+            text = "Iniciar",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun BottomBackButton(onBack: () -> Unit) {
+    Button(
+        onClick = onBack,
+        shape = RoundedCornerShape(22.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = ClassicTimerOrange,
+            contentColor = Color.White
+        ),
+        modifier = Modifier.width(148.dp)
+    ) {
+        Text(
+            text = "Volver",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
