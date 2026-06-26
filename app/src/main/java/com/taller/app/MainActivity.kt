@@ -5,10 +5,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.taller.app.ui.BimodalInteractionScreen
 import com.taller.app.ui.ClassicTimerInteractionScreen
+import com.taller.app.ui.ClassicSevenFaceScreen
 import com.taller.app.ui.FaceDetectionScreen
 import com.taller.app.ui.HomeScreen
 import com.taller.app.ui.MetricsExportScreen
@@ -26,63 +27,80 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TallerAppTheme {
-                var currentScreen by remember { mutableStateOf(Screen.HOME) }
-                var selectedActivityId by remember { mutableStateOf(0L) }
+                var currentScreenName by rememberSaveable { mutableStateOf(Screen.HOME.name) }
+                var selectedActivityId by rememberSaveable { mutableStateOf(0L) }
+                val currentScreen = runCatching { Screen.valueOf(currentScreenName) }
+                    .getOrDefault(Screen.HOME)
+
+                fun navigateTo(screen: Screen) {
+                    currentScreenName = screen.name
+                }
 
                 when (currentScreen) {
                     Screen.HOME -> HomeScreen(
-                        onNavigateToTeacherPanel = { currentScreen = Screen.TEACHER_ACTIVITIES },
-                        onNavigateToRecords = { currentScreen = Screen.METRICS_EXPORT },
+                        onNavigateToTeacherPanel = { navigateTo(Screen.TEACHER_ACTIVITIES) },
+                        onNavigateToRecords = { navigateTo(Screen.METRICS_EXPORT) },
                         onNavigateToSmartMode = {
                             selectedActivityId = 0L
-                            currentScreen = Screen.BIMODAL_INTERACTION
+                            navigateTo(Screen.BIMODAL_INTERACTION)
                         },
                         onNavigateToTimerMode = {
                             selectedActivityId = 0L
-                            currentScreen = Screen.CLASSIC_TIMER_INTERACTION
+                            navigateTo(Screen.CLASSIC_TIMER_INTERACTION)
                         },
-                        onNavigateToSettings = { currentScreen = Screen.MAIN }
+                        onNavigateToSettings = { navigateTo(Screen.MAIN) }
                     )
                     Screen.MAIN -> SettingsScreen(
-                        onBack = { currentScreen = Screen.HOME },
-                        onNavigateToFaceDetection = { currentScreen = Screen.FACE_DETECTION },
-                        onNavigateToSpeechTest = { currentScreen = Screen.SPEECH_TEST },
-                        onNavigateToSemanticTest = { currentScreen = Screen.SEMANTIC_TEST },
-                        onNavigateToToyVoiceSettings = { currentScreen = Screen.TOY_VOICE_SETTINGS }
+                        onBack = { navigateTo(Screen.HOME) },
+                        onNavigateToFaceDetection = { navigateTo(Screen.FACE_DETECTION) },
+                        onNavigateToSpeechTest = { navigateTo(Screen.SPEECH_TEST) },
+                        onNavigateToSemanticTest = { navigateTo(Screen.SEMANTIC_TEST) },
+                        onNavigateToToyVoiceSettings = { navigateTo(Screen.TOY_VOICE_SETTINGS) }
                     )
                     Screen.FACE_DETECTION -> FaceDetectionScreen(
-                        onBack = { currentScreen = Screen.MAIN }
+                        onBack = { navigateTo(Screen.MAIN) }
                     )
                     Screen.SPEECH_TEST -> SpeechTestScreen(
-                        onBack = { currentScreen = Screen.MAIN }
+                        onBack = { navigateTo(Screen.MAIN) }
                     )
                     Screen.SEMANTIC_TEST -> SemanticTestScreen(
-                        onBack = { currentScreen = Screen.MAIN }
+                        onBack = { navigateTo(Screen.MAIN) }
                     )
                     Screen.TEACHER_ACTIVITIES -> TeacherActivitiesScreen(
-                        onBack = { currentScreen = Screen.HOME },
+                        onBack = { navigateTo(Screen.HOME) },
                         onNavigateToQuestions = { activityId ->
                             selectedActivityId = activityId
-                            currentScreen = Screen.TEACHER_QUESTIONS
+                            navigateTo(Screen.TEACHER_QUESTIONS)
                         }
                     )
                     Screen.TEACHER_QUESTIONS -> TeacherQuestionsScreen(
                         activityId = selectedActivityId,
-                        onBack = { currentScreen = Screen.TEACHER_ACTIVITIES }
+                        onBack = { navigateTo(Screen.TEACHER_ACTIVITIES) }
                     )
                     Screen.TOY_VOICE_SETTINGS -> ToyVoiceSettingsScreen(
-                        onBack = { currentScreen = Screen.MAIN }
+                        onBack = { navigateTo(Screen.MAIN) }
                     )
                     Screen.BIMODAL_INTERACTION -> BimodalInteractionScreen(
                         activityId = selectedActivityId,
-                        onBack = { currentScreen = Screen.HOME }
+                        onBack = { navigateTo(Screen.HOME) }
                     )
                     Screen.CLASSIC_TIMER_INTERACTION -> ClassicTimerInteractionScreen(
+                        onStartActivity = { activityId ->
+                            selectedActivityId = activityId
+                            navigateTo(Screen.CLASSIC_SEVEN_FACE)
+                        },
+                        onBack = { navigateTo(Screen.HOME) }
+                    )
+                    Screen.CLASSIC_SEVEN_FACE -> ClassicSevenFaceScreen(
                         activityId = selectedActivityId,
-                        onBack = { currentScreen = Screen.HOME }
+                        onChangeActivity = {
+                            selectedActivityId = 0L
+                            navigateTo(Screen.CLASSIC_TIMER_INTERACTION)
+                        },
+                        onBack = { navigateTo(Screen.HOME) }
                     )
                     Screen.METRICS_EXPORT -> MetricsExportScreen(
-                        onBack = { currentScreen = Screen.HOME }
+                        onBack = { navigateTo(Screen.HOME) }
                     )
                 }
             }
