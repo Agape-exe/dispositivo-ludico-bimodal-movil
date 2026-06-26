@@ -1572,43 +1572,90 @@ private fun SevenFace(
         ),
         label = "glance"
     )
+    val expression by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "expression"
+    )
+    val speakingPulse by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 820),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "speaking-pulse"
+    )
     val eyeOpen = when (state) {
-        SevenVisualState.PAUSED -> 0.42f
-        SevenVisualState.COMPLETED -> 0.72f
-        SevenVisualState.ERROR -> 0.66f
-        else -> blink.coerceIn(0.58f, 1f)
+        SevenVisualState.SPEAKING -> 0.78f + speakingPulse * 0.12f
+        SevenVisualState.WAITING_START_COMMAND -> 0.86f + expression * 0.10f
+        SevenVisualState.PAUSED -> 0.40f
+        SevenVisualState.COMPLETED -> 0.70f + expression * 0.08f
+        SevenVisualState.ERROR -> 0.62f + expression * 0.08f
+        else -> blink.coerceIn(0.68f, 1f)
     }
     val pupilOffset = when (state) {
-        SevenVisualState.WAITING_START_COMMAND -> glance * 8f
-        SevenVisualState.ERROR -> glance * 12f
+        SevenVisualState.WAITING_START_COMMAND -> glance * 10f
+        SevenVisualState.SPEAKING -> glance * 12f
+        SevenVisualState.ERROR -> glance * 14f
         SevenVisualState.PAUSED -> 0f
-        else -> glance * 4f
+        SevenVisualState.COMPLETED -> glance * 5f
+        else -> glance * 6f
     }
 
     Canvas(
         modifier = modifier
-            .fillMaxWidth(0.72f)
-            .height(240.dp)
+            .fillMaxWidth(0.82f)
+            .height(260.dp)
     ) {
+        val speakingScale = if (state == SevenVisualState.SPEAKING) 1f + speakingPulse * 0.025f else 1f
         val faceCenter = Offset(size.width / 2f, size.height * 0.52f)
-        val faceRadius = size.minDimension * 0.42f
+        val faceRadius = size.minDimension * 0.44f * speakingScale
         drawCircle(
             color = Color.White.copy(alpha = 0.26f),
             radius = faceRadius,
             center = faceCenter
         )
+        if (state == SevenVisualState.SPEAKING) {
+            val accentAlpha = 0.18f + speakingPulse * 0.18f
+            drawCircle(
+                color = SevenFaceAccent.copy(alpha = accentAlpha),
+                radius = size.minDimension * (0.030f + speakingPulse * 0.010f),
+                center = Offset(size.width * 0.16f, size.height * 0.30f)
+            )
+            drawCircle(
+                color = SevenCountdownOrange.copy(alpha = accentAlpha),
+                radius = size.minDimension * (0.022f + (1f - speakingPulse) * 0.010f),
+                center = Offset(size.width * 0.84f, size.height * 0.38f)
+            )
+            drawCircle(
+                color = SevenEyeIris.copy(alpha = accentAlpha),
+                radius = size.minDimension * 0.018f,
+                center = Offset(size.width * 0.78f, size.height * 0.23f)
+            )
+        }
 
-        val eyeWidth = size.width * 0.28f
-        val baseEyeHeight = size.height * 0.48f
-        val eyeHeight = baseEyeHeight * eyeOpen
-        val top = size.height * 0.25f + (baseEyeHeight - eyeHeight) / 2f
-        val leftEye = Offset(size.width * 0.18f, top)
+        val eyeWidth = size.width * 0.34f * speakingScale
+        val baseEyeHeight = size.height * 0.58f * speakingScale
+        val eyeHeight = baseEyeHeight * eyeOpen.coerceIn(0.32f, 1f)
+        val top = size.height * 0.18f + (baseEyeHeight - eyeHeight) / 2f
+        val leftEye = Offset(size.width * 0.12f, top)
         val rightEye = Offset(size.width * 0.54f, top)
         val eyeSize = Size(eyeWidth, eyeHeight)
-        val irisRadius = eyeHeight.coerceAtMost(eyeWidth) * 0.24f
+        val irisRadius = eyeHeight.coerceAtMost(eyeWidth) * when (state) {
+            SevenVisualState.PAUSED -> 0.18f
+            SevenVisualState.COMPLETED -> 0.20f
+            SevenVisualState.ERROR -> 0.22f
+            else -> 0.23f
+        }
         val pupilRadius = irisRadius * 0.48f
 
         listOf(leftEye, rightEye).forEachIndexed { index, eyeOffset ->
+            val side = if (index == 0) -1f else 1f
             drawOval(
                 color = SevenFaceAccent.copy(alpha = 0.10f),
                 topLeft = eyeOffset + Offset(0f, eyeHeight * 0.06f),
@@ -1620,8 +1667,10 @@ private fun SevenFace(
                 size = eyeSize
             )
             val verticalOffset = when {
-                state == SevenVisualState.COMPLETED -> -eyeHeight * 0.06f
+                state == SevenVisualState.SPEAKING -> (speakingPulse - 0.5f) * eyeHeight * 0.07f
+                state == SevenVisualState.COMPLETED -> -eyeHeight * 0.10f
                 state == SevenVisualState.PAUSED -> eyeHeight * 0.05f
+                state == SevenVisualState.ERROR -> side * eyeHeight * 0.04f
                 else -> 0f
             }
             val xBias = if (state == SevenVisualState.ERROR && index == 1) -pupilOffset else pupilOffset
@@ -1644,42 +1693,47 @@ private fun SevenFace(
                 radius = irisRadius * 0.28f,
                 center = irisCenter + Offset(-irisRadius * 0.34f, -irisRadius * 0.40f)
             )
+            if (state == SevenVisualState.SPEAKING || state == SevenVisualState.COMPLETED) {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.60f),
+                    radius = irisRadius * 0.16f,
+                    center = irisCenter + Offset(irisRadius * 0.32f, -irisRadius * 0.08f)
+                )
+            }
+            val lidLift = when (state) {
+                SevenVisualState.PAUSED -> eyeHeight * 0.16f
+                SevenVisualState.COMPLETED -> eyeHeight * 0.10f
+                SevenVisualState.ERROR -> side * eyeHeight * 0.08f
+                SevenVisualState.SPEAKING -> -speakingPulse * eyeHeight * 0.04f
+                else -> 0f
+            }
             drawArc(
                 color = SevenEyeLid.copy(alpha = 0.56f),
-                startAngle = 198f,
-                sweepAngle = 144f,
+                startAngle = if (state == SevenVisualState.ERROR && index == 0) 206f else 198f,
+                sweepAngle = if (state == SevenVisualState.PAUSED) 132f else 144f,
                 useCenter = false,
-                topLeft = eyeOffset + Offset(eyeWidth * 0.05f, eyeHeight * 0.02f),
-                size = Size(eyeWidth * 0.90f, eyeHeight * 0.44f),
+                topLeft = eyeOffset + Offset(eyeWidth * 0.05f, eyeHeight * 0.02f + lidLift),
+                size = Size(eyeWidth * 0.90f, eyeHeight * 0.42f),
                 style = Stroke(width = 5f)
             )
         }
 
-        val cheekY = size.height * 0.66f
-        drawOval(
-            color = SevenCheek.copy(alpha = if (state == SevenVisualState.ERROR) 0.20f else 0.34f),
-            topLeft = Offset(size.width * 0.22f, cheekY),
-            size = Size(size.width * 0.12f, size.height * 0.055f)
-        )
-        drawOval(
-            color = SevenCheek.copy(alpha = if (state == SevenVisualState.ERROR) 0.20f else 0.34f),
-            topLeft = Offset(size.width * 0.66f, cheekY),
-            size = Size(size.width * 0.12f, size.height * 0.055f)
-        )
-
-        val smileTop = when (state) {
-            SevenVisualState.PAUSED -> size.height * 0.72f
-            SevenVisualState.ERROR -> size.height * 0.70f
-            else -> size.height * 0.69f
+        val cheekAlpha = when (state) {
+            SevenVisualState.ERROR -> 0.18f
+            SevenVisualState.PAUSED -> 0.22f
+            SevenVisualState.SPEAKING -> 0.30f + speakingPulse * 0.08f
+            else -> 0.34f
         }
-        drawArc(
-            color = SevenEyePupil.copy(alpha = 0.42f),
-            startAngle = if (state == SevenVisualState.ERROR) 205f else 18f,
-            sweepAngle = if (state == SevenVisualState.ERROR) 130f else 144f,
-            useCenter = false,
-            topLeft = Offset(size.width * 0.42f, smileTop),
-            size = Size(size.width * 0.16f, size.height * 0.08f),
-            style = Stroke(width = 5f)
+        val cheekY = size.height * 0.68f
+        drawOval(
+            color = SevenCheek.copy(alpha = cheekAlpha),
+            topLeft = Offset(size.width * 0.18f, cheekY),
+            size = Size(size.width * 0.13f, size.height * 0.052f)
+        )
+        drawOval(
+            color = SevenCheek.copy(alpha = cheekAlpha),
+            topLeft = Offset(size.width * 0.69f, cheekY),
+            size = Size(size.width * 0.13f, size.height * 0.052f)
         )
     }
 }
