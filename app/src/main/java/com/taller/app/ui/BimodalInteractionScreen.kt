@@ -1614,7 +1614,7 @@ private fun BimodalSession(
                     colors = listOf(IntelligentSevenBackground, IntelligentSevenBackgroundAlt)
                 )
             )
-            .padding(20.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
         Box(
             modifier = Modifier
@@ -1631,7 +1631,11 @@ private fun BimodalSession(
 
         IntelligentSevenFace(
             expression = sevenExpression,
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth(0.84f)
+                .padding(bottom = 26.dp),
+            faceHeight = 336.dp,
             showTurnLabel = state == BimodalInteractionState.LISTENING
         )
 

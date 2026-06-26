@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taller.app.bimodal.BimodalInteractionState
@@ -55,6 +56,7 @@ private val SevenAlienCheek = Color(0xFFFFA9B8)
 internal fun IntelligentSevenFace(
     expression: IntelligentSevenExpression,
     modifier: Modifier = Modifier,
+    faceHeight: Dp = 292.dp,
     showTurnLabel: Boolean = false
 ) {
     val transition = rememberInfiniteTransition(label = "intelligent-seven")
@@ -96,13 +98,13 @@ internal fun IntelligentSevenFace(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(292.dp),
+            .height(faceHeight),
         contentAlignment = Alignment.Center
     ) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(292.dp)
+                .height(faceHeight)
         ) {
             drawRoundRect(
                 color = SevenAlienBackdrop,
