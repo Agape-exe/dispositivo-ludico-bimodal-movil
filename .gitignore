@@ -7,14 +7,18 @@
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/deviceManager.xml
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
+.kotlin/
 local.properties
 
 # Claude Code artifacts — no deben subirse al repo
+.codex/
+codex/
 .claude/
 claude/
 Claude/

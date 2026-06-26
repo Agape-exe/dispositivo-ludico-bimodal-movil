@@ -1381,10 +1381,15 @@ private fun BimodalSession(
     // Controla la visibilidad de la seccion tecnica de simulacion (colapsada por
     // defecto para no confundirla con el flujo real).
     var showTechnical by remember(activity) { mutableStateOf(false) }
+    val sevenExpression = state.toIntelligentSevenExpression(
+        facePresent = facePresent,
+        toyVoiceSpeaking = toyVoiceSpeaking
+    )
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(IntelligentModeBackground)
             .padding(16.dp)
             .verticalScroll(rememberScrollState())
     ) {
@@ -1394,7 +1399,7 @@ private fun BimodalSession(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Modo bimodal inteligente",
+                text = "Modo Inteligente",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -1402,6 +1407,13 @@ private fun BimodalSession(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        IntelligentSevenFace(
+            expression = sevenExpression,
+            showTurnLabel = state == BimodalInteractionState.LISTENING
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Resumen del estado de la sesion.
         Card(
