@@ -108,13 +108,13 @@ internal fun IntelligentSevenFace(
         ) {
             drawRoundRect(
                 color = SevenAlienBackdrop,
-                topLeft = Offset(size.width * 0.04f, size.height * 0.08f),
-                size = Size(size.width * 0.92f, size.height * 0.82f),
+                topLeft = Offset(size.width * 0.01f, size.height * 0.03f),
+                size = Size(size.width * 0.98f, size.height * 0.90f),
                 cornerRadius = CornerRadius(size.height * 0.18f, size.height * 0.18f)
             )
 
-            val faceTop = size.height * 0.18f
-            val faceSize = Size(size.width * 0.74f, size.height * 0.54f)
+            val faceTop = size.height * 0.10f
+            val faceSize = Size(size.width * 0.90f, size.height * 0.70f)
             val faceLeft = (size.width - faceSize.width) / 2f
             drawRoundRect(
                 color = SevenAlienFaceShade.copy(alpha = 0.42f),
