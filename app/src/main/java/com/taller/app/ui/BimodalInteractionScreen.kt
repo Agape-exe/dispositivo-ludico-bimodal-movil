@@ -218,21 +218,31 @@ private const val PRESENTING_WATCHDOG_MS = 50_000L
 /**
  * Pantalla inicial del modo bimodal inteligente.
  *
- * Permite seleccionar una actividad con preguntas, cargarla en el orquestador de
- * estados y recorrer el flujo automatico real: la presencia facial (camara)
- * dispara la pregunta, la voz del juguete la lee, la captura de voz transcribe la
- * respuesta y la evaluacion semantica produce el resultado sin intervencion
- * manual. El docente solo inicia la interaccion y decide reintentar o avanzar.
- *
- * Los controles tecnicos de simulacion se conservan en una seccion plegable,
- * colapsada por defecto y claramente separada del flujo real, para depurar el
- * orquestador sin recurrir a sensores.
- *
- * @param activityId si es distinto de 0 se carga directamente esa actividad; si
- *        es 0 se muestra un selector con las actividades disponibles.
+ * Selector inicial del modo inteligente. La pantalla infantil se abre en una ruta
+ * separada con el id de actividad ya fijado, para que el cambio de orientacion no
+ * pierda el estado ni regrese al selector.
  */
 @Composable
-fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
+fun BimodalInteractionScreen(onStartActivity: (Long) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val db = remember { AppDatabase.getInstance(context) }
+    val activityDao = remember { db.activityDao() }
+
+    ActivitySelector(
+        activityDao = activityDao,
+        isLoading = false,
+        infoMessage = null,
+        onPick = { onStartActivity(it.id) },
+        onBack = onBack
+    )
+}
+
+@Composable
+fun IntelligentSevenFaceScreen(
+    activityId: Long,
+    onChangeActivity: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getInstance(context) }
     val activityDao = remember { db.activityDao() }
@@ -245,6 +255,18 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
     var loadedActivity by remember { mutableStateOf<LearningActivity?>(null) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+
+    val activityForOrientation = context.findActivity()
+    DisposableEffect(activityForOrientation) {
+        val previous = activityForOrientation?.requestedOrientation
+        activityForOrientation?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        onDispose {
+            if (previous != null) {
+                activityForOrientation.requestedOrientation = previous
+            }
+        }
+    }
+    IntelligentImmersiveSystemBarsEffect(context)
 
     // Carga una actividad real con sus preguntas desde Room y la adapta al modelo
     // de dominio que consume el orquestador.
@@ -271,37 +293,81 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
     }
 
     LaunchedEffect(activityId) {
-        if (activityId != 0L) load(activityId)
-    }
-
-    BackHandler {
-        if (loadedActivity != null) {
-            loadedActivity = null
-            infoMessage = null
+        if (activityId != 0L) {
+            load(activityId)
         } else {
-            onBack()
+            infoMessage = "No se recibio una actividad para iniciar."
+            isLoading = false
         }
     }
 
+    BackHandler {
+        onChangeActivity()
+    }
+
     val active = loadedActivity
-    if (active == null) {
-        ActivitySelector(
-            activityDao = activityDao,
-            isLoading = isLoading,
-            infoMessage = infoMessage,
-            onPick = { load(it.id) },
-            onBack = onBack
-        )
-    } else {
+    if (active != null) {
         BimodalSession(
             activity = active,
             dataLogger = dataLogger,
-            onChangeActivity = {
-                loadedActivity = null
-                infoMessage = null
-            },
+            onChangeActivity = onChangeActivity,
             onBack = onBack
         )
+    } else {
+        IntelligentSevenLoadingOrError(
+            isLoading = isLoading,
+            infoMessage = infoMessage,
+            onBack = onChangeActivity
+        )
+    }
+}
+
+@Composable
+private fun IntelligentSevenLoadingOrError(
+    isLoading: Boolean,
+    infoMessage: String?,
+    onBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(IntelligentSevenBackground, IntelligentSevenBackgroundAlt)
+                )
+            )
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IntelligentSevenFace(
+                expression = IntelligentSevenExpression.READY,
+                modifier = Modifier.fillMaxWidth(0.74f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            if (isLoading) {
+                CircularProgressIndicator(color = IntelligentModeBlue)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Preparando a Seven",
+                    color = IntelligentModePrimaryText,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+            } else {
+                Text(
+                    text = infoMessage ?: "No se pudo abrir la actividad.",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = onBack) {
+                    Text("Volver")
+                }
+            }
+        }
     }
 }
 
