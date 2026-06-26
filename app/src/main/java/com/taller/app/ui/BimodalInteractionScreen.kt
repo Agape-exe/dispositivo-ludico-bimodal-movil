@@ -12,6 +12,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,8 +29,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,10 +54,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -84,7 +90,6 @@ import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
 import com.taller.app.model.LocalMediationKey
-import com.taller.app.model.OperationMode
 import com.taller.app.semantic.SemanticResult
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
@@ -119,6 +124,13 @@ private const val BIMODAL_SEMANTIC_TAG = "BimodalSemantic"
 
 /** Etiqueta de logs de la voz del juguete (solo proveedor, nunca claves ni texto). */
 private const val BIMODAL_VOICE_TAG = "BimodalVoice"
+
+private val IntelligentModeBlue = Color(0xFF0095B8)
+private val IntelligentModeCardTurquoise = Color(0xFF78C5CC)
+private val IntelligentModeTitleText = Color(0xFF0087A8)
+private val IntelligentModePrimaryText = Color(0xFF1F2733)
+private val IntelligentModeSecondaryText = Color(0xFF3F3A4A)
+private val IntelligentModeBackground = Color(0xFFFFFFFF)
 
 /**
  * Tope de seguridad para una sola reproduccion de voz. Es generoso para no cortar
@@ -246,7 +258,6 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
             isLoading = isLoading,
             infoMessage = infoMessage,
             onPick = { load(it.id) },
-            onUseSampleData = { loadedActivity = sampleActivity() },
             onBack = onBack
         )
     } else {
@@ -268,7 +279,6 @@ private fun ActivitySelector(
     isLoading: Boolean,
     infoMessage: String?,
     onPick: (ActivityEntity) -> Unit,
-    onUseSampleData: () -> Unit,
     onBack: () -> Unit
 ) {
     val activities by activityDao.getAllOrderedByUpdated().collectAsState(initial = emptyList())
@@ -276,39 +286,41 @@ private fun ActivitySelector(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .background(IntelligentModeBackground)
+            .padding(horizontal = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Modo bimodal inteligente",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            OutlinedButton(onClick = onBack) { Text("Volver") }
-        }
+        Spacer(modifier = Modifier.height(48.dp))
 
-        Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "Selecciona una actividad con preguntas para iniciar el flujo de prueba.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            text = "Modo\nInteligente",
+            fontSize = 36.sp,
+            lineHeight = 40.sp,
+            fontWeight = FontWeight.Bold,
+            color = IntelligentModeTitleText,
+            textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(12.dp))
 
+        Text(
+            text = "Selecciona una actividad\npara iniciar el flujo",
+            fontSize = 17.sp,
+            lineHeight = 23.sp,
+            color = IntelligentModeSecondaryText,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(28.dp))
+
         if (infoMessage != null) {
             InfoBanner(infoMessage)
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = IntelligentModeBlue)
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (activities.isEmpty()) {
@@ -320,57 +332,119 @@ private fun ActivitySelector(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "No hay actividades disponibles.\nCrea una actividad con preguntas " +
-                            "desde el panel docente para probar el modo bimodal.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "No hay actividades disponibles.",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = IntelligentModePrimaryText,
+                        textAlign = TextAlign.Center
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    OutlinedButton(onClick = onUseSampleData) {
-                        Text("Usar datos de prueba (no se guardan)")
-                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Respaldo temporal solo para validar el flujo; no se inserta en la base de datos.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(top = 4.dp)
+                        text = "Crea una actividad desde el Panel Docente para iniciar el modo inteligente.",
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp,
+                        color = IntelligentModeSecondaryText,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(activities, key = { it.id }) { activity ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onPick(activity) },
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = activity.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "Tema: ${activity.topic}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Toca para iniciar el modo bimodal",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
+                    IntelligentActivityCard(
+                        activity = activity,
+                        onStart = { onPick(activity) }
+                    )
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        IntelligentBottomBackButton(onBack = onBack)
+        Spacer(modifier = Modifier.height(28.dp))
+    }
+}
+
+@Composable
+private fun IntelligentActivityCard(
+    activity: ActivityEntity,
+    onStart: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(0.86f),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = IntelligentModeCardTurquoise),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = activity.name,
+                fontSize = 18.sp,
+                lineHeight = 23.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = IntelligentModePrimaryText,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = activity.topic,
+                fontSize = 14.sp,
+                lineHeight = 19.sp,
+                color = IntelligentModeSecondaryText,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            IntelligentStartButton(onStart = onStart)
+        }
+    }
+}
+
+@Composable
+private fun IntelligentStartButton(onStart: () -> Unit) {
+    Button(
+        onClick = onStart,
+        shape = RoundedCornerShape(18.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = IntelligentModeBlue,
+            contentColor = Color.White
+        ),
+        modifier = Modifier.width(128.dp)
+    ) {
+        Text(
+            text = "Iniciar",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun IntelligentBottomBackButton(onBack: () -> Unit) {
+    Button(
+        onClick = onBack,
+        shape = RoundedCornerShape(22.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = IntelligentModeBlue,
+            contentColor = Color.White
+        ),
+        modifier = Modifier.width(148.dp)
+    ) {
+        Text(
+            text = "Volver",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -2553,14 +2627,3 @@ private fun feedbackMessage(state: BimodalInteractionState, canRetry: Boolean): 
         else -> ""
     }
 
-/** Actividad de respaldo en memoria usada solo cuando no hay actividades en la base. */
-private fun sampleActivity(): LearningActivity = LearningActivity(
-    id = "sample",
-    title = "Datos de prueba (no guardados)",
-    mode = OperationMode.ADVANCED,
-    questions = listOf(
-        LearningQuestion("s1", "¿De qué color es el cielo?", "azul", listOf("azul", "celeste"), 30, 3),
-        LearningQuestion("s2", "¿Cuánto es 2 + 2?", "4", listOf("cuatro", "4"), 30, 3),
-        LearningQuestion("s3", "¿Qué animal hace miau?", "gato", listOf("gato", "minino"), 30, 3)
-    )
-)
