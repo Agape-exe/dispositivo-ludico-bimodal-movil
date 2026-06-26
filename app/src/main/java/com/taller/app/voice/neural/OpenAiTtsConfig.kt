@@ -25,17 +25,22 @@ data class OpenAiTtsConfig(
         fun instructionsFromBuild(): String =
             BuildConfig.OPENAI_TTS_INSTRUCTIONS.ifBlank { DEFAULT_INSTRUCTIONS }
 
-        fun fromBuild(overrideVoiceName: String? = null): OpenAiTtsConfig {
+        fun fromBuild(
+            overrideVoiceName: String? = null,
+            overrideInstructions: String? = null
+        ): OpenAiTtsConfig {
             val candidateVoice = overrideVoiceName?.takeIf { it.isNotBlank() }
                 ?: defaultVoiceFromBuild()
             val voice = candidateVoice
                 .takeIf { selected -> SUPPORTED_VOICES.any { it == selected } }
                 ?: DEFAULT_VOICE
+            val instructions = overrideInstructions?.takeIf { it.isNotBlank() }
+                ?: instructionsFromBuild()
             return OpenAiTtsConfig(
                 apiKey = apiKeyFromBuild(),
                 model = modelFromBuild(),
                 voice = voice,
-                instructions = instructionsFromBuild()
+                instructions = instructions
             )
         }
     }
