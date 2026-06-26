@@ -48,8 +48,10 @@ import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import com.taller.app.voice.neural.OpenAiTtsAudioCache
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
+import com.taller.app.voice.neural.VoiceCacheStats
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -96,6 +98,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val service = remember { ToySpeechService(context) }
     val repository = remember { ToyVoiceSettingsRepository(context) }
+    val voiceCache = remember { OpenAiTtsAudioCache(context) }
 
     val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
     val ttsState by ttsStateFlow.collectAsState()
@@ -120,6 +123,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     var selectedTestPhrase by remember { mutableStateOf(TEST_PHRASES.first()) }
     var lastTestedVoice by remember { mutableStateOf<String?>(null) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
+    var cacheStats by remember { mutableStateOf(voiceCache.stats()) }
 
     val savedSettings by repository.settings.collectAsState(initial = ToyVoiceSettings())
 
@@ -234,6 +238,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             )
             playbackUi = PlaybackUi.IDLE
             lastOutcome = outcome
+            cacheStats = voiceCache.stats()
         }
     }
 
@@ -300,6 +305,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                 selectedInstructions = openAiInstructions,
                 lastTestedVoice = lastTestedVoice,
                 lastOutcome = lastOutcome,
+                cacheStats = cacheStats,
                 saveMessage = saveMessage,
                 fallbackEnabled = fallbackEnabled,
                 onVoiceSelected = {
@@ -311,6 +317,11 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                     saveMessage = null
                 },
                 onSaveVoice = { saveSevenVoice() },
+                onClearCache = {
+                    stopPlayback()
+                    cacheStats = voiceCache.clear()
+                    lastOutcome = null
+                },
                 onFallbackChange = {
                     fallbackEnabled = it
                     applyAndSave()
@@ -553,11 +564,13 @@ private fun OpenAiConfigSection(
     selectedInstructions: String,
     lastTestedVoice: String?,
     lastOutcome: VoiceOutcome?,
+    cacheStats: VoiceCacheStats,
     saveMessage: String?,
     fallbackEnabled: Boolean,
     onVoiceSelected: (String) -> Unit,
     onInstructionsSelected: (String) -> Unit,
     onSaveVoice: () -> Unit,
+    onClearCache: () -> Unit,
     onFallbackChange: (Boolean) -> Unit
 ) {
     Card(
@@ -629,6 +642,13 @@ private fun OpenAiConfigSection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            VoiceCacheInfoSection(
+                stats = cacheStats,
+                onClearCache = onClearCache
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             OpenAiTtsConfig.SUPPORTED_VOICES.forEach { voice ->
                 ProviderOption(
                     title = voice,
@@ -684,6 +704,46 @@ private fun OpenAiConfigSection(
             Spacer(modifier = Modifier.height(8.dp))
             FallbackSwitch(enabled = fallbackEnabled, onChanged = onFallbackChange)
         }
+    }
+}
+
+@Composable
+private fun VoiceCacheInfoSection(
+    stats: VoiceCacheStats,
+    onClearCache: () -> Unit
+) {
+    Text(
+        text = "Cache de voz",
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = "Cache de voz: Activa",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = "Audios cacheados: ${stats.audioCount}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = "Tamano aproximado: ${formatCacheBytes(stats.totalBytes)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = "Ultima reproduccion desde cache: ${stats.lastCacheHit?.let { if (it) "Si" else "No" } ?: "No"}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    OutlinedButton(
+        onClick = onClearCache,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Limpiar cache de voz")
     }
 }
 
@@ -893,6 +953,13 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
+private fun formatCacheBytes(bytes: Long): String {
+    if (bytes < 1024L) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024.0) return "%.1f KB".format(kb)
+    return "%.1f MB".format(kb / 1024.0)
+}
+
 @Composable
 private fun PlaybackStatusCard(
     providerType: ToyVoiceProviderType,
@@ -950,6 +1017,13 @@ private fun PlaybackStatusCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (outcome.providerUsed == ToyVoiceProviderType.OPENAI_TTS && outcome.cacheHit != null) {
+                    Text(
+                        text = "Desde cache: ${if (outcome.cacheHit == true) "Si" else "No"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
                     text = "Latencia: ${outcome.latencyMs} ms",
                     style = MaterialTheme.typography.bodySmall,

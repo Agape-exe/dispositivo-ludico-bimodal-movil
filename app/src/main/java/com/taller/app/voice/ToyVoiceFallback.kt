@@ -10,13 +10,23 @@ sealed interface VoiceOutcome {
     val fallbackUsed: Boolean
     val errorMessage: String?
     val latencyMs: Long
+    val cacheHit: Boolean?
+    val cacheKey: String?
+    val synthesisLatencyMs: Long?
+    val playbackLatencyMs: Long?
+    val totalLatencyMs: Long?
 
     data class Completed(
         override val providerRequested: ToyVoiceProviderType,
         override val providerUsed: ToyVoiceProviderType,
         override val fallbackUsed: Boolean,
         override val errorMessage: String?,
-        override val latencyMs: Long
+        override val latencyMs: Long,
+        override val cacheHit: Boolean? = null,
+        override val cacheKey: String? = null,
+        override val synthesisLatencyMs: Long? = null,
+        override val playbackLatencyMs: Long? = null,
+        override val totalLatencyMs: Long? = null
     ) : VoiceOutcome
 
     data class Failed(
@@ -26,6 +36,11 @@ sealed interface VoiceOutcome {
     ) : VoiceOutcome {
         override val providerUsed: ToyVoiceProviderType? = null
         override val fallbackUsed: Boolean = false
+        override val cacheHit: Boolean? = null
+        override val cacheKey: String? = null
+        override val synthesisLatencyMs: Long? = null
+        override val playbackLatencyMs: Long? = null
+        override val totalLatencyMs: Long? = null
     }
 }
 
@@ -72,12 +87,18 @@ object ToyVoiceFallback {
         for ((type, provider) in providers) {
             when (val result = provider.speak(text, onPlaybackStart)) {
                 is VoicePlaybackResult.Success -> {
+                    val latencyMs = System.currentTimeMillis() - startedAt
                     return VoiceOutcome.Completed(
                         providerRequested = providerRequested,
                         providerUsed = type,
                         fallbackUsed = type != providerRequested,
                         errorMessage = errors.firstOrNull(),
-                        latencyMs = System.currentTimeMillis() - startedAt
+                        latencyMs = latencyMs,
+                        cacheHit = result.cacheHit,
+                        cacheKey = result.cacheKey,
+                        synthesisLatencyMs = result.synthesisLatencyMs,
+                        playbackLatencyMs = result.playbackLatencyMs,
+                        totalLatencyMs = result.totalLatencyMs ?: latencyMs
                     )
                 }
                 is VoicePlaybackResult.Error -> errors.add(result.message)

@@ -48,7 +48,7 @@ class LocalToyVoiceProvider(
                 "Error al reproducir con la voz local."
             )
         } else {
-            VoicePlaybackResult.Success
+            VoicePlaybackResult.Success()
         }
     }
 

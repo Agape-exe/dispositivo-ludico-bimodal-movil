@@ -29,7 +29,13 @@ interface ToyVoiceProvider {
 
 /** Resultado de una solicitud de reproducción a un proveedor de voz. */
 sealed interface VoicePlaybackResult {
-    data object Success : VoicePlaybackResult
+    data class Success(
+        val cacheHit: Boolean? = null,
+        val cacheKey: String? = null,
+        val synthesisLatencyMs: Long? = null,
+        val playbackLatencyMs: Long? = null,
+        val totalLatencyMs: Long? = null
+    ) : VoicePlaybackResult
     data class Error(val type: VoiceErrorType, val message: String) : VoicePlaybackResult
 }
 

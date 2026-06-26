@@ -8,6 +8,8 @@ import com.taller.app.voice.VoiceErrorType
 import com.taller.app.voice.VoicePlaybackResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -24,6 +26,9 @@ class OpenAiTtsVoiceProvider(
     private val context: Context,
     private val configProvider: () -> OpenAiTtsConfig
 ) : ToyVoiceProvider {
+    private val audioCache = OpenAiTtsAudioCache(context)
+    private val synthesisLocks = mutableMapOf<String, Mutex>()
+    private val synthesisLocksGuard = Any()
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -40,33 +45,129 @@ class OpenAiTtsVoiceProvider(
 
     override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
         val config = configProvider()
-        if (!config.hasApiKey) {
-            return VoicePlaybackResult.Error(
-                VoiceErrorType.NOT_CONFIGURED,
-                "OpenAI TTS no esta configurado."
+        val startedAt = System.currentTimeMillis()
+        val cacheEntry = audioCache.entryFor(text, config, RESPONSE_FORMAT)
+        val audio = when (val result = getOrCreateAudio(text, config, cacheEntry)) {
+            is AudioResult.Failure -> return result.error
+            is AudioResult.Ok -> result
+        }
+
+        val playbackStartedAt = System.currentTimeMillis()
+        val playback = playFile(audio.file, onPlaybackStart)
+        val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
+        val totalLatencyMs = System.currentTimeMillis() - startedAt
+
+        if (playback is VoicePlaybackResult.Success) {
+            OpenAiTtsAudioCache.rememberLastCacheHit(audio.cacheHit)
+            Log.d(
+                TAG,
+                "reproduccion: cacheHit=${audio.cacheHit} cacheKey=${audio.cacheShortKey} " +
+                    "synthesisLatencyMs=${audio.synthesisLatencyMs} playbackLatencyMs=$playbackLatencyMs " +
+                    "totalLatencyMs=$totalLatencyMs"
+            )
+            return playback.copy(
+                cacheHit = audio.cacheHit,
+                cacheKey = audio.cacheShortKey,
+                synthesisLatencyMs = audio.synthesisLatencyMs,
+                playbackLatencyMs = playbackLatencyMs,
+                totalLatencyMs = totalLatencyMs
             )
         }
 
-        val audioFile = when (val download = requestAudio(text, config)) {
-            is AudioResult.Failure -> return download.error
-            is AudioResult.Ok -> download.file
+        if (audio.cacheHit) {
+            runCatching { audio.file.delete() }
+            Log.w(TAG, "Cache corrupta descartada: cacheKey=${audio.cacheShortKey}")
+            return speakWithoutCachedFile(text, config, cacheEntry, onPlaybackStart, startedAt)
         }
 
-        return try {
-            playFile(audioFile, onPlaybackStart)
-        } finally {
-            audioFile.delete()
+        return playback
+    }
+
+    private suspend fun getOrCreateAudio(
+        text: String,
+        config: OpenAiTtsConfig,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry
+    ): AudioResult {
+        if (cacheEntry.file.isFile && cacheEntry.file.length() > 0L) {
+            return AudioResult.Ok(
+                file = cacheEntry.file,
+                cacheHit = true,
+                cacheShortKey = cacheEntry.shortKey,
+                synthesisLatencyMs = 0L
+            )
+        }
+
+        val lock = lockFor(cacheEntry.key)
+        return lock.withLock {
+            if (cacheEntry.file.isFile && cacheEntry.file.length() > 0L) {
+                AudioResult.Ok(
+                    file = cacheEntry.file,
+                    cacheHit = true,
+                    cacheShortKey = cacheEntry.shortKey,
+                    synthesisLatencyMs = 0L
+                )
+            } else {
+                requestAudio(text, config, cacheEntry)
+            }
         }
     }
 
-    private suspend fun requestAudio(text: String, config: OpenAiTtsConfig): AudioResult =
+    private suspend fun speakWithoutCachedFile(
+        text: String,
+        config: OpenAiTtsConfig,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry,
+        onPlaybackStart: () -> Unit,
+        startedAt: Long
+    ): VoicePlaybackResult {
+        val audio = when (val result = lockFor(cacheEntry.key).withLock {
+            requestAudio(text, config, cacheEntry)
+        }) {
+            is AudioResult.Failure -> return result.error
+            is AudioResult.Ok -> result
+        }
+        val playbackStartedAt = System.currentTimeMillis()
+        val playback = playFile(audio.file, onPlaybackStart)
+        val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
+        val totalLatencyMs = System.currentTimeMillis() - startedAt
+        return if (playback is VoicePlaybackResult.Success) {
+            OpenAiTtsAudioCache.rememberLastCacheHit(false)
+            playback.copy(
+                cacheHit = false,
+                cacheKey = audio.cacheShortKey,
+                synthesisLatencyMs = audio.synthesisLatencyMs,
+                playbackLatencyMs = playbackLatencyMs,
+                totalLatencyMs = totalLatencyMs
+            )
+        } else {
+            playback
+        }
+    }
+
+    private fun lockFor(cacheKey: String): Mutex = synchronized(synthesisLocksGuard) {
+        synthesisLocks.getOrPut(cacheKey) { Mutex() }
+    }
+
+    private suspend fun requestAudio(
+        text: String,
+        config: OpenAiTtsConfig,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry
+    ): AudioResult =
         withContext(Dispatchers.IO) {
+            if (!config.hasApiKey) {
+                return@withContext AudioResult.Failure(
+                    VoicePlaybackResult.Error(
+                        VoiceErrorType.NOT_CONFIGURED,
+                        "OpenAI TTS no esta configurado."
+                    )
+                )
+            }
+            val startedAt = System.currentTimeMillis()
             val body = JSONObject()
                 .put("model", config.model)
                 .put("voice", config.voice)
                 .put("input", text)
                 .put("instructions", config.instructions)
-                .put("response_format", "mp3")
+                .put("response_format", RESPONSE_FORMAT)
                 .toString()
                 .toRequestBody(JSON_MEDIA_TYPE)
 
@@ -96,9 +197,21 @@ class OpenAiTtsVoiceProvider(
                             )
                         )
                     }
-                    val file = File.createTempFile("toy_openai_tts_", ".mp3", context.cacheDir)
-                    file.writeBytes(bytes)
-                    AudioResult.Ok(file)
+                    val tempFile = File(cacheEntry.file.parentFile, "${cacheEntry.file.name}.tmp")
+                    tempFile.writeBytes(bytes)
+                    if (cacheEntry.file.exists()) {
+                        runCatching { cacheEntry.file.delete() }
+                    }
+                    if (!tempFile.renameTo(cacheEntry.file)) {
+                        tempFile.copyTo(cacheEntry.file, overwrite = true)
+                        tempFile.delete()
+                    }
+                    AudioResult.Ok(
+                        file = cacheEntry.file,
+                        cacheHit = false,
+                        cacheShortKey = cacheEntry.shortKey,
+                        synthesisLatencyMs = System.currentTimeMillis() - startedAt
+                    )
                 }
             } catch (e: SocketTimeoutException) {
                 Log.w(TAG, "Timeout al contactar OpenAI TTS")
@@ -137,7 +250,7 @@ class OpenAiTtsVoiceProvider(
 
         player.setOnCompletionListener {
             cleanup()
-            if (continuation.isActive) continuation.resume(VoicePlaybackResult.Success)
+            if (continuation.isActive) continuation.resume(VoicePlaybackResult.Success())
         }
         player.setOnErrorListener { _, what, _ ->
             cleanup()
@@ -188,7 +301,12 @@ class OpenAiTtsVoiceProvider(
     override fun release() = stop()
 
     private sealed interface AudioResult {
-        data class Ok(val file: File) : AudioResult
+        data class Ok(
+            val file: File,
+            val cacheHit: Boolean,
+            val cacheShortKey: String,
+            val synthesisLatencyMs: Long
+        ) : AudioResult
         data class Failure(val error: VoicePlaybackResult.Error) : AudioResult
     }
 
@@ -196,6 +314,7 @@ class OpenAiTtsVoiceProvider(
         private const val TAG = "OpenAiTtsVoice"
         private const val SPEECH_URL = "https://api.openai.com/v1/audio/speech"
         private const val REQUEST_TIMEOUT_SECONDS = 30L
+        private const val RESPONSE_FORMAT = OpenAiTtsAudioCache.RESPONSE_FORMAT_MP3
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }
