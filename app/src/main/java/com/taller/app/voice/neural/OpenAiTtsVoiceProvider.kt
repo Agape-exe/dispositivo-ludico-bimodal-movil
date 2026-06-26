@@ -4,7 +4,9 @@ import android.content.Context
 import android.media.MediaPlayer
 import android.util.Log
 import com.taller.app.voice.ToyVoiceProvider
+import com.taller.app.voice.ToyVoiceTextValidator
 import com.taller.app.voice.VoiceErrorType
+import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoicePlaybackResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -44,10 +46,23 @@ class OpenAiTtsVoiceProvider(
     override fun isConfigured(): Boolean = configProvider().isComplete
 
     override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) {
+            Log.w(
+                TAG,
+                "eventType=TTS_SKIPPED_INVALID_TEXT providerRequested=OPENAI_TTS providerUsed=NONE " +
+                    "textLength=${text.length} reason=${validation.reason} timestamp=${System.currentTimeMillis()}"
+            )
+            return VoicePlaybackResult.Error(
+                VoiceErrorType.INVALID_TTS_TEXT,
+                VoiceOutcome.SAFE_INVALID_TEXT_MESSAGE
+            )
+        }
         val config = configProvider()
         val startedAt = System.currentTimeMillis()
-        val cacheEntry = audioCache.entryFor(text, config, RESPONSE_FORMAT)
-        val audio = when (val result = getOrCreateAudio(text, config, cacheEntry)) {
+        val safeText = validation.normalizedText
+        val cacheEntry = audioCache.entryFor(safeText, config, RESPONSE_FORMAT)
+        val audio = when (val result = getOrCreateAudio(safeText, config, cacheEntry)) {
             is AudioResult.Failure -> return result.error
             is AudioResult.Ok -> result
         }
@@ -77,7 +92,7 @@ class OpenAiTtsVoiceProvider(
         if (audio.cacheHit) {
             runCatching { audio.file.delete() }
             Log.w(TAG, "Cache corrupta descartada: cacheKey=${audio.cacheShortKey}")
-            return speakWithoutCachedFile(text, config, cacheEntry, onPlaybackStart, startedAt)
+            return speakWithoutCachedFile(safeText, config, cacheEntry, onPlaybackStart, startedAt)
         }
 
         return playback

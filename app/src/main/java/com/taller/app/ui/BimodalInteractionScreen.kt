@@ -1016,6 +1016,10 @@ private fun BimodalSession(
                 usedLabel = "Ninguno"
                 fallback = false
             }
+            is VoiceOutcome.SkippedInvalidText -> {
+                usedLabel = "Ninguno"
+                fallback = false
+            }
         }
         lastVoiceProviderUsed = usedLabel
         lastVoiceFallbackUsed = fallback
@@ -1051,7 +1055,7 @@ private fun BimodalSession(
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(text)
+                    sevenVoiceService.speak(text, source = "inteligente")
                 }.getOrNull()
             }
             if (outcome == null) {
@@ -1059,6 +1063,20 @@ private fun BimodalSession(
                     BIMODAL_VOICE_TAG,
                     "voz: sin resultado tras ${timeoutMs}ms (timeout o fallo); el flujo continua"
                 )
+            }
+            if (outcome is VoiceOutcome.SkippedInvalidText && logSessionId > 0L) {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = logSessionId,
+                        questionId = progress?.currentQuestionId?.toLongOrNull(),
+                        attemptId = logAttemptId.takeIf { it > 0L },
+                        operationMode = "ADVANCED",
+                        eventType = "TTS_SKIPPED_INVALID_TEXT",
+                        message = "providerRequested=OPENAI_TTS providerUsed=NONE " +
+                            "textLength=${outcome.textLength} reason=${outcome.reason}",
+                        latencyMs = outcome.latencyMs
+                    )
+                }
             }
             recordVoiceUsage(outcome)
         } finally {

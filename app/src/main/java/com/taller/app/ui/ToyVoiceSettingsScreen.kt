@@ -234,6 +234,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             ).voice
             val outcome = sevenVoiceService.speak(
                 text = text,
+                source = "configurar",
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
             playbackUi = PlaybackUi.IDLE
@@ -985,6 +986,8 @@ private fun PlaybackStatusCard(
             }
             is VoiceOutcome.Failed ->
                 "No se pudo reproducir. (${outcome.errorMessage})" to MaterialTheme.colorScheme.error
+            is VoiceOutcome.SkippedInvalidText ->
+                "Selecciona una frase de prueba." to MaterialTheme.colorScheme.error
             null -> "Listo para probar." to MaterialTheme.colorScheme.onSurfaceVariant
         }
     }

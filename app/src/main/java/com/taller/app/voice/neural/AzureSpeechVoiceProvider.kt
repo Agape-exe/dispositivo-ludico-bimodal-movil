@@ -4,7 +4,9 @@ import android.content.Context
 import android.media.MediaPlayer
 import android.util.Log
 import com.taller.app.voice.ToyVoiceProvider
+import com.taller.app.voice.ToyVoiceTextValidator
 import com.taller.app.voice.VoiceErrorType
+import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoicePlaybackResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -38,6 +40,18 @@ class AzureSpeechVoiceProvider(
     override fun isConfigured(): Boolean = configProvider().isComplete
 
     override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) {
+            Log.w(
+                TAG,
+                "eventType=TTS_SKIPPED_INVALID_TEXT providerRequested=AZURE_NEURAL providerUsed=NONE " +
+                    "textLength=${text.length} reason=${validation.reason} timestamp=${System.currentTimeMillis()}"
+            )
+            return VoicePlaybackResult.Error(
+                VoiceErrorType.INVALID_TTS_TEXT,
+                VoiceOutcome.SAFE_INVALID_TEXT_MESSAGE
+            )
+        }
         val config = configProvider()
         if (!config.hasKey) {
             return VoicePlaybackResult.Error(
@@ -52,7 +66,7 @@ class AzureSpeechVoiceProvider(
             )
         }
 
-        val audioFile = when (val download = requestAudio(text, config)) {
+        val audioFile = when (val download = requestAudio(validation.normalizedText, config)) {
             is AudioResult.Failure -> return download.error
             is AudioResult.Ok -> download.file
         }
