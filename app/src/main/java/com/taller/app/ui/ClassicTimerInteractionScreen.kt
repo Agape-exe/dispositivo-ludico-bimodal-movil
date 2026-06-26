@@ -14,6 +14,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -1556,10 +1557,17 @@ private fun SevenFace(
     val transition = rememberInfiniteTransition(label = "seven-eyes")
     val blink by transition.animateFloat(
         initialValue = 1f,
-        targetValue = 0.18f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2600),
-            repeatMode = RepeatMode.Reverse
+            animation = keyframes {
+                durationMillis = 3600
+                1f at 0
+                1f at 2780
+                0.24f at 2900
+                1f at 3040
+                1f at 3600
+            },
+            repeatMode = RepeatMode.Restart
         ),
         label = "blink"
     )
@@ -1573,11 +1581,11 @@ private fun SevenFace(
         label = "speaking-pulse"
     )
     val eyeOpen = when (state) {
-        SevenVisualState.SPEAKING -> 0.92f + speakingPulse * 0.04f
-        SevenVisualState.PAUSED -> 0.66f
-        SevenVisualState.COMPLETED -> 0.88f
-        SevenVisualState.ERROR -> 0.78f
-        else -> blink.coerceIn(0.82f, 1f)
+        SevenVisualState.SPEAKING -> (0.92f + speakingPulse * 0.03f) * blink.coerceIn(0.72f, 1f)
+        SevenVisualState.PAUSED -> 0.74f * blink.coerceIn(0.76f, 1f)
+        SevenVisualState.COMPLETED -> 0.90f * blink.coerceIn(0.78f, 1f)
+        SevenVisualState.ERROR -> 0.82f * blink.coerceIn(0.82f, 1f)
+        else -> blink.coerceIn(0.80f, 1f)
     }
 
     Canvas(
@@ -1626,6 +1634,11 @@ private fun SevenFace(
         }
         val pupilRadius = irisRadius * 0.42f
         val irisGlow = if (state == SevenVisualState.SPEAKING) speakingPulse * 0.14f else 0f
+        val irisNudgeX = if (state == SevenVisualState.SPEAKING) {
+            (speakingPulse - 0.5f) * size.minDimension * 0.010f
+        } else {
+            0f
+        }
 
         eyeCenters.forEach { eyeCenter ->
             val eyeOffset = Offset(eyeCenter.x - eyeWidth / 2f, eyeCenter.y - eyeHeight / 2f)
@@ -1639,7 +1652,10 @@ private fun SevenFace(
                 topLeft = eyeOffset,
                 size = eyeSize
             )
-            val irisCenter = eyeCenter + Offset(0f, if (state == SevenVisualState.PAUSED) eyeHeight * 0.04f else 0f)
+            val irisCenter = eyeCenter + Offset(
+                x = irisNudgeX,
+                y = if (state == SevenVisualState.PAUSED) eyeHeight * 0.04f else 0f
+            )
             drawCircle(
                 color = SevenEyeIris.copy(alpha = 0.18f + irisGlow),
                 radius = irisRadius * 1.24f,
