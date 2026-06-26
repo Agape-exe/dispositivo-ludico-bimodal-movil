@@ -36,11 +36,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.taller.app.voice.LocalToyVoiceProvider
+import com.taller.app.voice.SevenVoiceService
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
-import com.taller.app.voice.ToyVoiceFallback
 import com.taller.app.voice.ToyVoiceInfo
-import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
@@ -150,6 +149,13 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     val elevenLabsProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
     }
+    val sevenVoiceService = remember {
+        SevenVoiceService(
+            openAiProvider = openAiProvider,
+            azureProvider = azureProvider,
+            localProvider = localProvider
+        )
+    }
 
     val openAiApiKeyPresent = remember { OpenAiTtsConfig.apiKeyFromBuild().isNotBlank() }
     val effectiveOpenAiConfig = OpenAiTtsConfig.fromBuild(openAiVoiceName, openAiInstructions)
@@ -168,8 +174,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         service.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
             service.shutdown()
-            openAiProvider.release()
-            azureProvider.release()
+            sevenVoiceService.release()
             elevenLabsProvider.release()
         }
     }
@@ -215,39 +220,16 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     fun playPhrase(text: String) {
         if (playbackUi != PlaybackUi.IDLE) return
-        val selectedNeural = when (providerType) {
-            ToyVoiceProviderType.OPENAI_TTS -> openAiProvider
-            ToyVoiceProviderType.AZURE_NEURAL -> azureProvider
-            ToyVoiceProviderType.ELEVENLABS -> elevenLabsProvider
-            ToyVoiceProviderType.LOCAL -> localProvider
-        }
         scope.launch {
             playbackUi = PlaybackUi.GENERATING
             lastOutcome = null
-            lastTestedVoice = if (providerType == ToyVoiceProviderType.OPENAI_TTS) {
-                OpenAiTtsConfig.fromBuild(openAiVoiceName, openAiInstructions).voice
-            } else {
-                null
-            }
-            val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (providerType) {
-                ToyVoiceProviderType.OPENAI_TTS -> buildList {
-                    add(ToyVoiceProviderType.OPENAI_TTS to openAiProvider)
-                    if (fallbackEnabled) {
-                        add(ToyVoiceProviderType.AZURE_NEURAL to azureProvider)
-                        add(ToyVoiceProviderType.LOCAL to localProvider)
-                    }
-                }
-                ToyVoiceProviderType.AZURE_NEURAL,
-                ToyVoiceProviderType.ELEVENLABS -> buildList {
-                    add(providerType to selectedNeural)
-                    if (fallbackEnabled) add(ToyVoiceProviderType.LOCAL to localProvider)
-                }
-                ToyVoiceProviderType.LOCAL -> listOf(ToyVoiceProviderType.LOCAL to localProvider)
-            }
-            val outcome = ToyVoiceFallback.speakWithFallback(
+            val sevenSettings = buildCurrentSettings().copy(provider = ToyVoiceProviderType.OPENAI_TTS)
+            lastTestedVoice = OpenAiTtsConfig.fromBuild(
+                sevenSettings.openAiVoiceName,
+                sevenSettings.openAiInstructions
+            ).voice
+            val outcome = sevenVoiceService.speak(
                 text = text,
-                providerRequested = providerType,
-                providers = providers,
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
             playbackUi = PlaybackUi.IDLE
@@ -256,10 +238,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     }
 
     fun stopPlayback() {
-        openAiProvider.stop()
-        azureProvider.stop()
+        sevenVoiceService.stop()
         elevenLabsProvider.stop()
-        service.stop()
         playbackUi = PlaybackUi.IDLE
     }
 
