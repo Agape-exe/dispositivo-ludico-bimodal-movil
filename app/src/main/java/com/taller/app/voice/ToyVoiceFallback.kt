@@ -1,37 +1,41 @@
 package com.taller.app.voice
 
 /**
- * Resultado de alto nivel de una reproducción solicitada por la UI, indicando
- * qué proveedor terminó atendiendo la frase.
+ * Resultado de alto nivel de una reproduccion solicitada por la UI, indicando
+ * que proveedor termino atendiendo la frase y si hubo fallback.
  */
 sealed interface VoiceOutcome {
-    /** El proveedor neural reprodujo correctamente. */
-    data object NeuralSuccess : VoiceOutcome
+    val providerRequested: ToyVoiceProviderType
+    val providerUsed: ToyVoiceProviderType?
+    val fallbackUsed: Boolean
+    val errorMessage: String?
+    val latencyMs: Long
 
-    /** El proveedor local reprodujo correctamente (selección directa). */
-    data object LocalSuccess : VoiceOutcome
+    data class Completed(
+        override val providerRequested: ToyVoiceProviderType,
+        override val providerUsed: ToyVoiceProviderType,
+        override val fallbackUsed: Boolean,
+        override val errorMessage: String?,
+        override val latencyMs: Long
+    ) : VoiceOutcome
 
-    /** El proveedor neural falló y se usó la voz local como respaldo. */
-    data class FallbackUsed(val reason: String) : VoiceOutcome
-
-    /** No fue posible reproducir con ningún proveedor. */
-    data class Failed(val reason: String) : VoiceOutcome
+    data class Failed(
+        override val providerRequested: ToyVoiceProviderType,
+        override val errorMessage: String,
+        override val latencyMs: Long
+    ) : VoiceOutcome {
+        override val providerUsed: ToyVoiceProviderType? = null
+        override val fallbackUsed: Boolean = false
+    }
 }
 
 /**
- * Orquesta la reproducción entre el proveedor neural y el local, aplicando el
- * respaldo automático cuando corresponde. Es independiente de Android para
- * poder probarse de forma aislada.
+ * Orquesta la reproduccion entre proveedores, aplicando respaldo automatico
+ * cuando corresponde. Es independiente de Android para poder probarse de forma
+ * aislada.
  */
 object ToyVoiceFallback {
 
-    /**
-     * @param useNeural si el usuario eligió el proveedor neural.
-     * @param allowFallback si se permite caer a la voz local cuando el neural falla.
-     * @param neural proveedor neural.
-     * @param local proveedor local (respaldo).
-     * @param onPlaybackStart se invoca cuando empieza a sonar el audio.
-     */
     suspend fun speak(
         text: String,
         useNeural: Boolean,
@@ -40,25 +44,50 @@ object ToyVoiceFallback {
         local: ToyVoiceProvider,
         onPlaybackStart: () -> Unit = {}
     ): VoiceOutcome {
-        if (!useNeural) {
-            return when (val result = local.speak(text, onPlaybackStart)) {
-                is VoicePlaybackResult.Success -> VoiceOutcome.LocalSuccess
-                is VoicePlaybackResult.Error -> VoiceOutcome.Failed(result.message)
+        val requested = if (useNeural) ToyVoiceProviderType.AZURE_NEURAL else ToyVoiceProviderType.LOCAL
+        val providers = if (!useNeural) {
+            listOf(ToyVoiceProviderType.LOCAL to local)
+        } else if (allowFallback) {
+            listOf(ToyVoiceProviderType.AZURE_NEURAL to neural, ToyVoiceProviderType.LOCAL to local)
+        } else {
+            listOf(ToyVoiceProviderType.AZURE_NEURAL to neural)
+        }
+        return speakWithFallback(
+            text = text,
+            providerRequested = requested,
+            providers = providers,
+            onPlaybackStart = onPlaybackStart
+        )
+    }
+
+    suspend fun speakWithFallback(
+        text: String,
+        providerRequested: ToyVoiceProviderType,
+        providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>>,
+        onPlaybackStart: () -> Unit = {}
+    ): VoiceOutcome {
+        val startedAt = System.currentTimeMillis()
+        val errors = mutableListOf<String>()
+
+        for ((type, provider) in providers) {
+            when (val result = provider.speak(text, onPlaybackStart)) {
+                is VoicePlaybackResult.Success -> {
+                    return VoiceOutcome.Completed(
+                        providerRequested = providerRequested,
+                        providerUsed = type,
+                        fallbackUsed = type != providerRequested,
+                        errorMessage = errors.firstOrNull(),
+                        latencyMs = System.currentTimeMillis() - startedAt
+                    )
+                }
+                is VoicePlaybackResult.Error -> errors.add(result.message)
             }
         }
 
-        when (val neuralResult = neural.speak(text, onPlaybackStart)) {
-            is VoicePlaybackResult.Success -> return VoiceOutcome.NeuralSuccess
-            is VoicePlaybackResult.Error -> {
-                if (!allowFallback) {
-                    return VoiceOutcome.Failed(neuralResult.message)
-                }
-                return when (val localResult = local.speak(text, onPlaybackStart)) {
-                    is VoicePlaybackResult.Success -> VoiceOutcome.FallbackUsed(neuralResult.message)
-                    is VoicePlaybackResult.Error ->
-                        VoiceOutcome.Failed("${neuralResult.message} ${localResult.message}")
-                }
-            }
-        }
+        return VoiceOutcome.Failed(
+            providerRequested = providerRequested,
+            errorMessage = errors.joinToString(" ").ifBlank { "No se pudo reproducir la voz." },
+            latencyMs = System.currentTimeMillis() - startedAt
+        )
     }
 }

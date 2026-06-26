@@ -87,6 +87,7 @@ import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceFallback
+import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
@@ -95,6 +96,8 @@ import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import com.taller.app.voice.neural.OpenAiTtsConfig
+import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -707,6 +710,9 @@ private fun ClassicSession(
     val azureVoiceProvider = remember {
         AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(voiceSettings.azureVoiceName) }
     }
+    val openAiVoiceProvider = remember {
+        OpenAiTtsVoiceProvider(context) { OpenAiTtsConfig.fromBuild(voiceSettings.openAiVoiceName) }
+    }
     val elevenLabsVoiceProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(voiceSettings.neuralVoiceId) }
     }
@@ -715,6 +721,7 @@ private fun ClassicSession(
         toySpeechService.initialize { ttsStateFlow.value = it }
         onDispose {
             toySpeechService.shutdown()
+            openAiVoiceProvider.release()
             azureVoiceProvider.release()
             elevenLabsVoiceProvider.release()
         }
@@ -729,9 +736,7 @@ private fun ClassicSession(
         val label: String
         val fallback: Boolean
         when (outcome) {
-            is VoiceOutcome.NeuralSuccess -> { label = providerLabel(selected); fallback = false }
-            is VoiceOutcome.LocalSuccess -> { label = providerLabel(ToyVoiceProviderType.LOCAL); fallback = false }
-            is VoiceOutcome.FallbackUsed -> { label = providerLabel(ToyVoiceProviderType.LOCAL); fallback = true }
+            is VoiceOutcome.Completed -> { label = providerLabel(outcome.providerUsed); fallback = outcome.fallbackUsed }
             is VoiceOutcome.Failed, null -> { label = "Ninguno"; fallback = false }
         }
         lastVoiceProvider = label
@@ -740,6 +745,7 @@ private fun ClassicSession(
 
     suspend fun speakAndAwait(text: String) {
         val neural = when (voiceSettings.provider) {
+            ToyVoiceProviderType.OPENAI_TTS -> openAiVoiceProvider
             ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
             ToyVoiceProviderType.LOCAL -> localVoiceProvider
@@ -750,12 +756,28 @@ private fun ClassicSession(
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    ToyVoiceFallback.speak(
+                    val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (voiceSettings.provider) {
+                        ToyVoiceProviderType.OPENAI_TTS -> buildList {
+                            add(ToyVoiceProviderType.OPENAI_TTS to openAiVoiceProvider)
+                            if (voiceSettings.fallbackToLocal) {
+                                add(ToyVoiceProviderType.AZURE_NEURAL to azureVoiceProvider)
+                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
+                            }
+                        }
+                        ToyVoiceProviderType.AZURE_NEURAL,
+                        ToyVoiceProviderType.ELEVENLABS -> buildList {
+                            add(voiceSettings.provider to neural)
+                            if (voiceSettings.fallbackToLocal) {
+                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
+                            }
+                        }
+                        ToyVoiceProviderType.LOCAL ->
+                            listOf(ToyVoiceProviderType.LOCAL to localVoiceProvider)
+                    }
+                    ToyVoiceFallback.speakWithFallback(
                         text = text,
-                        useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
-                        allowFallback = voiceSettings.fallbackToLocal,
-                        neural = neural,
-                        local = localVoiceProvider
+                        providerRequested = voiceSettings.provider,
+                        providers = providers
                     )
                 }.getOrNull()
             }
@@ -764,6 +786,7 @@ private fun ClassicSession(
             }
             recordVoice(voiceSettings.provider, outcome)
         } finally {
+            openAiVoiceProvider.stop()
             azureVoiceProvider.stop()
             elevenLabsVoiceProvider.stop()
             toySpeechService.stop()
@@ -773,6 +796,7 @@ private fun ClassicSession(
 
     LaunchedEffect(isPausedByTeacher) {
         if (isPausedByTeacher) {
+            openAiVoiceProvider.stop()
             azureVoiceProvider.stop()
             elevenLabsVoiceProvider.stop()
             toySpeechService.stop()
@@ -1042,6 +1066,7 @@ private fun ClassicSession(
 
     fun finishByTeacher() {
         if (sttState == SttState.LISTENING) speechService.stopListening()
+        openAiVoiceProvider.stop()
         azureVoiceProvider.stop()
         elevenLabsVoiceProvider.stop()
         toySpeechService.stop()
@@ -1842,6 +1867,7 @@ private fun InfoBanner(message: String) {
 }
 
 private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
+    ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
     ToyVoiceProviderType.LOCAL -> "Voz local"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
