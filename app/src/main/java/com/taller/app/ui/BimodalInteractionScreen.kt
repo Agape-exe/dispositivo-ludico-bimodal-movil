@@ -108,6 +108,7 @@ import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceFallback
+import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
@@ -116,6 +117,8 @@ import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import com.taller.app.voice.neural.OpenAiTtsConfig
+import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.text.Normalizer
@@ -964,6 +967,9 @@ private fun BimodalSession(
     val azureVoiceProvider = remember {
         AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(voiceSettings.azureVoiceName) }
     }
+    val openAiVoiceProvider = remember {
+        OpenAiTtsVoiceProvider(context) { OpenAiTtsConfig.fromBuild(voiceSettings.openAiVoiceName) }
+    }
     val elevenLabsVoiceProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(voiceSettings.neuralVoiceId) }
     }
@@ -972,6 +978,7 @@ private fun BimodalSession(
         toySpeechService.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
             toySpeechService.shutdown()
+            openAiVoiceProvider.release()
             azureVoiceProvider.release()
             elevenLabsVoiceProvider.release()
         }
@@ -997,17 +1004,9 @@ private fun BimodalSession(
         val usedLabel: String
         val fallback: Boolean
         when (outcome) {
-            is VoiceOutcome.NeuralSuccess -> {
-                usedLabel = selectedLabel
-                fallback = false
-            }
-            is VoiceOutcome.LocalSuccess -> {
-                usedLabel = providerLabel(ToyVoiceProviderType.LOCAL)
-                fallback = selected != ToyVoiceProviderType.LOCAL
-            }
-            is VoiceOutcome.FallbackUsed -> {
-                usedLabel = providerLabel(ToyVoiceProviderType.LOCAL)
-                fallback = true
+            is VoiceOutcome.Completed -> {
+                usedLabel = providerLabel(outcome.providerUsed)
+                fallback = outcome.fallbackUsed
             }
             is VoiceOutcome.Failed, null -> {
                 usedLabel = "Ninguno"
@@ -1035,6 +1034,7 @@ private fun BimodalSession(
     // accion manual), el bloque finally detiene el audio residual de forma ordenada.
     suspend fun speakAndAwait(text: String) {
         val neuralProvider = when (voiceSettings.provider) {
+            ToyVoiceProviderType.OPENAI_TTS -> openAiVoiceProvider
             ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
             ToyVoiceProviderType.LOCAL -> localVoiceProvider
@@ -1050,12 +1050,28 @@ private fun BimodalSession(
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    ToyVoiceFallback.speak(
+                    val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (voiceSettings.provider) {
+                        ToyVoiceProviderType.OPENAI_TTS -> buildList {
+                            add(ToyVoiceProviderType.OPENAI_TTS to openAiVoiceProvider)
+                            if (voiceSettings.fallbackToLocal) {
+                                add(ToyVoiceProviderType.AZURE_NEURAL to azureVoiceProvider)
+                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
+                            }
+                        }
+                        ToyVoiceProviderType.AZURE_NEURAL,
+                        ToyVoiceProviderType.ELEVENLABS -> buildList {
+                            add(voiceSettings.provider to neuralProvider)
+                            if (voiceSettings.fallbackToLocal) {
+                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
+                            }
+                        }
+                        ToyVoiceProviderType.LOCAL ->
+                            listOf(ToyVoiceProviderType.LOCAL to localVoiceProvider)
+                    }
+                    ToyVoiceFallback.speakWithFallback(
                         text = text,
-                        useNeural = voiceSettings.provider != ToyVoiceProviderType.LOCAL,
-                        allowFallback = voiceSettings.fallbackToLocal,
-                        neural = neuralProvider,
-                        local = localVoiceProvider
+                        providerRequested = voiceSettings.provider,
+                        providers = providers
                     )
                 }.getOrNull()
             }
@@ -1067,6 +1083,7 @@ private fun BimodalSession(
             }
             recordVoiceUsage(voiceSettings.provider, outcome)
         } finally {
+            openAiVoiceProvider.stop()
             azureVoiceProvider.stop()
             elevenLabsVoiceProvider.stop()
             toySpeechService.stop()
@@ -1233,6 +1250,7 @@ private fun BimodalSession(
             )
             if (toyVoiceSpeaking) {
                 toySpeechService.stop()
+                openAiVoiceProvider.stop()
                 azureVoiceProvider.stop()
                 elevenLabsVoiceProvider.stop()
             }
@@ -2864,6 +2882,7 @@ private fun sttStatusLabel(state: SttState): String = when (state) {
 
 /** Etiqueta legible y corta para un proveedor de voz. */
 private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
+    ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
     ToyVoiceProviderType.LOCAL -> "Voz local"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"

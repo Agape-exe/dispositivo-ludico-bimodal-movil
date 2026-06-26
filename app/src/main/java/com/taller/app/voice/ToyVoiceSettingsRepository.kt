@@ -26,6 +26,7 @@ class ToyVoiceSettingsRepository(private val context: Context) {
         val LOCALE_TAG = stringPreferencesKey("locale_tag")
         val PROVIDER = stringPreferencesKey("voice_provider")
         val NEURAL_VOICE_ID = stringPreferencesKey("neural_voice_id")
+        val OPENAI_VOICE_NAME = stringPreferencesKey("openai_voice_name")
         val AZURE_VOICE_NAME = stringPreferencesKey("azure_voice_name")
         val FALLBACK_TO_LOCAL = booleanPreferencesKey("fallback_to_local")
         val UPDATED_AT = longPreferencesKey("updated_at")
@@ -39,8 +40,9 @@ class ToyVoiceSettingsRepository(private val context: Context) {
             localeTag = prefs[Keys.LOCALE_TAG],
             provider = prefs[Keys.PROVIDER]?.let { name ->
                 runCatching { ToyVoiceProviderType.valueOf(name) }.getOrNull()
-            } ?: ToyVoiceProviderType.LOCAL,
+            } ?: ToyVoiceProviderType.OPENAI_TTS,
             neuralVoiceId = prefs[Keys.NEURAL_VOICE_ID],
+            openAiVoiceName = prefs[Keys.OPENAI_VOICE_NAME],
             azureVoiceName = prefs[Keys.AZURE_VOICE_NAME],
             fallbackToLocal = prefs[Keys.FALLBACK_TO_LOCAL] ?: true,
             updatedAt = prefs[Keys.UPDATED_AT] ?: 0L
@@ -68,6 +70,11 @@ class ToyVoiceSettingsRepository(private val context: Context) {
                 prefs[Keys.NEURAL_VOICE_ID] = settings.neuralVoiceId
             } else {
                 prefs.remove(Keys.NEURAL_VOICE_ID)
+            }
+            if (settings.openAiVoiceName != null) {
+                prefs[Keys.OPENAI_VOICE_NAME] = settings.openAiVoiceName
+            } else {
+                prefs.remove(Keys.OPENAI_VOICE_NAME)
             }
             if (settings.azureVoiceName != null) {
                 prefs[Keys.AZURE_VOICE_NAME] = settings.azureVoiceName

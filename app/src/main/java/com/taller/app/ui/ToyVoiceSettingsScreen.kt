@@ -40,6 +40,7 @@ import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceFallback
 import com.taller.app.voice.ToyVoiceInfo
+import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
@@ -48,13 +49,15 @@ import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import com.taller.app.voice.neural.OpenAiTtsConfig
+import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 private enum class PlaybackUi { IDLE, GENERATING, PLAYING }
 
 private val TEST_PHRASES = listOf(
-    "Saludo inicial" to "¡Hola! Vamos a jugar y aprender juntos.",
+    "Probar voz de Seven" to "Hola! Soy Seven, tu amigo explorador. Hoy necesito tu ayuda para aprender cosas nuevas de la Tierra.",
     "Atención" to "Escucha con atención esta pregunta.",
     "Tiempo agotado" to "Se terminó el tiempo. Pasemos a la siguiente pregunta.",
     "Fin de actividad" to "Terminamos la actividad. Gracias por participar."
@@ -77,7 +80,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     var speechRate by remember { mutableStateOf(0.92f) }
     var pitch by remember { mutableStateOf(1.12f) }
 
-    var providerType by remember { mutableStateOf(ToyVoiceProviderType.LOCAL) }
+    var providerType by remember { mutableStateOf(ToyVoiceProviderType.OPENAI_TTS) }
+    var openAiVoiceName by remember { mutableStateOf("") }
     var neuralVoiceId by remember { mutableStateOf("") }
     var azureVoiceName by remember { mutableStateOf("") }
     var fallbackEnabled by remember { mutableStateOf(true) }
@@ -96,6 +100,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         pitch = pitch,
         provider = providerType,
         neuralVoiceId = neuralVoiceId.takeIf { it.isNotBlank() },
+        openAiVoiceName = openAiVoiceName.takeIf { it.isNotBlank() },
         azureVoiceName = azureVoiceName.takeIf { it.isNotBlank() },
         fallbackToLocal = fallbackEnabled
     )
@@ -106,9 +111,16 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     val azureProvider = remember {
         AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(azureVoiceName) }
     }
+    val openAiProvider = remember {
+        OpenAiTtsVoiceProvider(context) { OpenAiTtsConfig.fromBuild(openAiVoiceName) }
+    }
     val elevenLabsProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
     }
+
+    val openAiApiKeyPresent = remember { OpenAiTtsConfig.apiKeyFromBuild().isNotBlank() }
+    val effectiveOpenAiConfig = OpenAiTtsConfig.fromBuild(openAiVoiceName)
+    val openAiConfigured = openAiApiKeyPresent
 
     val azureKeyPresent = remember { AzureSpeechConfig.keyFromBuild().isNotBlank() }
     val azureRegionPresent = remember { AzureSpeechConfig.regionFromBuild().isNotBlank() }
@@ -123,6 +135,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         service.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
             service.shutdown()
+            openAiProvider.release()
             azureProvider.release()
             elevenLabsProvider.release()
         }
@@ -134,6 +147,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             speechRate = savedSettings.speechRate
             pitch = savedSettings.pitch
             providerType = savedSettings.provider
+            openAiVoiceName = savedSettings.openAiVoiceName ?: ""
             neuralVoiceId = savedSettings.neuralVoiceId ?: ""
             azureVoiceName = savedSettings.azureVoiceName ?: ""
             fallbackEnabled = savedSettings.fallbackToLocal
@@ -158,6 +172,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     fun playPhrase(text: String) {
         if (playbackUi != PlaybackUi.IDLE) return
         val selectedNeural = when (providerType) {
+            ToyVoiceProviderType.OPENAI_TTS -> openAiProvider
             ToyVoiceProviderType.AZURE_NEURAL -> azureProvider
             ToyVoiceProviderType.ELEVENLABS -> elevenLabsProvider
             ToyVoiceProviderType.LOCAL -> localProvider
@@ -165,12 +180,25 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         scope.launch {
             playbackUi = PlaybackUi.GENERATING
             lastOutcome = null
-            val outcome = ToyVoiceFallback.speak(
+            val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (providerType) {
+                ToyVoiceProviderType.OPENAI_TTS -> buildList {
+                    add(ToyVoiceProviderType.OPENAI_TTS to openAiProvider)
+                    if (fallbackEnabled) {
+                        add(ToyVoiceProviderType.AZURE_NEURAL to azureProvider)
+                        add(ToyVoiceProviderType.LOCAL to localProvider)
+                    }
+                }
+                ToyVoiceProviderType.AZURE_NEURAL,
+                ToyVoiceProviderType.ELEVENLABS -> buildList {
+                    add(providerType to selectedNeural)
+                    if (fallbackEnabled) add(ToyVoiceProviderType.LOCAL to localProvider)
+                }
+                ToyVoiceProviderType.LOCAL -> listOf(ToyVoiceProviderType.LOCAL to localProvider)
+            }
+            val outcome = ToyVoiceFallback.speakWithFallback(
                 text = text,
-                useNeural = providerType != ToyVoiceProviderType.LOCAL,
-                allowFallback = fallbackEnabled,
-                neural = selectedNeural,
-                local = localProvider,
+                providerRequested = providerType,
+                providers = providers,
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
             playbackUi = PlaybackUi.IDLE
@@ -179,6 +207,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     }
 
     fun stopPlayback() {
+        openAiProvider.stop()
         azureProvider.stop()
         elevenLabsProvider.stop()
         service.stop()
@@ -222,6 +251,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
         ProviderSelectionSection(
             selected = providerType,
+            openAiConfigured = openAiConfigured,
             azureConfigured = azureConfigured,
             onSelected = {
                 providerType = it
@@ -232,6 +262,21 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         Spacer(modifier = Modifier.height(16.dp))
 
         when (providerType) {
+            ToyVoiceProviderType.OPENAI_TTS -> OpenAiConfigSection(
+                configured = openAiConfigured,
+                model = effectiveOpenAiConfig.model,
+                voiceName = effectiveOpenAiConfig.voice,
+                selectedVoice = openAiVoiceName.ifBlank { effectiveOpenAiConfig.voice },
+                fallbackEnabled = fallbackEnabled,
+                onVoiceSelected = {
+                    openAiVoiceName = it
+                    applyAndSave()
+                },
+                onFallbackChange = {
+                    fallbackEnabled = it
+                    applyAndSave()
+                }
+            )
             ToyVoiceProviderType.AZURE_NEURAL -> AzureConfigSection(
                 keyPresent = azureKeyPresent,
                 regionPresent = azureRegionPresent,
@@ -353,6 +398,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun ProviderSelectionSection(
     selected: ToyVoiceProviderType,
+    openAiConfigured: Boolean,
     azureConfigured: Boolean,
     onSelected: (ToyVoiceProviderType) -> Unit
 ) {
@@ -368,6 +414,15 @@ private fun ProviderSelectionSection(
             )
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            ProviderOption(
+                title = "OpenAI TTS" + if (openAiConfigured) " (principal)" else " - sin configurar",
+                description = "Voz neural natural para Seven, con respaldo hacia Azure y voz local.",
+                isSelected = selected == ToyVoiceProviderType.OPENAI_TTS,
+                onClick = { onSelected(ToyVoiceProviderType.OPENAI_TTS) }
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             ProviderOption(
                 title = "Voz local (sin conexión)",
@@ -443,6 +498,80 @@ private fun ProviderOption(
                     modifier = Modifier.padding(start = 8.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun OpenAiConfigSection(
+    configured: Boolean,
+    model: String,
+    voiceName: String,
+    selectedVoice: String,
+    fallbackEnabled: Boolean,
+    onVoiceSelected: (String) -> Unit,
+    onFallbackChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Seven infantil natural",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = if (configured) "OpenAI configurado." else "OpenAI no configurado.",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = if (configured) {
+                    "Credencial detectada en la configuracion local."
+                } else {
+                    "Falta OPENAI_API_KEY en local.properties. Se usara Azure o voz local como respaldo."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Modelo: $model",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz seleccionada: $voiceName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OpenAiTtsConfig.SUPPORTED_VOICES.forEach { voice ->
+                ProviderOption(
+                    title = voice,
+                    description = if (voice == OpenAiTtsConfig.DEFAULT_VOICE) {
+                        "Voz recomendada inicial."
+                    } else {
+                        "Voz disponible para Seven."
+                    },
+                    isSelected = selectedVoice == voice,
+                    onClick = { onVoiceSelected(voice) }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            FallbackSwitch(enabled = fallbackEnabled, onChanged = onFallbackChange)
         }
     }
 }
@@ -646,6 +775,13 @@ private fun FallbackSwitch(enabled: Boolean, onChanged: (Boolean) -> Unit) {
     }
 }
 
+private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
+    ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
+    ToyVoiceProviderType.LOCAL -> "Voz local"
+    ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
+    ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
+}
+
 @Composable
 private fun PlaybackStatusCard(
     providerType: ToyVoiceProviderType,
@@ -653,7 +789,8 @@ private fun PlaybackStatusCard(
     outcome: VoiceOutcome?,
     localState: ToySpeechState
 ) {
-    val providerLabel = when (providerType) {
+    val activeProviderLabel = when (providerType) {
+        ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
         ToyVoiceProviderType.LOCAL -> "Voz local"
         ToyVoiceProviderType.AZURE_NEURAL -> "Azure Neural"
         ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
@@ -663,14 +800,13 @@ private fun PlaybackStatusCard(
         PlaybackUi.GENERATING -> "Generando audio..." to MaterialTheme.colorScheme.tertiary
         PlaybackUi.PLAYING -> "Reproduciendo..." to MaterialTheme.colorScheme.tertiary
         PlaybackUi.IDLE -> when (outcome) {
-            is VoiceOutcome.NeuralSuccess ->
-                "Reproducido con voz neural." to MaterialTheme.colorScheme.primary
-            is VoiceOutcome.LocalSuccess ->
-                "Reproducido con voz local." to MaterialTheme.colorScheme.primary
-            is VoiceOutcome.FallbackUsed ->
-                "Se usó la voz local como respaldo. (${outcome.reason})" to MaterialTheme.colorScheme.tertiary
+            is VoiceOutcome.Completed -> if (outcome.fallbackUsed) {
+                "Se uso ${providerLabel(outcome.providerUsed)} como respaldo." to MaterialTheme.colorScheme.tertiary
+            } else {
+                "Reproducido con ${providerLabel(outcome.providerUsed)}." to MaterialTheme.colorScheme.primary
+            }
             is VoiceOutcome.Failed ->
-                "No se pudo reproducir. (${outcome.reason})" to MaterialTheme.colorScheme.error
+                "No se pudo reproducir. (${outcome.errorMessage})" to MaterialTheme.colorScheme.error
             null -> "Listo para probar." to MaterialTheme.colorScheme.onSurfaceVariant
         }
     }
@@ -681,7 +817,7 @@ private fun PlaybackStatusCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Proveedor activo: $providerLabel",
+                text = "Proveedor activo: $activeProviderLabel",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -691,6 +827,24 @@ private fun PlaybackStatusCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = statusColor
             )
+            if (outcome != null && playbackUi == PlaybackUi.IDLE) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Ultima reproduccion: ${outcome.providerUsed?.let { providerLabel(it) } ?: "Ninguna"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Fallback usado: ${if (outcome.fallbackUsed) "Si" else "No"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Latencia: ${outcome.latencyMs} ms",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (localState == ToySpeechState.ERROR) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -716,7 +870,7 @@ private fun TestPhrasesSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Probar frases del juguete",
+                text = "Probar voz de Seven",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )

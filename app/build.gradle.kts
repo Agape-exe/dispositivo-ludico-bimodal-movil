@@ -20,6 +20,9 @@ val localProperties = Properties().apply {
 fun localSecret(name: String): String =
     (localProperties.getProperty(name) ?: System.getenv(name) ?: "").trim()
 
+fun buildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 android {
     namespace = "com.taller.app"
     compileSdk {
@@ -38,27 +41,47 @@ android {
         buildConfigField(
             "String",
             "ELEVENLABS_API_KEY",
-            "\"${localSecret("ELEVENLABS_API_KEY")}\""
+            buildConfigString(localSecret("ELEVENLABS_API_KEY"))
         )
         buildConfigField(
             "String",
             "ELEVENLABS_VOICE_ID",
-            "\"${localSecret("ELEVENLABS_VOICE_ID")}\""
+            buildConfigString(localSecret("ELEVENLABS_VOICE_ID"))
         )
         buildConfigField(
             "String",
             "AZURE_SPEECH_KEY",
-            "\"${localSecret("AZURE_SPEECH_KEY")}\""
+            buildConfigString(localSecret("AZURE_SPEECH_KEY"))
         )
         buildConfigField(
             "String",
             "AZURE_SPEECH_REGION",
-            "\"${localSecret("AZURE_SPEECH_REGION")}\""
+            buildConfigString(localSecret("AZURE_SPEECH_REGION"))
         )
         buildConfigField(
             "String",
             "AZURE_SPEECH_VOICE",
-            "\"${localSecret("AZURE_SPEECH_VOICE")}\""
+            buildConfigString(localSecret("AZURE_SPEECH_VOICE"))
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_API_KEY",
+            buildConfigString(localSecret("OPENAI_API_KEY"))
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_TTS_MODEL",
+            buildConfigString(localSecret("OPENAI_TTS_MODEL").ifBlank { "gpt-4o-mini-tts" })
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_TTS_VOICE",
+            buildConfigString(localSecret("OPENAI_TTS_VOICE").ifBlank { "marin" })
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_TTS_INSTRUCTIONS",
+            buildConfigString(localSecret("OPENAI_TTS_INSTRUCTIONS").ifBlank { "Habla en espanol latino con una voz calida, clara, amable y expresiva, como un companero de juego para ninos. Manten un ritmo natural, no demasiado rapido, con tono curioso y alegre. Evita sonar como profesor serio o como robot." })
         )
 
         // Mediacion ludica generativa (opcional). Desactivada por defecto: la app
@@ -74,17 +97,17 @@ android {
         buildConfigField(
             "String",
             "GENERATIVE_MEDIATION_API_KEY",
-            "\"${localSecret("GENERATIVE_MEDIATION_API_KEY")}\""
+            buildConfigString(localSecret("GENERATIVE_MEDIATION_API_KEY"))
         )
         buildConfigField(
             "String",
             "GENERATIVE_MEDIATION_ENDPOINT",
-            "\"${localSecret("GENERATIVE_MEDIATION_ENDPOINT")}\""
+            buildConfigString(localSecret("GENERATIVE_MEDIATION_ENDPOINT"))
         )
         buildConfigField(
             "String",
             "GENERATIVE_MEDIATION_MODEL",
-            "\"${localSecret("GENERATIVE_MEDIATION_MODEL").ifBlank { "gpt-4o-mini" }}\""
+            buildConfigString(localSecret("GENERATIVE_MEDIATION_MODEL").ifBlank { "gpt-4o-mini" })
         )
     }
 
