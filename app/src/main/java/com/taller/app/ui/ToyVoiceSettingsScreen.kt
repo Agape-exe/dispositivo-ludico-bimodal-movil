@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.taller.app.voice.LocalToyVoiceProvider
+import com.taller.app.voice.InvalidToyVoiceTextReason
 import com.taller.app.voice.SevenVoiceService
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
@@ -120,7 +121,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     var playbackUi by remember { mutableStateOf(PlaybackUi.IDLE) }
     var lastOutcome by remember { mutableStateOf<VoiceOutcome?>(null) }
-    var selectedTestPhrase by remember { mutableStateOf(TEST_PHRASES.first()) }
+    var selectedTestPhrase by remember { mutableStateOf<Pair<String, String>?>(null) }
     var lastTestedVoice by remember { mutableStateOf<String?>(null) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
     var cacheStats by remember { mutableStateOf(voiceCache.stats()) }
@@ -222,8 +223,17 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    fun playPhrase(text: String) {
+    fun playPhrase(text: String?) {
         if (playbackUi != PlaybackUi.IDLE) return
+        if (text.isNullOrBlank()) {
+            lastOutcome = VoiceOutcome.SkippedInvalidText(
+                providerRequested = ToyVoiceProviderType.OPENAI_TTS,
+                reason = InvalidToyVoiceTextReason.EMPTY_TEXT,
+                textLength = text?.length ?: 0,
+                latencyMs = 0L
+            )
+            return
+        }
         scope.launch {
             playbackUi = PlaybackUi.GENERATING
             lastOutcome = null
@@ -375,7 +385,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             isPlaying = playbackUi != PlaybackUi.IDLE,
             selectedPhrase = selectedTestPhrase,
             onPhraseSelected = { selectedTestPhrase = it },
-            onSpeak = { playPhrase(selectedTestPhrase.second) },
+            onSpeak = { playPhrase(selectedTestPhrase?.second) },
             onStop = { stopPlayback() }
         )
 
@@ -1049,7 +1059,7 @@ private fun PlaybackStatusCard(
 private fun TestPhrasesSection(
     enabled: Boolean,
     isPlaying: Boolean,
-    selectedPhrase: Pair<String, String>,
+    selectedPhrase: Pair<String, String>?,
     onPhraseSelected: (Pair<String, String>) -> Unit,
     onSpeak: () -> Unit,
     onStop: () -> Unit
@@ -1071,7 +1081,7 @@ private fun TestPhrasesSection(
                 TestPhraseOption(
                     label = label,
                     phrase = phrase,
-                    isSelected = selectedPhrase.first == label,
+                    isSelected = selectedPhrase?.first == label,
                     enabled = enabled,
                     onClick = { onPhraseSelected(label to phrase) }
                 )

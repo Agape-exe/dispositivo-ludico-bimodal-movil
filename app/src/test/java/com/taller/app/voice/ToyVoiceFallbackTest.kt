@@ -47,7 +47,7 @@ class ToyVoiceFallbackTest {
 
     @Test
     fun speakWithFallback_nullText_skipsProviders() = runBlocking {
-        val provider = CountingProvider(VoicePlaybackResult.Success)
+        val provider = CountingProvider(VoicePlaybackResult.Success())
 
         val outcome = ToyVoiceFallback.speakWithFallback(
             text = null,
@@ -64,7 +64,7 @@ class ToyVoiceFallbackTest {
 
     @Test
     fun speakWithFallback_placeholderText_skipsProviders() = runBlocking {
-        val provider = CountingProvider(VoicePlaybackResult.Success)
+        val provider = CountingProvider(VoicePlaybackResult.Success())
 
         val outcome = ToyVoiceFallback.speakWithFallback(
             text = "No hay texto para reproducir",

@@ -52,6 +52,11 @@ sealed interface VoiceOutcome {
         override val providerUsed: ToyVoiceProviderType? = null
         override val fallbackUsed: Boolean = false
         override val errorMessage: String = SAFE_INVALID_TEXT_MESSAGE
+        override val cacheHit: Boolean? = null
+        override val cacheKey: String? = null
+        override val synthesisLatencyMs: Long? = null
+        override val playbackLatencyMs: Long? = null
+        override val totalLatencyMs: Long? = null
     }
 
     companion object {
