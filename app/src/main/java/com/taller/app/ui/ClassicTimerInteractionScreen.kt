@@ -181,7 +181,25 @@ private fun isSevenResumeCommand(text: String): Boolean {
  * feedback adaptativo. No invoca SemanticEvaluator en ningún momento.
  */
 @Composable
-fun ClassicTimerInteractionScreen(activityId: Long, onBack: () -> Unit) {
+fun ClassicTimerInteractionScreen(onStartActivity: (Long) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val db = remember { AppDatabase.getInstance(context) }
+    val activityDao = remember { db.activityDao() }
+
+    ClassicActivitySelector(
+        activityDao = activityDao,
+        infoMessage = null,
+        onPick = { onStartActivity(it.id) },
+        onBack = onBack
+    )
+}
+
+@Composable
+fun ClassicSevenFaceScreen(
+    activityId: Long,
+    onChangeActivity: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getInstance(context) }
     val activityDao = remember { db.activityDao() }
@@ -195,10 +213,17 @@ fun ClassicTimerInteractionScreen(activityId: Long, onBack: () -> Unit) {
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    fun load(id: Long) {
+    fun load() {
         scope.launch {
             isLoading = true
             infoMessage = null
+            loadedActivity = null
+            val id = activityId
+            if (id == 0L) {
+                infoMessage = "No se recibio una actividad para iniciar."
+                isLoading = false
+                return@launch
+            }
             val entity = activityDao.getById(id)
             if (entity == null) {
                 infoMessage = "La actividad no existe o fue eliminada."
@@ -217,44 +242,78 @@ fun ClassicTimerInteractionScreen(activityId: Long, onBack: () -> Unit) {
     }
 
     LaunchedEffect(activityId) {
-        if (activityId != 0L) load(activityId)
-    }
-
-    BackHandler {
-        if (loadedActivity != null) {
-            loadedActivity = null
-            infoMessage = null
-        } else {
-            onBack()
-        }
+        load()
     }
 
     val active = loadedActivity
-    if (active == null) {
-        ClassicActivitySelector(
-            activityDao = activityDao,
-            isLoading = isLoading,
-            infoMessage = infoMessage,
-            onPick = { load(it.id) },
-            onBack = onBack
-        )
-    } else {
-        ClassicSession(
-            activity = active,
-            dataLogger = dataLogger,
-            onChangeActivity = {
-                loadedActivity = null
-                infoMessage = null
-            },
-            onBack = onBack
-        )
+    when {
+        active != null -> {
+            ClassicSession(
+                activity = active,
+                dataLogger = dataLogger,
+                onChangeActivity = onChangeActivity,
+                onBack = onBack
+            )
+        }
+        else -> {
+            ClassicSevenLoadingOrError(
+                isLoading = isLoading,
+                infoMessage = infoMessage,
+                onBack = onBack
+            )
+        }
+    }
+}
+
+@Composable
+private fun ClassicSevenLoadingOrError(
+    isLoading: Boolean,
+    infoMessage: String?,
+    onBack: () -> Unit
+) {
+    BackHandler { onBack() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(SevenFaceBackground)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            SevenFace(
+                state = SevenVisualState.ERROR,
+                modifier = Modifier.size(220.dp)
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            if (isLoading) {
+                CircularProgressIndicator(color = SevenFaceAccent)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Cargando actividad...",
+                    color = ClassicTimerPrimaryText,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center
+                )
+            } else {
+                Text(
+                    text = infoMessage ?: "No se pudo abrir la actividad.",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedButton(onClick = onBack) {
+                    Text("Volver")
+                }
+            }
+        }
     }
 }
 
 @Composable
 private fun ClassicActivitySelector(
     activityDao: com.taller.app.data.local.dao.ActivityDao,
-    isLoading: Boolean,
     infoMessage: String?,
     onPick: (ActivityEntity) -> Unit,
     onBack: () -> Unit
@@ -291,13 +350,6 @@ private fun ClassicActivitySelector(
 
         if (infoMessage != null) {
             InfoBanner(infoMessage)
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = ClassicTimerOrange)
-            }
             Spacer(modifier = Modifier.height(16.dp))
         }
 
