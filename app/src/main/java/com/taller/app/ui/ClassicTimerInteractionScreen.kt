@@ -747,7 +747,10 @@ private fun ClassicSession(
         lastVoiceFallback = fallback
         Log.d(
             CLASSIC_LOG_TAG,
-            "voz: seleccionado=${providerLabel(ToyVoiceProviderType.OPENAI_TTS)} usado=$label fallback=$fallback"
+            "voz: seleccionado=${providerLabel(ToyVoiceProviderType.OPENAI_TTS)} usado=$label fallback=$fallback " +
+                "cacheHit=${outcome?.cacheHit} cacheKey=${outcome?.cacheKey} " +
+                "synthesisLatencyMs=${outcome?.synthesisLatencyMs} " +
+                "playbackLatencyMs=${outcome?.playbackLatencyMs} totalLatencyMs=${outcome?.totalLatencyMs}"
         )
     }
 

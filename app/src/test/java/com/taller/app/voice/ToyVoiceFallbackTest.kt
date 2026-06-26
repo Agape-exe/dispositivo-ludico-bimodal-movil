@@ -17,8 +17,8 @@ class ToyVoiceFallbackTest {
                 ToyVoiceProviderType.OPENAI_TTS to FakeProvider(
                     VoicePlaybackResult.Error(VoiceErrorType.NOT_CONFIGURED, "sin openai")
                 ),
-                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success),
-                ToyVoiceProviderType.LOCAL to FakeProvider(VoicePlaybackResult.Success)
+                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success()),
+                ToyVoiceProviderType.LOCAL to FakeProvider(VoicePlaybackResult.Success())
             )
         )
 
@@ -35,8 +35,8 @@ class ToyVoiceFallbackTest {
             text = "Hola",
             providerRequested = ToyVoiceProviderType.OPENAI_TTS,
             providers = listOf(
-                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(VoicePlaybackResult.Success),
-                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success)
+                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(VoicePlaybackResult.Success()),
+                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success())
             )
         )
 

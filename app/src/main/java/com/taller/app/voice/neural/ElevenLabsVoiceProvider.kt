@@ -165,7 +165,7 @@ class ElevenLabsVoiceProvider(
 
         player.setOnCompletionListener {
             cleanup()
-            if (continuation.isActive) continuation.resume(VoicePlaybackResult.Success)
+            if (continuation.isActive) continuation.resume(VoicePlaybackResult.Success())
         }
         player.setOnErrorListener { _, what, _ ->
             cleanup()

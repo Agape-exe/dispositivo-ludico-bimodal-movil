@@ -1021,7 +1021,10 @@ private fun BimodalSession(
         lastVoiceFallbackUsed = fallback
         Log.d(
             BIMODAL_VOICE_TAG,
-            "reproduccion: seleccionado=$selectedLabel usado=$usedLabel fallback=$fallback"
+            "reproduccion: seleccionado=$selectedLabel usado=$usedLabel fallback=$fallback " +
+                "cacheHit=${outcome?.cacheHit} cacheKey=${outcome?.cacheKey} " +
+                "synthesisLatencyMs=${outcome?.synthesisLatencyMs} " +
+                "playbackLatencyMs=${outcome?.playbackLatencyMs} totalLatencyMs=${outcome?.totalLatencyMs}"
         )
     }
 
