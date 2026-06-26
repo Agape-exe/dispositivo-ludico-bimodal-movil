@@ -1,12 +1,22 @@
 package com.taller.app.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +55,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
@@ -81,6 +93,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import com.taller.app.logger.InteractionDataLogger
 import kotlinx.coroutines.withTimeoutOrNull
+import java.text.Normalizer
 
 private const val CLASSIC_LOG_TAG = "ClassicTimer"
 
@@ -90,6 +103,22 @@ private val ClassicTimerTitleText = Color(0xFFF29A00)
 private val ClassicTimerPrimaryText = Color(0xFF2E2535)
 private val ClassicTimerSecondaryText = Color(0xFF3F3A4A)
 private val ClassicTimerBackground = Color(0xFFFFFFFF)
+private val SevenFaceBackground = Color(0xFFF8F3FF)
+private val SevenFaceAccent = Color(0xFF7C4DFF)
+private val SevenCountdownOrange = Color(0xFFFF8A00)
+private val SevenEyeWhite = Color(0xFFFFFBF2)
+private val SevenEyePupil = Color(0xFF241A2F)
+
+private enum class SevenVisualState {
+    IDLE,
+    WAITING_START_COMMAND,
+    SPEAKING,
+    COUNTDOWN,
+    LISTENING,
+    PAUSED,
+    COMPLETED,
+    ERROR
+}
 
 private const val SPEECH_TIMEOUT_MIN_MS = 12_000L
 private const val SPEECH_TIMEOUT_MAX_MS = 45_000L
@@ -105,6 +134,44 @@ private fun speechTimeoutMsFor(text: String): Long =
  * última ronda, donde el cierre encadena directamente.
  */
 private const val ROUND_TRANSITION_DELAY_MS = 800L
+
+private fun normalizeSevenCommand(text: String): String {
+    val withoutMarks = Normalizer.normalize(text, Normalizer.Form.NFD)
+        .replace("\\p{Mn}+".toRegex(), "")
+    return withoutMarks
+        .lowercase()
+        .replace("[^a-z0-9ñ ]".toRegex(), " ")
+        .replace("\\s+".toRegex(), " ")
+        .trim()
+}
+
+private fun isSevenStartCommand(text: String): Boolean {
+    val normalized = normalizeSevenCommand(text)
+    if (!normalized.split(" ").contains("seven")) return false
+    return normalized.contains("hora de empezar") ||
+        normalized.contains("empieza") ||
+        normalized.contains("iniciar") ||
+        normalized.contains("comencemos") ||
+        normalized.contains("empecemos")
+}
+
+private fun isSevenPauseCommand(text: String): Boolean {
+    val normalized = normalizeSevenCommand(text)
+    if (!normalized.split(" ").contains("seven")) return false
+    return normalized.contains("pausa") ||
+        normalized.contains("pausar") ||
+        normalized.contains("detente") ||
+        normalized.contains("parar") ||
+        normalized.contains("alto")
+}
+
+private fun isSevenResumeCommand(text: String): Boolean {
+    val normalized = normalizeSevenCommand(text)
+    if (!normalized.split(" ").contains("seven")) return false
+    return normalized.contains("continua") ||
+        normalized.contains("continuar") ||
+        normalized.contains("seguimos")
+}
 
 /**
  * Pantalla del modo clásico con temporizador fijo.
@@ -409,12 +476,51 @@ private fun ClassicSession(
     var sttState by remember(activity) { mutableStateOf(SttState.IDLE) }
     var sttPartial by remember(activity) { mutableStateOf("") }
     var sttFinal by remember(activity) { mutableStateOf("") }
+    var startCommandHint by remember(activity) { mutableStateOf("Di: Seven, hora de empezar") }
+    var startCommandDetected by remember(activity) { mutableStateOf(false) }
+    var isPausedByTeacher by remember(activity) { mutableStateOf(false) }
+    var resumeToken by remember(activity) { mutableIntStateOf(0) }
+    var startCommandLogPending by remember(activity) { mutableStateOf(false) }
 
     val answerDelivered = remember(activity) { mutableStateOf(false) }
     val hadPartialAtTimeout = remember(activity) { mutableStateOf(false) }
 
+    fun logClassicTechnicalEvent(eventType: String) {
+        val sid = logSessionId
+        if (sid <= 0L) return
+        scope.launch {
+            runCatching {
+                dataLogger.logTechnicalEvent(
+                    sessionId = sid,
+                    questionId = progress?.currentQuestionId?.toLongOrNull(),
+                    attemptId = if (logAttemptId > 0L) logAttemptId else null,
+                    operationMode = "CLASSIC",
+                    eventType = eventType
+                )
+            }
+        }
+    }
+
+    fun pauseByTeacher() {
+        if (isPausedByTeacher) return
+        isPausedByTeacher = true
+        if (sttState == SttState.LISTENING) speechService.stopListening()
+        logClassicTechnicalEvent("CLASSIC_PAUSED_BY_TEACHER")
+    }
+
+    fun resumeByTeacher() {
+        if (!isPausedByTeacher) return
+        isPausedByTeacher = false
+        resumeToken += 1
+        logClassicTechnicalEvent("CLASSIC_RESUMED_BY_TEACHER")
+    }
+
     fun deliverAnswer(text: String) {
         if (answerDelivered.value) return
+        if (isSevenPauseCommand(text)) {
+            pauseByTeacher()
+            return
+        }
         answerDelivered.value = true
         if (runner.state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
             dispatch { runner.onAnswerReceived() }
@@ -426,7 +532,7 @@ private fun ClassicSession(
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
-        if (runner.state != ClassicTimerState.WAITING_FIXED_RESPONSE) return
+        if (runner.state != ClassicTimerState.WAITING_FIXED_RESPONSE || isPausedByTeacher) return
         if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) return
 
         sttPartial = ""
@@ -439,7 +545,11 @@ private fun ClassicSession(
             onReady = {},
             onPartialResult = { text ->
                 sttPartial = text
-                hadPartialAtTimeout.value = text.isNotBlank()
+                if (isSevenPauseCommand(text)) {
+                    pauseByTeacher()
+                } else {
+                    hadPartialAtTimeout.value = text.isNotBlank()
+                }
             },
             onFinalResult = { text ->
                 sttFinal = text
@@ -459,6 +569,45 @@ private fun ClassicSession(
         )
     }
 
+    fun startCommandListening() {
+        if (!audioGranted) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (startCommandDetected || isPausedByTeacher) return
+        if (runner.state != ClassicTimerState.IDLE && runner.state != ClassicTimerState.READY) return
+        if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) return
+
+        speechService.startListening(
+            onStateChange = { sttState = it },
+            onReady = {},
+            onPartialResult = { text ->
+                if (isSevenStartCommand(text)) {
+                    startCommandDetected = true
+                    startCommandLogPending = true
+                    speechService.stopListening()
+                }
+            },
+            onFinalResult = { text ->
+                if (isSevenStartCommand(text)) {
+                    startCommandDetected = true
+                    startCommandLogPending = true
+                } else {
+                    startCommandHint = "Di: Seven, hora de empezar"
+                }
+            },
+            onStopped = { textAtStop ->
+                if (isSevenStartCommand(textAtStop)) {
+                    startCommandDetected = true
+                    startCommandLogPending = true
+                }
+            },
+            onError = {
+                startCommandHint = "Di: Seven, hora de empezar"
+            }
+        )
+    }
+
     fun stopListening() {
         speechService.stopListening()
     }
@@ -467,8 +616,13 @@ private fun ClassicSession(
         onDispose { speechService.destroy() }
     }
 
-    LaunchedEffect(state) {
-        if (state != ClassicTimerState.WAITING_FIXED_RESPONSE && sttState == SttState.LISTENING) {
+    LaunchedEffect(state, isPausedByTeacher, startCommandDetected) {
+        val waitingForStartCommand = (state == ClassicTimerState.IDLE || state == ClassicTimerState.READY) &&
+            !startCommandDetected
+        if (!waitingForStartCommand &&
+            (state != ClassicTimerState.WAITING_FIXED_RESPONSE || isPausedByTeacher) &&
+            sttState == SttState.LISTENING
+        ) {
             speechService.stopListening()
         }
     }
@@ -476,6 +630,7 @@ private fun ClassicSession(
     LaunchedEffect(progress?.currentQuestionIndex) {
         sttPartial = ""
         sttFinal = ""
+        logAttemptId = -1L
     }
 
     // ----- Voz -------------------------------------------------------------------
@@ -553,18 +708,30 @@ private fun ClassicSession(
         }
     }
 
+    LaunchedEffect(isPausedByTeacher) {
+        if (isPausedByTeacher) {
+            azureVoiceProvider.stop()
+            elevenLabsVoiceProvider.stop()
+            toySpeechService.stop()
+            toyVoiceSpeaking = false
+        }
+    }
+
     // ----- Temporizador visual ---------------------------------------------------
     var timerSecondsLeft by remember(activity) { mutableIntStateOf(0) }
 
     // Cuenta regresiva visual + salvaguarda de timeout: si el contador llega a 0
     // y el flujo sigue en WAITING_FIXED_RESPONSE (p. ej. STT nunca inicio o fallo),
     // dispara onTimeExpired directamente para garantizar que el flujo avance.
-    LaunchedEffect(state) {
-        if (state != ClassicTimerState.WAITING_FIXED_RESPONSE) return@LaunchedEffect
+    LaunchedEffect(state, progress?.currentQuestionIndex, resumeToken, isPausedByTeacher) {
+        if (state != ClassicTimerState.WAITING_FIXED_RESPONSE || isPausedByTeacher) return@LaunchedEffect
         val total = progress?.effectiveMaxTimeSeconds ?: 10
         timerSecondsLeft = total
         while (timerSecondsLeft > 0) {
             delay(1_000L)
+            if (isPausedByTeacher || runner.state != ClassicTimerState.WAITING_FIXED_RESPONSE) {
+                return@LaunchedEffect
+            }
             timerSecondsLeft -= 1
         }
         // Tiempo agotado: notificar aunque STT no este activo o haya fallado.
@@ -579,11 +746,11 @@ private fun ClassicSession(
     // Temporizador de respuesta via STT: complementario al visual. Dispara
     // onTimeExpired cuando STT lleva el tiempo maximo escuchando. El flag
     // answerDelivered evita doble avance si el visual ya disparo primero.
-    LaunchedEffect(sttState) {
-        if (sttState != SttState.LISTENING) return@LaunchedEffect
+    LaunchedEffect(sttState, resumeToken, isPausedByTeacher) {
+        if (sttState != SttState.LISTENING || isPausedByTeacher) return@LaunchedEffect
         val seconds = progress?.effectiveMaxTimeSeconds ?: 10
         delay(seconds * 1000L)
-        if (!answerDelivered.value) {
+        if (!answerDelivered.value && !isPausedByTeacher) {
             answerDelivered.value = true
             speechService.stopListening()
             if (runner.state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
@@ -596,11 +763,11 @@ private fun ClassicSession(
     // ----- Efectos del flujo automático ------------------------------------------
 
     // SESSION_STARTING: frase de apertura → presentar primera pregunta
-    LaunchedEffect(state == ClassicTimerState.SESSION_STARTING) {
-        if (state != ClassicTimerState.SESSION_STARTING) return@LaunchedEffect
+    LaunchedEffect(state == ClassicTimerState.SESSION_STARTING, resumeToken, isPausedByTeacher) {
+        if (state != ClassicTimerState.SESSION_STARTING || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "SESSION_STARTING: frase apertura")
         speakAndAwait(phraseBank.getSessionStart())
-        if (runner.state == ClassicTimerState.SESSION_STARTING) {
+        if (!isPausedByTeacher && runner.state == ClassicTimerState.SESSION_STARTING) {
             dispatch { runner.presentCurrentQuestion() }
         }
     }
@@ -611,8 +778,8 @@ private fun ClassicSession(
     } else {
         null
     }
-    LaunchedEffect(presentKey) {
-        if (presentKey == null) return@LaunchedEffect
+    LaunchedEffect(presentKey, resumeToken, isPausedByTeacher) {
+        if (presentKey == null || isPausedByTeacher) return@LaunchedEffect
         val isLast = progress?.isLastQuestion ?: false
         val questionText = progress?.currentQuestionText ?: return@LaunchedEffect
         val round = progress?.questionNumber ?: (presentKey + 1)
@@ -620,19 +787,19 @@ private fun ClassicSession(
         Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION round=$round isLast=$isLast key=$mediationKey")
         // Transición + pregunta en una sola reproducción para reducir demora.
         speakAndAwait(phraseBank.getRoundPrompt(round, questionText, isLast, mediationKey))
-        if (runner.state == ClassicTimerState.PRESENTING_QUESTION) {
+        if (!isPausedByTeacher && runner.state == ClassicTimerState.PRESENTING_QUESTION) {
             dispatch { runner.startResponseWindow() }
         }
     }
 
     // WAITING_FIXED_RESPONSE: registrar intento iniciado + abrir STT
-    LaunchedEffect(state == ClassicTimerState.WAITING_FIXED_RESPONSE) {
-        if (state != ClassicTimerState.WAITING_FIXED_RESPONSE) return@LaunchedEffect
+    LaunchedEffect(state == ClassicTimerState.WAITING_FIXED_RESPONSE, resumeToken, isPausedByTeacher) {
+        if (state != ClassicTimerState.WAITING_FIXED_RESPONSE || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "WAITING_FIXED_RESPONSE: abriendo STT")
 
         val qIdLong = progress?.currentQuestionId?.toLongOrNull() ?: 0L
         val sid = logSessionId
-        if (sid > 0L && qIdLong > 0L) {
+        if (sid > 0L && qIdLong > 0L && logAttemptId <= 0L) {
             logAttemptId = runCatching {
                 dataLogger.logAttemptStarted(
                     sessionId = sid,
@@ -657,8 +824,8 @@ private fun ClassicSession(
     } else {
         null
     }
-    LaunchedEffect(answerKey) {
-        if (answerKey == null) return@LaunchedEffect
+    LaunchedEffect(answerKey, resumeToken, isPausedByTeacher) {
+        if (answerKey == null || isPausedByTeacher) return@LaunchedEffect
         val isLast = progress?.isLastQuestion ?: false
         Log.d(CLASSIC_LOG_TAG, "ANSWER_RECEIVED idx=$answerKey isLast=$isLast")
 
@@ -684,7 +851,7 @@ private fun ClassicSession(
         // y avance inmediato al cierre (sin transición intermedia).
         speakAndAwait(phraseBank.getAnswerReceived(isLast))
         if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
-        if (runner.state == ClassicTimerState.ANSWER_RECEIVED) {
+        if (!isPausedByTeacher && runner.state == ClassicTimerState.ANSWER_RECEIVED) {
             dispatch { runner.advanceQuestion() }
         }
     }
@@ -695,8 +862,8 @@ private fun ClassicSession(
     } else {
         null
     }
-    LaunchedEffect(timeoutKey) {
-        if (timeoutKey == null) return@LaunchedEffect
+    LaunchedEffect(timeoutKey, resumeToken, isPausedByTeacher) {
+        if (timeoutKey == null || isPausedByTeacher) return@LaunchedEffect
         val hadPartial = progress?.hadPartialResponseOnTimeout ?: false
         val isLast = progress?.isLastQuestion ?: false
         Log.d(CLASSIC_LOG_TAG, "TIME_EXPIRED idx=$timeoutKey hadPartial=$hadPartial isLast=$isLast")
@@ -732,14 +899,14 @@ private fun ClassicSession(
         // En la última ronda la frase no anuncia otra pregunta; encadena al cierre.
         speakAndAwait(phraseBank.getTimeExpired(hadPartial, isLast))
         if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
-        if (runner.state == ClassicTimerState.TIME_EXPIRED) {
+        if (!isPausedByTeacher && runner.state == ClassicTimerState.TIME_EXPIRED) {
             dispatch { runner.advanceQuestion() }
         }
     }
 
     // SESSION_COMPLETED: frase de cierre
-    LaunchedEffect(state == ClassicTimerState.SESSION_COMPLETED) {
-        if (state != ClassicTimerState.SESSION_COMPLETED) return@LaunchedEffect
+    LaunchedEffect(state == ClassicTimerState.SESSION_COMPLETED, isPausedByTeacher) {
+        if (state != ClassicTimerState.SESSION_COMPLETED || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "SESSION_COMPLETED")
         speakAndAwait(phraseBank.getSessionCompleted())
     }
@@ -773,6 +940,8 @@ private fun ClassicSession(
     }
 
     fun startInteraction() {
+        if (sttState == SttState.LISTENING) speechService.stopListening()
+        isPausedByTeacher = false
         logAttemptId = -1L
         classicTotalAttempts = 0
         classicNoResponse = 0
@@ -791,11 +960,199 @@ private fun ClassicSession(
                     operationMode = "CLASSIC",
                     totalQuestions = activity.questions.size
                 )
+                if (startCommandLogPending && logSessionId > 0L) {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = logSessionId,
+                        operationMode = "CLASSIC",
+                        eventType = "CLASSIC_START_COMMAND_DETECTED"
+                    )
+                    startCommandLogPending = false
+                }
             }
         }
     }
 
+    fun finishByTeacher() {
+        if (sttState == SttState.LISTENING) speechService.stopListening()
+        azureVoiceProvider.stop()
+        elevenLabsVoiceProvider.stop()
+        toySpeechService.stop()
+        val sid = logSessionId
+        val startedMs = progress?.sessionStartedAt ?: System.currentTimeMillis()
+        dispatch { runner.cancelSession() }
+        scope.launch {
+            if (sid > 0L) {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = sid,
+                        operationMode = "CLASSIC",
+                        eventType = "CLASSIC_CANCELLED_BY_TEACHER"
+                    )
+                    dataLogger.finishClassicSession(
+                        sessionId = sid,
+                        finalState = "SESSION_CANCELLED",
+                        startedAtMs = startedMs,
+                        completedQuestions = progress?.currentQuestionIndex ?: 0,
+                        totalAttempts = classicTotalAttempts,
+                        noResponseCount = classicNoResponse,
+                        timeoutCount = classicTimeouts
+                    )
+                }
+                logSessionId = -1L
+            }
+            onBack()
+        }
+    }
+
+    LaunchedEffect(startCommandDetected) {
+        if (startCommandDetected && state == ClassicTimerState.IDLE) {
+            startInteraction()
+        }
+    }
+
+    LaunchedEffect(state, sttState, audioGranted, startCommandDetected, isPausedByTeacher) {
+        if (state == ClassicTimerState.IDLE &&
+            !startCommandDetected &&
+            !isPausedByTeacher &&
+            sttState != SttState.LISTENING &&
+            sttState != SttState.STOPPING
+        ) {
+            delay(350L)
+            startCommandListening()
+        }
+    }
+
     // ----- UI --------------------------------------------------------------------
+    val activityForOrientation = context.findActivity()
+    DisposableEffect(activityForOrientation) {
+        val previous = activityForOrientation?.requestedOrientation
+        activityForOrientation?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        onDispose {
+            if (previous != null) {
+                activityForOrientation.requestedOrientation = previous
+            }
+        }
+    }
+
+    BackHandler {
+        if (state == ClassicTimerState.IDLE) onChangeActivity() else pauseByTeacher()
+    }
+
+    val visualState = when {
+        isPausedByTeacher -> SevenVisualState.PAUSED
+        state == ClassicTimerState.WAITING_FIXED_RESPONSE -> SevenVisualState.COUNTDOWN
+        toyVoiceSpeaking ||
+            state == ClassicTimerState.SESSION_STARTING ||
+            state == ClassicTimerState.PRESENTING_QUESTION ||
+            state == ClassicTimerState.ANSWER_RECEIVED ||
+            state == ClassicTimerState.TIME_EXPIRED -> SevenVisualState.SPEAKING
+        state == ClassicTimerState.SESSION_COMPLETED -> SevenVisualState.COMPLETED
+        state == ClassicTimerState.ERROR -> SevenVisualState.ERROR
+        state == ClassicTimerState.IDLE || state == ClassicTimerState.READY -> SevenVisualState.WAITING_START_COMMAND
+        else -> SevenVisualState.IDLE
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(SevenFaceBackground)
+            .padding(20.dp)
+    ) {
+        OutlinedButton(
+            onClick = { pauseByTeacher() },
+            enabled = state != ClassicTimerState.IDLE && !isPausedByTeacher,
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            Text("Pausa")
+        }
+
+        if (visualState == SevenVisualState.COUNTDOWN) {
+            SevenCountdownView(secondsLeft = timerSecondsLeft)
+        } else {
+            SevenFace(
+                state = visualState,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            when {
+                isPausedByTeacher -> {
+                    Text(
+                        text = "Actividad en pausa",
+                        color = ClassicTimerPrimaryText,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { resumeByTeacher() }) {
+                            Text("Reanudar")
+                        }
+                        OutlinedButton(onClick = { finishByTeacher() }) {
+                            Text("Finalizar")
+                        }
+                    }
+                }
+                state == ClassicTimerState.IDLE || state == ClassicTimerState.READY -> {
+                    Text(
+                        text = "Seven está listo",
+                        color = ClassicTimerPrimaryText,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = if (audioGranted) startCommandHint else "Concede el micrófono para empezar",
+                        color = ClassicTimerSecondaryText,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    if (!audioGranted) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                        ) {
+                            Text("Conceder micrófono")
+                        }
+                    }
+                }
+                state == ClassicTimerState.SESSION_COMPLETED -> {
+                    Text(
+                        text = "Actividad completada",
+                        color = ClassicTimerPrimaryText,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = onChangeActivity) {
+                        Text("Elegir otra actividad")
+                    }
+                }
+                state == ClassicTimerState.ERROR -> {
+                    Text(
+                        text = errorMessage ?: "La actividad se detuvo",
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 16.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(onClick = onChangeActivity) {
+                        Text("Volver")
+                    }
+                }
+            }
+        }
+    }
+    return
+
     val sessionTerminal = state == ClassicTimerState.SESSION_COMPLETED ||
         state == ClassicTimerState.SESSION_CANCELLED ||
         state == ClassicTimerState.ERROR
@@ -1115,6 +1472,126 @@ private fun ClassicSession(
         ) { Text("Cambiar de actividad") }
         Spacer(modifier = Modifier.height(16.dp))
     }
+}
+
+@Composable
+private fun SevenFace(
+    state: SevenVisualState,
+    modifier: Modifier = Modifier
+) {
+    val transition = rememberInfiniteTransition(label = "seven-eyes")
+    val blink by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.18f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "blink"
+    )
+    val glance by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glance"
+    )
+    val eyeOpen = when (state) {
+        SevenVisualState.PAUSED -> 0.48f
+        SevenVisualState.COMPLETED -> 0.82f
+        SevenVisualState.ERROR -> 0.72f
+        else -> blink.coerceIn(0.58f, 1f)
+    }
+    val pupilOffset = when (state) {
+        SevenVisualState.WAITING_START_COMMAND -> glance * 10f
+        SevenVisualState.ERROR -> glance * 18f
+        SevenVisualState.PAUSED -> 0f
+        else -> glance * 5f
+    }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth(0.72f)
+            .height(240.dp)
+    ) {
+        val eyeWidth = size.width * 0.34f
+        val eyeHeight = size.height * 0.62f * eyeOpen
+        val top = (size.height - eyeHeight) / 2f
+        val leftEye = Offset(size.width * 0.13f, top)
+        val rightEye = Offset(size.width * 0.53f, top)
+        val eyeSize = Size(eyeWidth, eyeHeight)
+        val pupilRadius = eyeHeight.coerceAtMost(eyeWidth) * when (state) {
+            SevenVisualState.COMPLETED -> 0.18f
+            SevenVisualState.ERROR -> 0.24f
+            else -> 0.22f
+        }
+
+        listOf(leftEye, rightEye).forEachIndexed { index, eyeOffset ->
+            drawOval(
+                color = SevenEyeWhite,
+                topLeft = eyeOffset,
+                size = eyeSize
+            )
+            val verticalOffset = when {
+                state == SevenVisualState.COMPLETED -> -eyeHeight * 0.08f
+                state == SevenVisualState.PAUSED -> eyeHeight * 0.04f
+                else -> 0f
+            }
+            val xBias = if (state == SevenVisualState.ERROR && index == 1) -pupilOffset else pupilOffset
+            drawCircle(
+                color = SevenEyePupil,
+                radius = pupilRadius,
+                center = Offset(
+                    x = eyeOffset.x + eyeWidth / 2f + xBias,
+                    y = eyeOffset.y + eyeHeight / 2f + verticalOffset
+                )
+            )
+            if (state == SevenVisualState.COMPLETED) {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.72f),
+                    radius = pupilRadius * 0.34f,
+                    center = Offset(
+                        x = eyeOffset.x + eyeWidth / 2f + xBias - pupilRadius * 0.32f,
+                        y = eyeOffset.y + eyeHeight / 2f - pupilRadius * 0.36f
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SevenCountdownView(secondsLeft: Int) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "Tu turno",
+            color = ClassicTimerPrimaryText,
+            fontSize = 34.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = secondsLeft.coerceAtLeast(0).toString(),
+            color = SevenCountdownOrange,
+            fontSize = 128.sp,
+            lineHeight = 132.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
