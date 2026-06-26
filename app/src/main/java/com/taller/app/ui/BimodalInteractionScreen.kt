@@ -105,18 +105,15 @@ import com.taller.app.speech.SttState
 import com.taller.app.vision.FaceAnalyzer
 import com.taller.app.vision.FacePresenceTracker
 import com.taller.app.voice.LocalToyVoiceProvider
+import com.taller.app.voice.SevenVoiceService
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
-import com.taller.app.voice.ToyVoiceFallback
-import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
-import com.taller.app.voice.neural.ElevenLabsConfig
-import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import java.util.concurrent.ExecutorService
@@ -953,8 +950,8 @@ private fun BimodalSession(
     }
 
     // ----- Voz del juguete -----------------------------------------------------
-    // El juguete lee la pregunta usando el mismo servicio de voz de la app: el
-    // proveedor neural si esta configurado, con respaldo automatico a la voz local.
+    // El juguete lee la pregunta usando la voz oficial de Seven: OpenAI TTS como
+    // proveedor principal, Azure como respaldo y voz local como ultimo fallback.
     // Reutiliza el motor TTS local (LocalToyVoiceProvider) para no duplicar
     // instancias. Los proveedores se liberan al salir de la pantalla.
     val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
@@ -975,17 +972,19 @@ private fun BimodalSession(
             )
         }
     }
-    val elevenLabsVoiceProvider = remember {
-        ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(voiceSettings.neuralVoiceId) }
+    val sevenVoiceService = remember {
+        SevenVoiceService(
+            openAiProvider = openAiVoiceProvider,
+            azureProvider = azureVoiceProvider,
+            localProvider = localVoiceProvider
+        )
     }
 
     DisposableEffect(Unit) {
         toySpeechService.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
             toySpeechService.shutdown()
-            openAiVoiceProvider.release()
-            azureVoiceProvider.release()
-            elevenLabsVoiceProvider.release()
+            sevenVoiceService.release()
         }
     }
 
@@ -996,16 +995,16 @@ private fun BimodalSession(
     var lastSpokenPhrase by remember(activity) { mutableStateOf<String?>(null) }
 
     // Diagnostico de voz: proveedor que realmente atendio la ultima reproduccion y
-    // si hubo respaldo a la voz local. Permiten verificar en pantalla que el flujo
-    // bimodal usa el proveedor seleccionado (p. ej. Azure) y no solo la voz local.
+    // si hubo respaldo. Permiten verificar en pantalla que el flujo bimodal usa
+    // OpenAI TTS como proveedor principal y fallback solo cuando corresponde.
     var lastVoiceProviderUsed by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackUsed by remember(activity) { mutableStateOf<Boolean?>(null) }
 
     // Registra que proveedor termino reproduciendo la frase y si hubo fallback,
     // tanto en la UI como en un log seguro (solo nombres de proveedor, nunca
     // claves, tokens ni el texto reproducido).
-    fun recordVoiceUsage(selected: ToyVoiceProviderType, outcome: VoiceOutcome?) {
-        val selectedLabel = providerLabel(selected)
+    fun recordVoiceUsage(outcome: VoiceOutcome?) {
+        val selectedLabel = providerLabel(ToyVoiceProviderType.OPENAI_TTS)
         val usedLabel: String
         val fallback: Boolean
         when (outcome) {
@@ -1029,8 +1028,8 @@ private fun BimodalSession(
     // Reproduce una frase con la voz del juguete y SUSPENDE hasta que el audio
     // termina realmente: los proveedores (Azure/ElevenLabs/local) completan su
     // `speak` solo cuando el TTS o la red senalan el fin de la reproduccion. Es el
-    // unico punto de reproduccion del flujo: centraliza la seleccion de proveedor, el
-    // indicador "hablando", el respaldo local y el registro de diagnostico, y
+    // unico punto de reproduccion del flujo: delega en SevenVoiceService la cadena
+    // OpenAI -> Azure -> local, mantiene el indicador "hablando" y el registro, y
     // garantiza que el flujo nunca avance, reintente ni cierre antes de que la voz
     // haya terminado. Nunca lanza: si la voz falla, el error se ignora y la
     // interaccion continua (la sesion jamas se cancela por un problema de audio).
@@ -1038,12 +1037,6 @@ private fun BimodalSession(
     // Si la corrutina que la invoca se cancela (por ejemplo, el docente fuerza una
     // accion manual), el bloque finally detiene el audio residual de forma ordenada.
     suspend fun speakAndAwait(text: String) {
-        val neuralProvider = when (voiceSettings.provider) {
-            ToyVoiceProviderType.OPENAI_TTS -> openAiVoiceProvider
-            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
-            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
-            ToyVoiceProviderType.LOCAL -> localVoiceProvider
-        }
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
         try {
@@ -1055,29 +1048,7 @@ private fun BimodalSession(
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (voiceSettings.provider) {
-                        ToyVoiceProviderType.OPENAI_TTS -> buildList {
-                            add(ToyVoiceProviderType.OPENAI_TTS to openAiVoiceProvider)
-                            if (voiceSettings.fallbackToLocal) {
-                                add(ToyVoiceProviderType.AZURE_NEURAL to azureVoiceProvider)
-                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
-                            }
-                        }
-                        ToyVoiceProviderType.AZURE_NEURAL,
-                        ToyVoiceProviderType.ELEVENLABS -> buildList {
-                            add(voiceSettings.provider to neuralProvider)
-                            if (voiceSettings.fallbackToLocal) {
-                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
-                            }
-                        }
-                        ToyVoiceProviderType.LOCAL ->
-                            listOf(ToyVoiceProviderType.LOCAL to localVoiceProvider)
-                    }
-                    ToyVoiceFallback.speakWithFallback(
-                        text = text,
-                        providerRequested = voiceSettings.provider,
-                        providers = providers
-                    )
+                    sevenVoiceService.speak(text)
                 }.getOrNull()
             }
             if (outcome == null) {
@@ -1086,12 +1057,9 @@ private fun BimodalSession(
                     "voz: sin resultado tras ${timeoutMs}ms (timeout o fallo); el flujo continua"
                 )
             }
-            recordVoiceUsage(voiceSettings.provider, outcome)
+            recordVoiceUsage(outcome)
         } finally {
-            openAiVoiceProvider.stop()
-            azureVoiceProvider.stop()
-            elevenLabsVoiceProvider.stop()
-            toySpeechService.stop()
+            sevenVoiceService.stop()
             toyVoiceSpeaking = false
         }
     }
@@ -1254,10 +1222,7 @@ private fun BimodalSession(
                 "preparacion: watchdog disparado tras ${PRESENTING_WATCHDOG_MS}ms, abro la escucha"
             )
             if (toyVoiceSpeaking) {
-                toySpeechService.stop()
-                openAiVoiceProvider.stop()
-                azureVoiceProvider.stop()
-                elevenLabsVoiceProvider.stop()
+                sevenVoiceService.stop()
             }
             startVoiceCapture()
         }

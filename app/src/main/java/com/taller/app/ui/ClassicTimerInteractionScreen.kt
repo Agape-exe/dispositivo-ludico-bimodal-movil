@@ -84,18 +84,15 @@ import com.taller.app.model.LocalMediationKey
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
 import com.taller.app.voice.LocalToyVoiceProvider
+import com.taller.app.voice.SevenVoiceService
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
-import com.taller.app.voice.ToyVoiceFallback
-import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
-import com.taller.app.voice.neural.ElevenLabsConfig
-import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import kotlinx.coroutines.delay
@@ -718,17 +715,19 @@ private fun ClassicSession(
             )
         }
     }
-    val elevenLabsVoiceProvider = remember {
-        ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(voiceSettings.neuralVoiceId) }
+    val sevenVoiceService = remember {
+        SevenVoiceService(
+            openAiProvider = openAiVoiceProvider,
+            azureProvider = azureVoiceProvider,
+            localProvider = localVoiceProvider
+        )
     }
 
     DisposableEffect(Unit) {
         toySpeechService.initialize { ttsStateFlow.value = it }
         onDispose {
             toySpeechService.shutdown()
-            openAiVoiceProvider.release()
-            azureVoiceProvider.release()
-            elevenLabsVoiceProvider.release()
+            sevenVoiceService.release()
         }
     }
 
@@ -737,7 +736,7 @@ private fun ClassicSession(
     var lastVoiceProvider by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallback by remember(activity) { mutableStateOf<Boolean?>(null) }
 
-    fun recordVoice(selected: ToyVoiceProviderType, outcome: VoiceOutcome?) {
+    fun recordVoice(outcome: VoiceOutcome?) {
         val label: String
         val fallback: Boolean
         when (outcome) {
@@ -746,65 +745,35 @@ private fun ClassicSession(
         }
         lastVoiceProvider = label
         lastVoiceFallback = fallback
+        Log.d(
+            CLASSIC_LOG_TAG,
+            "voz: seleccionado=${providerLabel(ToyVoiceProviderType.OPENAI_TTS)} usado=$label fallback=$fallback"
+        )
     }
 
     suspend fun speakAndAwait(text: String) {
-        val neural = when (voiceSettings.provider) {
-            ToyVoiceProviderType.OPENAI_TTS -> openAiVoiceProvider
-            ToyVoiceProviderType.AZURE_NEURAL -> azureVoiceProvider
-            ToyVoiceProviderType.ELEVENLABS -> elevenLabsVoiceProvider
-            ToyVoiceProviderType.LOCAL -> localVoiceProvider
-        }
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
         try {
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (voiceSettings.provider) {
-                        ToyVoiceProviderType.OPENAI_TTS -> buildList {
-                            add(ToyVoiceProviderType.OPENAI_TTS to openAiVoiceProvider)
-                            if (voiceSettings.fallbackToLocal) {
-                                add(ToyVoiceProviderType.AZURE_NEURAL to azureVoiceProvider)
-                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
-                            }
-                        }
-                        ToyVoiceProviderType.AZURE_NEURAL,
-                        ToyVoiceProviderType.ELEVENLABS -> buildList {
-                            add(voiceSettings.provider to neural)
-                            if (voiceSettings.fallbackToLocal) {
-                                add(ToyVoiceProviderType.LOCAL to localVoiceProvider)
-                            }
-                        }
-                        ToyVoiceProviderType.LOCAL ->
-                            listOf(ToyVoiceProviderType.LOCAL to localVoiceProvider)
-                    }
-                    ToyVoiceFallback.speakWithFallback(
-                        text = text,
-                        providerRequested = voiceSettings.provider,
-                        providers = providers
-                    )
+                    sevenVoiceService.speak(text)
                 }.getOrNull()
             }
             if (outcome == null) {
                 Log.w(CLASSIC_LOG_TAG, "voz: sin resultado tras ${timeoutMs}ms, flujo continúa")
             }
-            recordVoice(voiceSettings.provider, outcome)
+            recordVoice(outcome)
         } finally {
-            openAiVoiceProvider.stop()
-            azureVoiceProvider.stop()
-            elevenLabsVoiceProvider.stop()
-            toySpeechService.stop()
+            sevenVoiceService.stop()
             toyVoiceSpeaking = false
         }
     }
 
     LaunchedEffect(isPausedByTeacher) {
         if (isPausedByTeacher) {
-            openAiVoiceProvider.stop()
-            azureVoiceProvider.stop()
-            elevenLabsVoiceProvider.stop()
-            toySpeechService.stop()
+            sevenVoiceService.stop()
             toyVoiceSpeaking = false
         }
     }
@@ -1071,10 +1040,7 @@ private fun ClassicSession(
 
     fun finishByTeacher() {
         if (sttState == SttState.LISTENING) speechService.stopListening()
-        openAiVoiceProvider.stop()
-        azureVoiceProvider.stop()
-        elevenLabsVoiceProvider.stop()
-        toySpeechService.stop()
+        sevenVoiceService.stop()
         val sid = logSessionId
         val startedMs = progress?.sessionStartedAt ?: System.currentTimeMillis()
         dispatch { runner.cancelSession() }
