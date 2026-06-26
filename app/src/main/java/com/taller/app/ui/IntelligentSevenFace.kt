@@ -288,6 +288,17 @@ internal fun BimodalInteractionState.toIntelligentSevenExpression(
     facePresent: Boolean,
     toyVoiceSpeaking: Boolean
 ): IntelligentSevenExpression = when {
+    this == BimodalInteractionState.FEEDBACK_CORRECT -> IntelligentSevenExpression.HAPPY
+
+    this == BimodalInteractionState.FEEDBACK_INCORRECT ||
+        this == BimodalInteractionState.FEEDBACK_NO_RESPONSE ||
+        this == BimodalInteractionState.TIME_EXPIRED ||
+        this == BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR -> IntelligentSevenExpression.ENCOURAGING
+
+    this == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE -> IntelligentSevenExpression.CONFUSED
+
+    this == BimodalInteractionState.SESSION_COMPLETED -> IntelligentSevenExpression.CELEBRATION
+
     !facePresent && (
         this == BimodalInteractionState.WAITING_FOR_FACE ||
             this == BimodalInteractionState.PAUSED_FACE_LOST ||
@@ -312,17 +323,6 @@ internal fun BimodalInteractionState.toIntelligentSevenExpression(
 
     this == BimodalInteractionState.TRANSCRIBING ||
         this == BimodalInteractionState.EVALUATING -> IntelligentSevenExpression.THINKING
-
-    this == BimodalInteractionState.FEEDBACK_CORRECT -> IntelligentSevenExpression.HAPPY
-
-    this == BimodalInteractionState.FEEDBACK_INCORRECT ||
-        this == BimodalInteractionState.FEEDBACK_NO_RESPONSE ||
-        this == BimodalInteractionState.TIME_EXPIRED ||
-        this == BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR -> IntelligentSevenExpression.ENCOURAGING
-
-    this == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE -> IntelligentSevenExpression.CONFUSED
-
-    this == BimodalInteractionState.SESSION_COMPLETED -> IntelligentSevenExpression.CELEBRATION
 
     else -> IntelligentSevenExpression.READY
 }
