@@ -1,6 +1,10 @@
 package com.taller.app.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -54,6 +58,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
@@ -63,6 +69,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.taller.app.bimodal.BimodalAutoAction
 import com.taller.app.bimodal.BimodalFlowOrchestrator
@@ -109,6 +118,7 @@ import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.text.Normalizer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -131,6 +141,8 @@ private val IntelligentModeTitleText = Color(0xFF0087A8)
 private val IntelligentModePrimaryText = Color(0xFF1F2733)
 private val IntelligentModeSecondaryText = Color(0xFF3F3A4A)
 private val IntelligentModeBackground = Color(0xFFFFFFFF)
+private val IntelligentSevenBackground = Color(0xFFEAF9F2)
+private val IntelligentSevenBackgroundAlt = Color(0xFFFFF7D7)
 
 /**
  * Tope de seguridad para una sola reproduccion de voz. Es generoso para no cortar
@@ -175,6 +187,26 @@ private fun splitIntoSpeechSegments(text: String): List<String> {
     }
 }
 
+private fun normalizeIntelligentSevenCommand(text: String): String {
+    val withoutMarks = Normalizer.normalize(text, Normalizer.Form.NFD)
+        .replace("\\p{Mn}+".toRegex(), "")
+    return withoutMarks
+        .lowercase()
+        .replace("[^a-z0-9ñ ]".toRegex(), " ")
+        .replace("\\s+".toRegex(), " ")
+        .trim()
+}
+
+private fun isIntelligentSevenStartCommand(text: String): Boolean {
+    val normalized = normalizeIntelligentSevenCommand(text)
+    val words = normalized.split(" ").filter { it.isNotBlank() }
+    if (!words.contains("seven")) return false
+    return normalized.contains("seven empieza") ||
+        normalized.contains("seven empezar") ||
+        normalized.contains("seven comencemos") ||
+        normalized.contains("seven empecemos")
+}
+
 /**
  * Tiempo maximo que el flujo puede permanecer en "preparando la pregunta" antes de
  * que la salvaguarda fuerce la apertura de la escucha. Se fija por encima del tope
@@ -186,21 +218,31 @@ private const val PRESENTING_WATCHDOG_MS = 50_000L
 /**
  * Pantalla inicial del modo bimodal inteligente.
  *
- * Permite seleccionar una actividad con preguntas, cargarla en el orquestador de
- * estados y recorrer el flujo automatico real: la presencia facial (camara)
- * dispara la pregunta, la voz del juguete la lee, la captura de voz transcribe la
- * respuesta y la evaluacion semantica produce el resultado sin intervencion
- * manual. El docente solo inicia la interaccion y decide reintentar o avanzar.
- *
- * Los controles tecnicos de simulacion se conservan en una seccion plegable,
- * colapsada por defecto y claramente separada del flujo real, para depurar el
- * orquestador sin recurrir a sensores.
- *
- * @param activityId si es distinto de 0 se carga directamente esa actividad; si
- *        es 0 se muestra un selector con las actividades disponibles.
+ * Selector inicial del modo inteligente. La pantalla infantil se abre en una ruta
+ * separada con el id de actividad ya fijado, para que el cambio de orientacion no
+ * pierda el estado ni regrese al selector.
  */
 @Composable
-fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
+fun BimodalInteractionScreen(onStartActivity: (Long) -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val db = remember { AppDatabase.getInstance(context) }
+    val activityDao = remember { db.activityDao() }
+
+    ActivitySelector(
+        activityDao = activityDao,
+        isLoading = false,
+        infoMessage = null,
+        onPick = { onStartActivity(it.id) },
+        onBack = onBack
+    )
+}
+
+@Composable
+fun IntelligentSevenFaceScreen(
+    activityId: Long,
+    onChangeActivity: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getInstance(context) }
     val activityDao = remember { db.activityDao() }
@@ -213,6 +255,18 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
     var loadedActivity by remember { mutableStateOf<LearningActivity?>(null) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+
+    val activityForOrientation = context.findActivity()
+    DisposableEffect(activityForOrientation) {
+        val previous = activityForOrientation?.requestedOrientation
+        activityForOrientation?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        onDispose {
+            if (previous != null) {
+                activityForOrientation.requestedOrientation = previous
+            }
+        }
+    }
+    IntelligentImmersiveSystemBarsEffect(context)
 
     // Carga una actividad real con sus preguntas desde Room y la adapta al modelo
     // de dominio que consume el orquestador.
@@ -239,37 +293,81 @@ fun BimodalInteractionScreen(activityId: Long, onBack: () -> Unit) {
     }
 
     LaunchedEffect(activityId) {
-        if (activityId != 0L) load(activityId)
-    }
-
-    BackHandler {
-        if (loadedActivity != null) {
-            loadedActivity = null
-            infoMessage = null
+        if (activityId != 0L) {
+            load(activityId)
         } else {
-            onBack()
+            infoMessage = "No se recibio una actividad para iniciar."
+            isLoading = false
         }
     }
 
+    BackHandler {
+        onChangeActivity()
+    }
+
     val active = loadedActivity
-    if (active == null) {
-        ActivitySelector(
-            activityDao = activityDao,
-            isLoading = isLoading,
-            infoMessage = infoMessage,
-            onPick = { load(it.id) },
-            onBack = onBack
-        )
-    } else {
+    if (active != null) {
         BimodalSession(
             activity = active,
             dataLogger = dataLogger,
-            onChangeActivity = {
-                loadedActivity = null
-                infoMessage = null
-            },
+            onChangeActivity = onChangeActivity,
             onBack = onBack
         )
+    } else {
+        IntelligentSevenLoadingOrError(
+            isLoading = isLoading,
+            infoMessage = infoMessage,
+            onBack = onChangeActivity
+        )
+    }
+}
+
+@Composable
+private fun IntelligentSevenLoadingOrError(
+    isLoading: Boolean,
+    infoMessage: String?,
+    onBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(IntelligentSevenBackground, IntelligentSevenBackgroundAlt)
+                )
+            )
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IntelligentSevenFace(
+                expression = IntelligentSevenExpression.READY,
+                modifier = Modifier.fillMaxWidth(0.74f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            if (isLoading) {
+                CircularProgressIndicator(color = IntelligentModeBlue)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Preparando a Seven",
+                    color = IntelligentModePrimaryText,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+            } else {
+                Text(
+                    text = infoMessage ?: "No se pudo abrir la actividad.",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = onBack) {
+                    Text("Volver")
+                }
+            }
+        }
     }
 }
 
@@ -565,6 +663,8 @@ private fun BimodalSession(
     var sttPartial by remember(activity) { mutableStateOf("") }
     var sttFinal by remember(activity) { mutableStateOf("") }
     var sttError by remember(activity) { mutableStateOf("") }
+    var startCommandDetected by remember(activity) { mutableStateOf(false) }
+    var startCommandHint by remember(activity) { mutableStateOf("Di: Seven, empieza") }
 
     // Banderas internas del intento de captura en curso (no dirigen la UI).
     val capturedAnyText = remember(activity) { mutableStateOf(false) }
@@ -665,6 +765,44 @@ private fun BimodalSession(
                     if (capturedAnyText.value) SpeechCaptureOutcome.Failed(message)
                     else SpeechCaptureOutcome.NoSpeech
                 )
+            }
+        )
+    }
+
+    fun startCommandListening() {
+        if (!audioGranted) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (startCommandDetected) return
+        if (orchestrator.state != BimodalInteractionState.IDLE &&
+            orchestrator.state != BimodalInteractionState.READY
+        ) return
+        if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) return
+
+        speechService.startListening(
+            onStateChange = { sttState = it },
+            onReady = { startCommandHint = "Di: Seven, empieza" },
+            onPartialResult = { text ->
+                if (isIntelligentSevenStartCommand(text)) {
+                    startCommandDetected = true
+                    speechService.stopListening()
+                }
+            },
+            onFinalResult = { text ->
+                if (isIntelligentSevenStartCommand(text)) {
+                    startCommandDetected = true
+                } else {
+                    startCommandHint = "Di: Seven, empieza"
+                }
+            },
+            onStopped = { textAtStop ->
+                if (isIntelligentSevenStartCommand(textAtStop)) {
+                    startCommandDetected = true
+                }
+            },
+            onError = {
+                startCommandHint = "Di: Seven, empieza"
             }
         )
     }
@@ -1354,6 +1492,10 @@ private fun BimodalSession(
     // Inicia la interaccion real en un solo paso: carga la actividad en el
     // orquestador, la confirma y arranca la sesion hasta quedar esperando rostro.
     fun startInteraction() {
+        if (sttState == SttState.LISTENING) speechService.stopListening()
+        sttPartial = ""
+        sttFinal = ""
+        sttError = ""
         // Empieza una sesion limpia: descarta las latencias de una corrida anterior.
         latencyTracker.reset()
         latencyStats = BimodalLatencyStats()
@@ -1378,6 +1520,172 @@ private fun BimodalSession(
         }
     }
 
+    LaunchedEffect(startCommandDetected) {
+        if (startCommandDetected &&
+            (orchestrator.state == BimodalInteractionState.IDLE ||
+                orchestrator.state == BimodalInteractionState.READY)
+        ) {
+            startInteraction()
+        }
+    }
+
+    LaunchedEffect(state, sttState, audioGranted, startCommandDetected) {
+        val waitingForStartCommand =
+            (state == BimodalInteractionState.IDLE || state == BimodalInteractionState.READY) &&
+                !startCommandDetected
+        if (waitingForStartCommand &&
+            sttState != SttState.LISTENING &&
+            sttState != SttState.STOPPING
+        ) {
+            delay(350L)
+            startCommandListening()
+        }
+    }
+
+    val targetSevenExpression = state.toIntelligentSevenExpression(
+        facePresent = facePresent,
+        toyVoiceSpeaking = toyVoiceSpeaking
+    )
+    var sevenExpression by remember(activity) {
+        mutableStateOf(IntelligentSevenExpression.READY)
+    }
+    var sevenHoldUntilMs by remember(activity) { mutableStateOf(0L) }
+
+    LaunchedEffect(targetSevenExpression) {
+        val remainingHoldMs = sevenHoldUntilMs - System.currentTimeMillis()
+        if (remainingHoldMs > 0L) {
+            delay(remainingHoldMs)
+        }
+        sevenExpression = targetSevenExpression
+        val holdMs = when (targetSevenExpression) {
+            IntelligentSevenExpression.HAPPY -> 3_000L
+            IntelligentSevenExpression.CONFUSED -> 2_000L
+            IntelligentSevenExpression.ENCOURAGING -> 2_500L
+            IntelligentSevenExpression.CELEBRATION -> 3_000L
+            else -> 0L
+        }
+        sevenHoldUntilMs = if (holdMs > 0L) System.currentTimeMillis() + holdMs else 0L
+    }
+
+    val activityForOrientation = context.findActivity()
+    DisposableEffect(activityForOrientation) {
+        val previous = activityForOrientation?.requestedOrientation
+        activityForOrientation?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        onDispose {
+            if (previous != null) {
+                activityForOrientation.requestedOrientation = previous
+            }
+        }
+    }
+
+    IntelligentImmersiveSystemBarsEffect(context)
+
+    BackHandler { onChangeActivity() }
+
+    val childStatusText = when (state) {
+        BimodalInteractionState.IDLE,
+        BimodalInteractionState.READY ->
+            if (audioGranted) startCommandHint else "Concede el microfono para empezar"
+        BimodalInteractionState.WAITING_FOR_FACE,
+        BimodalInteractionState.PAUSED_FACE_LOST -> "No te veo"
+        BimodalInteractionState.FACE_DETECTED -> "Ya te veo"
+        BimodalInteractionState.PRESENTING_QUESTION -> "Seven te habla"
+        BimodalInteractionState.WAITING_FOR_RESPONSE,
+        BimodalInteractionState.LISTENING -> "Tu turno"
+        BimodalInteractionState.TRANSCRIBING,
+        BimodalInteractionState.EVALUATING -> "Estoy pensando"
+        BimodalInteractionState.FEEDBACK_CORRECT -> "Muy bien"
+        BimodalInteractionState.FEEDBACK_INCORRECT,
+        BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+        BimodalInteractionState.TIME_EXPIRED,
+        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR -> "Vamos otra vez"
+        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE -> "No entendi bien"
+        BimodalInteractionState.SESSION_COMPLETED -> "Lo logramos"
+        BimodalInteractionState.SESSION_CANCELLED -> "Actividad pausada"
+        BimodalInteractionState.ERROR -> "Necesito ayuda"
+        else -> ""
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(IntelligentSevenBackground, IntelligentSevenBackgroundAlt)
+                )
+            )
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .clipToBounds()
+                .align(Alignment.TopStart)
+        ) {
+            FacePresenceCard(
+                cameraGranted = cameraGranted,
+                facePresent = facePresent,
+                onPresenceChanged = { onPresenceTransition(it) }
+            )
+        }
+
+        IntelligentSevenFace(
+            expression = sevenExpression,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth(0.94f)
+                .padding(bottom = 18.dp),
+            faceHeight = 372.dp,
+            showTurnLabel = state == BimodalInteractionState.LISTENING
+        )
+
+        OutlinedButton(
+            onClick = onChangeActivity,
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .width(92.dp)
+        ) {
+            Text("Salir")
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            if (childStatusText.isNotBlank()) {
+                Text(
+                    text = childStatusText,
+                    color = IntelligentModePrimaryText,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+            }
+            if (!audioGranted && (state == BimodalInteractionState.IDLE ||
+                    state == BimodalInteractionState.READY)
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                ) {
+                    Text("Conceder microfono")
+                }
+            }
+            if (state == BimodalInteractionState.SESSION_COMPLETED ||
+                state == BimodalInteractionState.ERROR
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = onChangeActivity) {
+                    Text("Elegir otra actividad")
+                }
+            }
+        }
+    }
+    return
+
     // Controla la visibilidad de la seccion tecnica de simulacion (colapsada por
     // defecto para no confundirla con el flujo real).
     var showTechnical by remember(activity) { mutableStateOf(false) }
@@ -1385,6 +1693,7 @@ private fun BimodalSession(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(IntelligentModeBackground)
             .padding(16.dp)
             .verticalScroll(rememberScrollState())
     ) {
@@ -1394,7 +1703,7 @@ private fun BimodalSession(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Modo bimodal inteligente",
+                text = "Modo Inteligente",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -1402,6 +1711,13 @@ private fun BimodalSession(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        IntelligentSevenFace(
+            expression = sevenExpression,
+            showTurnLabel = state == BimodalInteractionState.LISTENING
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Resumen del estado de la sesion.
         Card(
@@ -2590,6 +2906,34 @@ private fun resultLabel(result: SemanticResult): String = when (result) {
     SemanticResult.INCORRECT -> "Incorrecta"
     SemanticResult.NOT_INTERPRETABLE -> "No interpretable"
     SemanticResult.NO_RESPONSE -> "Sin respuesta"
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+@Composable
+private fun IntelligentImmersiveSystemBarsEffect(context: Context) {
+    val activity = remember(context) { context.findActivity() }
+    DisposableEffect(activity) {
+        val window = activity?.window
+        if (window == null) {
+            onDispose { }
+        } else {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+
+            onDispose {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+            }
+        }
+    }
 }
 
 

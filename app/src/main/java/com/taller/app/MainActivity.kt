@@ -12,6 +12,7 @@ import com.taller.app.ui.ClassicTimerInteractionScreen
 import com.taller.app.ui.ClassicSevenFaceScreen
 import com.taller.app.ui.FaceDetectionScreen
 import com.taller.app.ui.HomeScreen
+import com.taller.app.ui.IntelligentSevenFaceScreen
 import com.taller.app.ui.MetricsExportScreen
 import com.taller.app.ui.Screen
 import com.taller.app.ui.SemanticTestScreen
@@ -81,7 +82,18 @@ class MainActivity : ComponentActivity() {
                         onBack = { navigateTo(Screen.MAIN) }
                     )
                     Screen.BIMODAL_INTERACTION -> BimodalInteractionScreen(
+                        onStartActivity = { activityId ->
+                            selectedActivityId = activityId
+                            navigateTo(Screen.INTELLIGENT_SEVEN_FACE)
+                        },
+                        onBack = { navigateTo(Screen.HOME) }
+                    )
+                    Screen.INTELLIGENT_SEVEN_FACE -> IntelligentSevenFaceScreen(
                         activityId = selectedActivityId,
+                        onChangeActivity = {
+                            selectedActivityId = 0L
+                            navigateTo(Screen.BIMODAL_INTERACTION)
+                        },
                         onBack = { navigateTo(Screen.HOME) }
                     )
                     Screen.CLASSIC_TIMER_INTERACTION -> ClassicTimerInteractionScreen(
