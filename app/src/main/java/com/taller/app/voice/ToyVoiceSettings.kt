@@ -8,6 +8,7 @@ data class ToyVoiceSettings(
     val provider: ToyVoiceProviderType = ToyVoiceProviderType.OPENAI_TTS,
     val neuralVoiceId: String? = null,
     val openAiVoiceName: String? = null,
+    val openAiInstructions: String? = null,
     val azureVoiceName: String? = null,
     val fallbackToLocal: Boolean = true,
     val updatedAt: Long = 0L

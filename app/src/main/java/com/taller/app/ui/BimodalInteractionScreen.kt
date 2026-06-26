@@ -968,7 +968,12 @@ private fun BimodalSession(
         AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(voiceSettings.azureVoiceName) }
     }
     val openAiVoiceProvider = remember {
-        OpenAiTtsVoiceProvider(context) { OpenAiTtsConfig.fromBuild(voiceSettings.openAiVoiceName) }
+        OpenAiTtsVoiceProvider(context) {
+            OpenAiTtsConfig.fromBuild(
+                voiceSettings.openAiVoiceName,
+                voiceSettings.openAiInstructions
+            )
+        }
     }
     val elevenLabsVoiceProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(voiceSettings.neuralVoiceId) }

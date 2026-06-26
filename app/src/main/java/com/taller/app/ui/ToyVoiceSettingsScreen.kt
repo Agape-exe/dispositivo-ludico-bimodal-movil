@@ -56,11 +56,37 @@ import kotlinx.coroutines.launch
 
 private enum class PlaybackUi { IDLE, GENERATING, PLAYING }
 
+private data class VoiceProfile(
+    val name: String,
+    val instructions: String
+)
+
 private val TEST_PHRASES = listOf(
-    "Probar voz de Seven" to "Hola! Soy Seven, tu amigo explorador. Hoy necesito tu ayuda para aprender cosas nuevas de la Tierra.",
-    "Atención" to "Escucha con atención esta pregunta.",
-    "Tiempo agotado" to "Se terminó el tiempo. Pasemos a la siguiente pregunta.",
-    "Fin de actividad" to "Terminamos la actividad. Gracias por participar."
+    "Saludo" to "¡Hola! Soy Seven, tu amigo explorador. Hoy necesito tu ayuda para aprender cosas nuevas de la Tierra.",
+    "Pregunta" to "Escucha con atención. Tengo un reto para ti: ¿qué sonido hace el perro?",
+    "Feedback correcto" to "¡Muy bien! Mi nave acaba de registrar una respuesta genial.",
+    "Reintento" to "Casi lo tenemos. Intentemos una vez más, explorador.",
+    "Recaptura futura" to "¡Hey, explorador! Seven todavía necesita tu ayuda. Mira mi pantalla para continuar la misión.",
+    "Cierre" to "¡Misión completada! Gracias por ayudarme a aprender más sobre la Tierra."
+)
+
+private val OPENAI_VOICE_PROFILES = listOf(
+    VoiceProfile(
+        name = "Base",
+        instructions = OpenAiTtsConfig.DEFAULT_INSTRUCTIONS
+    ),
+    VoiceProfile(
+        name = "Natural infantil",
+        instructions = "Habla en español latino con voz cálida, clara y natural, como un compañero de juego amable para niños. Usa un ritmo moderado y una entonación alegre sin exagerar."
+    ),
+    VoiceProfile(
+        name = "Más lúdica",
+        instructions = "Habla en español latino con tono alegre, curioso y juguetón. Suena como un alien amigable que está emocionado por aprender con un niño. Mantén frases claras y ritmo natural."
+    ),
+    VoiceProfile(
+        name = "Más calmada",
+        instructions = "Habla en español latino con voz tranquila, cálida y paciente. Mantén una entonación amable, clara y suave, adecuada para acompañar a un niño pequeño."
+    )
 )
 
 @Composable
@@ -82,6 +108,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     var providerType by remember { mutableStateOf(ToyVoiceProviderType.OPENAI_TTS) }
     var openAiVoiceName by remember { mutableStateOf("") }
+    var openAiInstructions by remember { mutableStateOf(OpenAiTtsConfig.DEFAULT_INSTRUCTIONS) }
     var neuralVoiceId by remember { mutableStateOf("") }
     var azureVoiceName by remember { mutableStateOf("") }
     var fallbackEnabled by remember { mutableStateOf(true) }
@@ -91,6 +118,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     var playbackUi by remember { mutableStateOf(PlaybackUi.IDLE) }
     var lastOutcome by remember { mutableStateOf<VoiceOutcome?>(null) }
+    var selectedTestPhrase by remember { mutableStateOf(TEST_PHRASES.first()) }
+    var lastTestedVoice by remember { mutableStateOf<String?>(null) }
+    var saveMessage by remember { mutableStateOf<String?>(null) }
 
     val savedSettings by repository.settings.collectAsState(initial = ToyVoiceSettings())
 
@@ -101,6 +131,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         provider = providerType,
         neuralVoiceId = neuralVoiceId.takeIf { it.isNotBlank() },
         openAiVoiceName = openAiVoiceName.takeIf { it.isNotBlank() },
+        openAiInstructions = openAiInstructions.takeIf { it.isNotBlank() },
         azureVoiceName = azureVoiceName.takeIf { it.isNotBlank() },
         fallbackToLocal = fallbackEnabled
     )
@@ -112,14 +143,16 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(azureVoiceName) }
     }
     val openAiProvider = remember {
-        OpenAiTtsVoiceProvider(context) { OpenAiTtsConfig.fromBuild(openAiVoiceName) }
+        OpenAiTtsVoiceProvider(context) {
+            OpenAiTtsConfig.fromBuild(openAiVoiceName, openAiInstructions)
+        }
     }
     val elevenLabsProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
     }
 
     val openAiApiKeyPresent = remember { OpenAiTtsConfig.apiKeyFromBuild().isNotBlank() }
-    val effectiveOpenAiConfig = OpenAiTtsConfig.fromBuild(openAiVoiceName)
+    val effectiveOpenAiConfig = OpenAiTtsConfig.fromBuild(openAiVoiceName, openAiInstructions)
     val openAiConfigured = openAiApiKeyPresent
 
     val azureKeyPresent = remember { AzureSpeechConfig.keyFromBuild().isNotBlank() }
@@ -148,6 +181,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             pitch = savedSettings.pitch
             providerType = savedSettings.provider
             openAiVoiceName = savedSettings.openAiVoiceName ?: ""
+            openAiInstructions = savedSettings.openAiInstructions ?: OpenAiTtsConfig.DEFAULT_INSTRUCTIONS
             neuralVoiceId = savedSettings.neuralVoiceId ?: ""
             azureVoiceName = savedSettings.azureVoiceName ?: ""
             fallbackEnabled = savedSettings.fallbackToLocal
@@ -169,6 +203,16 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         scope.launch { repository.save(s) }
     }
 
+    fun saveSevenVoice() {
+        providerType = ToyVoiceProviderType.OPENAI_TTS
+        val s = buildCurrentSettings().copy(provider = ToyVoiceProviderType.OPENAI_TTS)
+        service.applySettings(s)
+        scope.launch {
+            repository.save(s)
+            saveMessage = "Voz de Seven actualizada"
+        }
+    }
+
     fun playPhrase(text: String) {
         if (playbackUi != PlaybackUi.IDLE) return
         val selectedNeural = when (providerType) {
@@ -180,6 +224,11 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         scope.launch {
             playbackUi = PlaybackUi.GENERATING
             lastOutcome = null
+            lastTestedVoice = if (providerType == ToyVoiceProviderType.OPENAI_TTS) {
+                OpenAiTtsConfig.fromBuild(openAiVoiceName, openAiInstructions).voice
+            } else {
+                null
+            }
             val providers: List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> = when (providerType) {
                 ToyVoiceProviderType.OPENAI_TTS -> buildList {
                     add(ToyVoiceProviderType.OPENAI_TTS to openAiProvider)
@@ -266,12 +315,22 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                 configured = openAiConfigured,
                 model = effectiveOpenAiConfig.model,
                 voiceName = effectiveOpenAiConfig.voice,
+                currentVoice = savedSettings.openAiVoiceName ?: OpenAiTtsConfig.fromBuild().voice,
                 selectedVoice = openAiVoiceName.ifBlank { effectiveOpenAiConfig.voice },
+                selectedInstructions = openAiInstructions,
+                lastTestedVoice = lastTestedVoice,
+                lastOutcome = lastOutcome,
+                saveMessage = saveMessage,
                 fallbackEnabled = fallbackEnabled,
                 onVoiceSelected = {
                     openAiVoiceName = it
-                    applyAndSave()
+                    saveMessage = null
                 },
+                onInstructionsSelected = {
+                    openAiInstructions = it
+                    saveMessage = null
+                },
+                onSaveVoice = { saveSevenVoice() },
                 onFallbackChange = {
                     fallbackEnabled = it
                     applyAndSave()
@@ -322,7 +381,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         TestPhrasesSection(
             enabled = playbackUi == PlaybackUi.IDLE && (providerType != ToyVoiceProviderType.LOCAL || localReady),
             isPlaying = playbackUi != PlaybackUi.IDLE,
-            onSpeak = { text -> playPhrase(text) },
+            selectedPhrase = selectedTestPhrase,
+            onPhraseSelected = { selectedTestPhrase = it },
+            onSpeak = { playPhrase(selectedTestPhrase.second) },
             onStop = { stopPlayback() }
         )
 
@@ -507,9 +568,16 @@ private fun OpenAiConfigSection(
     configured: Boolean,
     model: String,
     voiceName: String,
+    currentVoice: String,
     selectedVoice: String,
+    selectedInstructions: String,
+    lastTestedVoice: String?,
+    lastOutcome: VoiceOutcome?,
+    saveMessage: String?,
     fallbackEnabled: Boolean,
     onVoiceSelected: (String) -> Unit,
+    onInstructionsSelected: (String) -> Unit,
+    onSaveVoice: () -> Unit,
     onFallbackChange: (Boolean) -> Unit
 ) {
     Card(
@@ -518,7 +586,7 @@ private fun OpenAiConfigSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Seven infantil natural",
+                text = "Voz de Seven",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -544,12 +612,37 @@ private fun OpenAiConfigSection(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
+                text = "Proveedor principal: OpenAI TTS",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
                 text = "Modelo: $model",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = "Voz seleccionada: $voiceName",
+                text = "Voz actual: $currentVoice",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz seleccionada para prueba: $voiceName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Ultima voz probada: ${lastTestedVoice ?: "Ninguna"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Ultima reproduccion: ${lastOutcome?.providerUsed?.let { providerLabel(it) } ?: "Ninguna"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Fallback usado: ${lastOutcome?.let { if (it.fallbackUsed) "Si" else "No" } ?: "No"}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -568,6 +661,44 @@ private fun OpenAiConfigSection(
                     onClick = { onVoiceSelected(voice) }
                 )
                 Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Instrucciones de voz",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            OPENAI_VOICE_PROFILES.forEach { profile ->
+                ProviderOption(
+                    title = profile.name,
+                    description = profile.instructions,
+                    isSelected = selectedInstructions == profile.instructions,
+                    onClick = { onInstructionsSelected(profile.instructions) }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onSaveVoice,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guardar como voz de Seven")
+            }
+
+            if (saveMessage != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = saveMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -861,7 +992,9 @@ private fun PlaybackStatusCard(
 private fun TestPhrasesSection(
     enabled: Boolean,
     isPlaying: Boolean,
-    onSpeak: (String) -> Unit,
+    selectedPhrase: Pair<String, String>,
+    onPhraseSelected: (Pair<String, String>) -> Unit,
+    onSpeak: () -> Unit,
     onStop: () -> Unit
 ) {
     Card(
@@ -878,12 +1011,23 @@ private fun TestPhrasesSection(
             Spacer(modifier = Modifier.height(12.dp))
 
             TEST_PHRASES.forEach { (label, phrase) ->
-                TestPhraseButton(
+                TestPhraseOption(
                     label = label,
                     phrase = phrase,
+                    isSelected = selectedPhrase.first == label,
                     enabled = enabled,
-                    onClick = { onSpeak(phrase) }
+                    onClick = { onPhraseSelected(label to phrase) }
                 )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Button(
+                onClick = onSpeak,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Probar voz")
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -900,24 +1044,37 @@ private fun TestPhrasesSection(
 }
 
 @Composable
-private fun TestPhraseButton(
+private fun TestPhraseOption(
     label: String,
     phrase: String,
+    isSelected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 8.dp)
+            .clickable(enabled = enabled) { onClick() },
+        colors = CardDefaults.cardColors(containerColor = backgroundColor)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = label, fontWeight = FontWeight.SemiBold)
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
             Text(
-                text = "\"$phrase\"",
-                style = MaterialTheme.typography.bodySmall
+                text = label,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+            )
+            Text(
+                text = phrase,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
