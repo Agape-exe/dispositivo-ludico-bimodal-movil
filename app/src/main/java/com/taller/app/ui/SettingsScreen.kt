@@ -52,6 +52,8 @@ import com.taller.app.gpt.GptClientImpl
 import com.taller.app.gpt.GptConfig
 import com.taller.app.gpt.GptPrompt
 import com.taller.app.gpt.GptResult
+import com.taller.app.gpt.SevenInputContract
+import com.taller.app.gpt.StructuredGptResult
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,6 +83,8 @@ fun SettingsScreen(
     var showSettingsHint by remember { mutableStateOf(false) }
     var gptTesting by remember { mutableStateOf(false) }
     var gptTestResult by remember { mutableStateOf<GptResult?>(null) }
+    var gptJsonTesting by remember { mutableStateOf(false) }
+    var gptJsonTestResult by remember { mutableStateOf<StructuredGptResult?>(null) }
 
     DisposableEffect(context) {
         val lifecycleOwner = context as? LifecycleOwner
@@ -268,9 +272,90 @@ fun SettingsScreen(
                 }
             )
 
+            GptJsonSettingsSection(
+                config = gptConfig,
+                testing = gptJsonTesting,
+                result = gptJsonTestResult,
+                onTest = {
+                    gptJsonTesting = true
+                    gptJsonTestResult = null
+                    coroutineScope.launch {
+                        gptJsonTestResult = gptClient.generateStructured(settingsJsonTestInput())
+                        gptJsonTesting = false
+                    }
+                }
+            )
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun GptJsonSettingsSection(
+    config: GptConfig,
+    testing: Boolean,
+    result: StructuredGptResult?,
+    onTest: () -> Unit
+) {
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(
+        text = "Prueba GPT JSON",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    GptInfoRow(label = "GPT configurado", value = if (config.hasApiKey) "Si" else "No")
+    GptInfoRow(label = "GPT habilitado", value = if (config.enabled) "Si" else "No")
+    GptInfoRow(label = "Modelo", value = config.model)
+
+    Button(
+        onClick = onTest,
+        enabled = !testing,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color(0xFFD7E8FF),
+            contentColor = Color(0xFF173B63)
+        )
+    ) {
+        Text(if (testing) "Probando GPT JSON..." else "Probar GPT JSON")
+    }
+
+    result?.let { GptJsonResultBlock(it) }
+}
+
+@Composable
+private fun GptJsonResultBlock(result: StructuredGptResult) {
+    val response = result.response
+    val text = buildString {
+        append("Intent: ").append(response.intent.wireValue).append('\n')
+        append("Tipo: ").append(response.responseType.wireValue).append('\n')
+        append("Texto: ").append(response.visibleText).append('\n')
+        append("Seguridad: ").append(response.safetyLevel.wireValue).append('\n')
+        append("safeForTts local: ").append(if (result.validation.effectiveSafeForTts) "Si" else "No").append('\n')
+        append("Fallback usado: ").append(if (result.fallbackUsed) "Si" else "No").append('\n')
+        append("Bloqueo: ").append(response.blockedReason.wireValue).append('\n')
+        append("Reglas fallidas: ").append(result.validation.failedRules.joinToString().ifBlank { "Ninguna" }).append('\n')
+        append("Modelo usado: ").append(result.modelUsed).append('\n')
+        append("Latencia: ").append(result.latencyMs).append(" ms")
+        result.safeMessage?.let { append('\n').append("Error seguro: ").append(it) }
+    }
+
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        color = if (result.validation.effectiveSafeForTts) {
+            Color(0xFF1B5E20)
+        } else {
+            MaterialTheme.colorScheme.error
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+    )
 }
 
 @Composable
@@ -387,4 +472,22 @@ private fun settingsTestPrompt(): GptPrompt = GptPrompt(
     systemInstruction = "Eres Seven, un pequeno alien explorador amigable. Respondes en espanol latino, en 1-2 frases breves, sin emojis. No eres una IA, eres Seven.",
     userMessage = "Genera una frase de saludo breve para un nino explorador.",
     contextTag = "TEST_SETTINGS"
+)
+
+private fun settingsJsonTestInput(): SevenInputContract = SevenInputContract(
+    intent = "greeting",
+    topic = "Animales",
+    questionText = "",
+    localEvaluation = "not_applicable",
+    attemptsRemaining = 3,
+    expectedResponseType = "greet",
+    canGiveHint = false,
+    canGiveFinalAnswer = false,
+    maxWords = 25,
+    allowedHint = "",
+    restrictions = listOf("no_personal_data", "no_ai_mention", "spanish_latin_only"),
+    language = "es-419",
+    tone = "friendly_curious_alien",
+    contextTag = "settings_test",
+    answerTokens = emptyList()
 )

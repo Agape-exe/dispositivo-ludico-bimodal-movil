@@ -82,6 +82,294 @@ class GptClientImpl(
         }
     }
 
+    override suspend fun generateStructured(input: SevenInputContract): StructuredGptResult {
+        val config = configProvider()
+
+        if (!config.enabled) {
+            logInfo(
+                "GPT_STRUCTURED_DISABLED",
+                "model=${config.model} contextTag=${input.contextTag} intent=${input.intent} " +
+                    "topic=${input.topic} maxWords=${input.maxWords}"
+            )
+            return structuredFallbackResult(
+                input = input,
+                model = config.model,
+                errorType = GptErrorType.NOT_ENABLED,
+                safeMessage = "GPT desactivado.",
+                reason = SevenBlockedReason.UNKNOWN
+            )
+        }
+
+        if (!config.hasApiKey) {
+            logInfo("GPT_STRUCTURED_NOT_CONFIGURED", "contextTag=${input.contextTag} model=${config.model}")
+            return structuredFallbackResult(
+                input = input,
+                model = config.model,
+                errorType = GptErrorType.NOT_CONFIGURED,
+                safeMessage = "GPT: falta configurar API key.",
+                reason = SevenBlockedReason.UNKNOWN
+            )
+        }
+
+        return withContext(Dispatchers.IO) {
+            val userMessage = SevenStructuredPrompt.buildStructuredUserMessage(input)
+            logInfo(
+                "GPT_STRUCTURED_REQUEST",
+                "model=${config.model} contextTag=${input.contextTag} intent=${input.intent} topic=${input.topic} " +
+                    "maxWords=${input.maxWords} systemLen=${SevenStructuredPrompt.SYSTEM_INSTRUCTION.length} " +
+                    "userLen=${userMessage.length}"
+            )
+
+            val primary = requestStructuredModel(
+                input = input,
+                userMessage = userMessage,
+                config = config,
+                model = config.model,
+                fallbackModelUsed = false
+            )
+            if (primary is StructuredAttempt.Success) {
+                return@withContext primary.result
+            }
+
+            val primaryFailure = primary as StructuredAttempt.Failure
+            if (primaryFailure.recoverable && config.fallbackModel.isNotBlank() && config.fallbackModel != config.model) {
+                val fallback = requestStructuredModel(
+                    input = input,
+                    userMessage = userMessage,
+                    config = config,
+                    model = config.fallbackModel,
+                    fallbackModelUsed = true
+                )
+                if (fallback is StructuredAttempt.Success) {
+                    return@withContext fallback.result
+                }
+                return@withContext (fallback as StructuredAttempt.Failure).result
+            }
+
+            primaryFailure.result
+        }
+    }
+
+    private fun requestStructuredModel(
+        input: SevenInputContract,
+        userMessage: String,
+        config: GptConfig,
+        model: String,
+        fallbackModelUsed: Boolean
+    ): StructuredAttempt {
+        val start = System.nanoTime()
+        return try {
+            executeStructuredRequest(
+                input = input,
+                userMessage = userMessage,
+                config = config,
+                model = model,
+                includeTemperature = true,
+                fallbackModelUsed = fallbackModelUsed,
+                start = start
+            )
+        } catch (e: SocketTimeoutException) {
+            val result = structuredFallbackResult(
+                input = input,
+                model = model,
+                errorType = GptErrorType.TIMEOUT,
+                safeMessage = "GPT: tiempo de espera agotado.",
+                reason = SevenBlockedReason.UNKNOWN
+            )
+            logWarn("GPT_STRUCTURED_FAILED", "contextTag=${input.contextTag} model=$model errorType=TIMEOUT")
+            StructuredAttempt.Failure(result, recoverable = true)
+        } catch (e: IOException) {
+            val result = structuredFallbackResult(
+                input = input,
+                model = model,
+                errorType = GptErrorType.NO_NETWORK,
+                safeMessage = "GPT: sin conexion disponible.",
+                reason = SevenBlockedReason.UNKNOWN
+            )
+            logWarn("GPT_STRUCTURED_FAILED", "contextTag=${input.contextTag} model=$model errorType=NO_NETWORK")
+            StructuredAttempt.Failure(result, recoverable = false)
+        } catch (e: Exception) {
+            val result = structuredFallbackResult(
+                input = input,
+                model = model,
+                errorType = GptErrorType.UNKNOWN,
+                safeMessage = "GPT: error inesperado.",
+                reason = SevenBlockedReason.UNKNOWN
+            )
+            logWarn("GPT_STRUCTURED_FAILED", "contextTag=${input.contextTag} model=$model errorType=UNKNOWN")
+            StructuredAttempt.Failure(result, recoverable = false)
+        }
+    }
+
+    private fun executeStructuredRequest(
+        input: SevenInputContract,
+        userMessage: String,
+        config: GptConfig,
+        model: String,
+        includeTemperature: Boolean,
+        fallbackModelUsed: Boolean,
+        start: Long
+    ): StructuredAttempt {
+        val request = Request.Builder()
+            .url(GptConfig.ENDPOINT)
+            .addHeader("Authorization", "Bearer ${config.apiKey}")
+            .addHeader("Content-Type", "application/json")
+            .post(buildStructuredRequestJson(input, userMessage, config, model, includeTemperature).toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        clientProvider(config).newCall(request).execute().use { response ->
+            val latencyMs = (System.nanoTime() - start) / 1_000_000
+            logInfo(
+                "GPT_STRUCTURED_HTTP",
+                "contextTag=${input.contextTag} model=$model code=${response.code} latencyMs=$latencyMs " +
+                    "userLen=${userMessage.length} maxTokens=${config.maxOutputTokens}"
+            )
+
+            if (response.code == 400 && includeTemperature) {
+                logWarn("GPT_STRUCTURED_TEMPERATURE_RETRY", "contextTag=${input.contextTag} model=$model")
+                return executeStructuredRequest(
+                    input = input,
+                    userMessage = userMessage,
+                    config = config,
+                    model = model,
+                    includeTemperature = false,
+                    fallbackModelUsed = fallbackModelUsed,
+                    start = start
+                )
+            }
+
+            if (!response.isSuccessful) {
+                val errorType = errorTypeForHttp(response.code)
+                val result = structuredFallbackResult(
+                    input = input,
+                    model = model,
+                    errorType = errorType,
+                    safeMessage = safeMessageFor(errorType),
+                    reason = SevenBlockedReason.UNKNOWN,
+                    latencyMs = latencyMs
+                )
+                logWarn(
+                    "GPT_STRUCTURED_FAILED",
+                    "contextTag=${input.contextTag} model=$model code=${response.code} errorType=$errorType " +
+                        "fallbackUsed=true"
+                )
+                return StructuredAttempt.Failure(result, recoverable = isRecoverable(errorType))
+            }
+
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) {
+                val result = structuredFallbackResult(
+                    input = input,
+                    model = model,
+                    errorType = GptErrorType.EMPTY_RESPONSE,
+                    safeMessage = "GPT: respuesta vacia.",
+                    reason = SevenBlockedReason.UNKNOWN,
+                    latencyMs = latencyMs
+                )
+                logWarn("GPT_STRUCTURED_EMPTY_RESPONSE", "contextTag=${input.contextTag} model=$model bodyLen=0")
+                return StructuredAttempt.Failure(result, recoverable = true)
+            }
+
+            val rawText = try {
+                GptResponseParser.extractOutputText(body)
+            } catch (e: SevenParseException) {
+                val result = structuredFallbackResult(
+                    input = input,
+                    model = model,
+                    errorType = GptErrorType.PARSE_ERROR,
+                    safeMessage = "GPT: respuesta no interpretable.",
+                    reason = SevenBlockedReason.INVALID_CONTEXT,
+                    latencyMs = latencyMs
+                )
+                logWarn(
+                    "GPT_STRUCTURED_PARSE_ERROR",
+                    "contextTag=${input.contextTag} model=$model bodyLen=${body.length} errorType=${e.javaClass.simpleName} " +
+                        "outputTextLen=0 parseSuccess=false fallbackUsed=true"
+                )
+                return StructuredAttempt.Failure(result, recoverable = false)
+            }
+
+            val parsed = try {
+                GptResponseParser.parseSevenResponseText(rawText)
+            } catch (e: SevenParseException) {
+                val result = structuredFallbackResult(
+                    input = input,
+                    model = model,
+                    errorType = GptErrorType.PARSE_ERROR,
+                    safeMessage = "GPT: respuesta no interpretable.",
+                    reason = SevenBlockedReason.INVALID_CONTEXT,
+                    latencyMs = latencyMs,
+                    rawTextLength = rawText.length
+                )
+                logWarn(
+                    "GPT_STRUCTURED_PARSE_ERROR",
+                    "contextTag=${input.contextTag} model=$model bodyLen=${body.length} errorType=${e.javaClass.simpleName} " +
+                        "outputTextLen=${rawText.length} parseSuccess=false fallbackUsed=true"
+                )
+                return StructuredAttempt.Failure(result, recoverable = false)
+            }
+
+            val validation = SevenResponseValidator.validate(parsed, input)
+            if (!validation.isValid) {
+                val result = structuredFallbackResult(
+                    input = input,
+                    model = model,
+                    errorType = GptErrorType.PARSE_ERROR,
+                    safeMessage = "GPT: respuesta no validada localmente.",
+                    reason = validation.blockedReason,
+                    latencyMs = latencyMs,
+                    rawTextLength = rawText.length
+                )
+                logWarn(
+                    "GPT_STRUCTURED_VALIDATION_FAILED",
+                    "contextTag=${input.contextTag} model=$model parseSuccess=true validationSuccess=false " +
+                        "failedRules=${validation.failedRules.size} outputTextLen=${rawText.length} fallbackUsed=true"
+                )
+                return StructuredAttempt.Failure(result, recoverable = false)
+            }
+
+            logInfo(
+                "GPT_STRUCTURED_SUCCESS",
+                "contextTag=${input.contextTag} modelUsed=$model latencyMs=$latencyMs parseSuccess=true " +
+                    "validationSuccess=true failedRules=0 outputTextLen=${rawText.length} textLen=${parsed.visibleText.length} " +
+                    "fallbackUsed=$fallbackModelUsed"
+            )
+            return StructuredAttempt.Success(
+                StructuredGptResult.Success(
+                    response = parsed,
+                    validation = validation,
+                    modelUsed = model,
+                    latencyMs = latencyMs,
+                    fallbackUsed = fallbackModelUsed,
+                    rawTextLength = rawText.length
+                )
+            )
+        }
+    }
+
+    private fun structuredFallbackResult(
+        input: SevenInputContract,
+        model: String,
+        errorType: GptErrorType,
+        safeMessage: String,
+        reason: SevenBlockedReason,
+        latencyMs: Long = 0L,
+        rawTextLength: Int = 0
+    ): StructuredGptResult.Fallback {
+        val fallback = GptLocalFallback.structuredFallback(input, reason)
+        val validation = SevenResponseValidator.validate(fallback, input)
+        return StructuredGptResult.Fallback(
+            response = fallback,
+            validation = validation.copy(effectiveSafeForTts = validation.isValid),
+            modelUsed = model,
+            latencyMs = latencyMs,
+            fallbackUsed = true,
+            errorType = errorType,
+            safeMessage = safeMessage,
+            rawTextLength = rawTextLength
+        )
+    }
+
     private fun requestModel(
         prompt: GptPrompt,
         config: GptConfig,
@@ -258,6 +546,11 @@ class GptClientImpl(
         data class Failure(val result: GptResult.Failure, val recoverable: Boolean) : ModelAttempt
     }
 
+    private sealed interface StructuredAttempt {
+        data class Success(val result: StructuredGptResult.Success) : StructuredAttempt
+        data class Failure(val result: StructuredGptResult.Fallback, val recoverable: Boolean) : StructuredAttempt
+    }
+
     companion object {
         private const val TAG = "GptClient"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -293,6 +586,33 @@ class GptClientImpl(
                 put("model", model)
                 put("input", input)
                 put("max_output_tokens", config.maxOutputTokens)
+                if (includeTemperature) {
+                    put("temperature", config.temperature.toDouble())
+                }
+            }.toString()
+        }
+
+        internal fun buildStructuredRequestJson(
+            input: SevenInputContract,
+            userMessage: String = SevenStructuredPrompt.buildStructuredUserMessage(input),
+            config: GptConfig,
+            model: String,
+            includeTemperature: Boolean = true
+        ): String {
+            val format = JSONObject()
+                .put("type", "json_schema")
+                .put("name", SevenResponseSchema.NAME)
+                .put("strict", true)
+                .put("schema", SevenResponseSchema.asJsonObject())
+            val inputArray = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", SevenStructuredPrompt.SYSTEM_INSTRUCTION))
+                .put(JSONObject().put("role", "user").put("content", userMessage))
+
+            return JSONObject().apply {
+                put("model", model)
+                put("input", inputArray)
+                put("max_output_tokens", config.maxOutputTokens)
+                put("text", JSONObject().put("format", format))
                 if (includeTemperature) {
                     put("temperature", config.temperature.toDouble())
                 }
