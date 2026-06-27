@@ -1,6 +1,9 @@
 package com.taller.app.voice
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -134,6 +137,114 @@ class ToyVoiceFallbackTest {
     }
 
     @Test
+    fun sevenVoiceService_usesGeminiWhenPreferred() = runBlocking {
+        val gemini = CountingProvider(VoicePlaybackResult.Success(cacheHit = false))
+        val openAi = CountingProvider(VoicePlaybackResult.Success())
+        val service = SevenVoiceService(
+            geminiProvider = gemini,
+            openAiProvider = openAi,
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val outcome = service.speak("Hola desde Seven")
+
+        assertTrue(outcome is VoiceOutcome.Completed)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, outcome.providerRequested)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, outcome.providerUsed)
+        assertFalse(outcome.fallbackUsed)
+        assertEquals(false, outcome.cacheHit)
+        assertEquals(1, gemini.calls)
+        assertEquals(0, openAi.calls)
+    }
+
+    @Test
+    fun sevenVoiceService_usesOpenAiWhenPreferred() = runBlocking {
+        val gemini = CountingProvider(VoicePlaybackResult.Success())
+        val openAi = CountingProvider(VoicePlaybackResult.Success(cacheHit = true))
+        val service = SevenVoiceService(
+            geminiProvider = gemini,
+            openAiProvider = openAi,
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.OPENAI_TTS }
+        )
+
+        val outcome = service.speak("Hola desde Seven")
+
+        assertTrue(outcome is VoiceOutcome.Completed)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, outcome.providerRequested)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, outcome.providerUsed)
+        assertFalse(outcome.fallbackUsed)
+        assertEquals(true, outcome.cacheHit)
+        assertEquals(0, gemini.calls)
+        assertEquals(1, openAi.calls)
+    }
+
+    @Test
+    fun sevenVoiceService_invalidTextDoesNotUseFallback() = runBlocking {
+        val gemini = CountingProvider(VoicePlaybackResult.Success())
+        val openAi = CountingProvider(VoicePlaybackResult.Success())
+        val service = SevenVoiceService(
+            geminiProvider = gemini,
+            openAiProvider = openAi,
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val outcome = service.speak("No text provided")
+
+        assertTrue(outcome is VoiceOutcome.SkippedInvalidText)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, outcome.providerRequested)
+        assertEquals(null, outcome.providerUsed)
+        assertFalse(outcome.fallbackUsed)
+        assertEquals(0, gemini.calls)
+        assertEquals(0, openAi.calls)
+    }
+
+    @Test
+    fun sevenVoiceService_cacheHitStillTriggersPlaybackCallback() = runBlocking {
+        val gemini = CountingProvider(VoicePlaybackResult.Success(cacheHit = true))
+        val service = SevenVoiceService(
+            geminiProvider = gemini,
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+        var playbackStarts = 0
+
+        val outcome = service.speak("Hola cacheada", onPlaybackStart = { playbackStarts += 1 })
+
+        assertTrue(outcome is VoiceOutcome.Completed)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, outcome.providerUsed)
+        assertEquals(true, outcome.cacheHit)
+        assertEquals(1, playbackStarts)
+    }
+
+    @Test
+    fun sevenVoiceService_serializesConcurrentPlaybackRequests() = runBlocking {
+        val local = SlowCountingProvider(VoicePlaybackResult.Success())
+        val service = SevenVoiceService(
+            geminiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = local,
+            preferredProvider = { ToyVoiceProviderType.LOCAL }
+        )
+
+        awaitAll(
+            async { service.speak("Primera frase") },
+            async { service.speak("Segunda frase") }
+        )
+
+        assertEquals(2, local.calls)
+        assertEquals(1, local.maxConcurrentCalls)
+    }
+
+    @Test
     fun speakWithFallback_nullText_skipsProviders() = runBlocking {
         val provider = CountingProvider(VoicePlaybackResult.Success())
 
@@ -203,6 +314,31 @@ class ToyVoiceFallbackTest {
 
         override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
             calls += 1
+            onPlaybackStart()
+            return result
+        }
+
+        override fun isConfigured(): Boolean = true
+        override fun stop() = Unit
+        override fun release() = Unit
+    }
+
+    private class SlowCountingProvider(
+        private val result: VoicePlaybackResult
+    ) : ToyVoiceProvider {
+        var calls = 0
+            private set
+        var maxConcurrentCalls = 0
+            private set
+        private var activeCalls = 0
+
+        override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+            calls += 1
+            activeCalls += 1
+            maxConcurrentCalls = maxOf(maxConcurrentCalls, activeCalls)
+            onPlaybackStart()
+            delay(40L)
+            activeCalls -= 1
             return result
         }
 
