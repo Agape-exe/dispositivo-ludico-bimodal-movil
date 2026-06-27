@@ -1,6 +1,8 @@
 package com.taller.app.voice
 
 import android.util.Log
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Punto unico de entrada para la voz oficial de Seven.
@@ -16,13 +18,14 @@ class SevenVoiceService(
     private val localProvider: ToyVoiceProvider,
     private val preferredProvider: () -> ToyVoiceProviderType = { ToyVoiceProviderType.GEMINI_TTS }
 ) {
+    private val playbackMutex = Mutex()
 
     suspend fun speak(
         text: String?,
         source: String = "unknown",
         providerOverride: ToyVoiceProviderType? = null,
         onPlaybackStart: () -> Unit = {}
-    ): VoiceOutcome {
+    ): VoiceOutcome = playbackMutex.withLock {
         val requested = normalizeProvider(providerOverride ?: preferredProvider())
         val outcome = ToyVoiceFallback.speakWithFallback(
             text = text,
@@ -31,13 +34,15 @@ class SevenVoiceService(
             onPlaybackStart = onPlaybackStart
         )
         if (outcome is VoiceOutcome.SkippedInvalidText) {
-            Log.w(
-                TAG,
-                "eventType=TTS_SKIPPED_INVALID_TEXT source=$source " +
-                    "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
-                    "textLength=${outcome.textLength} reason=${outcome.reason} " +
-                    "timestamp=${System.currentTimeMillis()}"
-            )
+            runCatching {
+                Log.w(
+                    TAG,
+                    "eventType=TTS_SKIPPED_INVALID_TEXT source=$source " +
+                        "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
+                        "textLength=${outcome.textLength} reason=${outcome.reason} " +
+                        "timestamp=${System.currentTimeMillis()}"
+                )
+            }
         }
         return outcome
     }
