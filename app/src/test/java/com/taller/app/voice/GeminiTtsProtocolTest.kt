@@ -40,9 +40,16 @@ class GeminiTtsProtocolTest {
     fun validText_buildsAudioRequest() {
         val request = GeminiTtsProtocol.buildRequestJson("Hola", defaultConfig()).withoutWhitespace()
 
-        assertTrue(request.contains(""""model":"${GeminiTtsConfig.DEFAULT_MODEL}""""))
         assertTrue(request.contains(""""responseModalities":["AUDIO"]"""))
         assertTrue(request.contains(""""text":""""))
+    }
+
+    @Test
+    fun request_doesNotIncludeModelInBody() {
+        // El modelo viaja en la URL; incluirlo en el body provoca HTTP 400.
+        val request = GeminiTtsProtocol.buildRequestJson("Hola", defaultConfig()).withoutWhitespace()
+
+        assertFalse(request.contains(""""model":"""))
     }
 
     @Test
@@ -94,7 +101,7 @@ class GeminiTtsProtocolTest {
 
     @Test
     fun pcmAudio_isWrappedAsWav() {
-        val wav = GeminiWavWriter.wrapPcm16Mono24Khz(byteArrayOf(1, 0, 2, 0))
+        val wav = GeminiWavWriter.wrapPcm16Mono(byteArrayOf(1, 0, 2, 0))
 
         assertEquals("RIFF", wav.copyOfRange(0, 4).toString(Charsets.US_ASCII))
         assertEquals("WAVE", wav.copyOfRange(8, 12).toString(Charsets.US_ASCII))
@@ -102,6 +109,25 @@ class GeminiTtsProtocolTest {
         assertEquals("data", wav.copyOfRange(36, 40).toString(Charsets.US_ASCII))
         assertEquals(48, wav.size)
         assertTrue(GeminiTtsProtocol.shouldWrapAsWav("audio/L16;codec=pcm;rate=24000"))
+    }
+
+    @Test
+    fun pcmSampleRate_isParsedFromMimeType() {
+        assertEquals(24000, GeminiTtsProtocol.pcmSampleRate("audio/L16;codec=pcm;rate=24000"))
+        assertEquals(16000, GeminiTtsProtocol.pcmSampleRate("audio/L16;rate=16000"))
+        assertEquals(24000, GeminiTtsProtocol.pcmSampleRate("audio/pcm"))
+    }
+
+    @Test
+    fun wavHeader_usesParsedSampleRate() {
+        val wav = GeminiWavWriter.wrapPcm16Mono(byteArrayOf(1, 0, 2, 0), sampleRate = 16000)
+
+        // Sample rate (LE) en el offset 24 del header WAV.
+        val rate = (wav[24].toInt() and 0xFF) or
+            ((wav[25].toInt() and 0xFF) shl 8) or
+            ((wav[26].toInt() and 0xFF) shl 16) or
+            ((wav[27].toInt() and 0xFF) shl 24)
+        assertEquals(16000, rate)
     }
 
     private fun defaultConfig(): GeminiTtsConfig = GeminiTtsConfig(

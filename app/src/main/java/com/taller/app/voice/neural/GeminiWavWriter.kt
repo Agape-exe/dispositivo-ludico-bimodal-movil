@@ -5,12 +5,13 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 object GeminiWavWriter {
-    private const val SAMPLE_RATE = 24000
+    const val DEFAULT_SAMPLE_RATE = 24000
     private const val CHANNELS = 1
     private const val BITS_PER_SAMPLE = 16
 
-    fun wrapPcm16Mono24Khz(pcm: ByteArray): ByteArray {
-        val byteRate = SAMPLE_RATE * CHANNELS * BITS_PER_SAMPLE / 8
+    /** Envuelve PCM 16-bit mono en un contenedor WAV valido con el sample rate dado. */
+    fun wrapPcm16Mono(pcm: ByteArray, sampleRate: Int = DEFAULT_SAMPLE_RATE): ByteArray {
+        val byteRate = sampleRate * CHANNELS * BITS_PER_SAMPLE / 8
         val blockAlign = CHANNELS * BITS_PER_SAMPLE / 8
         val dataSize = pcm.size
         val output = ByteArrayOutputStream(44 + dataSize)
@@ -22,7 +23,7 @@ object GeminiWavWriter {
         output.writeIntLe(16)
         output.writeShortLe(1)
         output.writeShortLe(CHANNELS)
-        output.writeIntLe(SAMPLE_RATE)
+        output.writeIntLe(sampleRate)
         output.writeIntLe(byteRate)
         output.writeShortLe(blockAlign)
         output.writeShortLe(BITS_PER_SAMPLE)

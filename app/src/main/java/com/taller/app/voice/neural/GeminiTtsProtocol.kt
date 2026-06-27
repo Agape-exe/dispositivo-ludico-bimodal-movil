@@ -10,7 +10,8 @@ object GeminiTtsProtocol {
     fun buildRequestJson(text: String, config: GeminiTtsConfig): String {
         val prompt = jsonString(buildPrompt(text, config.instructions))
         val voiceName = jsonString(config.voiceName)
-        val model = jsonString(config.model)
+        // El modelo viaja en la URL (models/{model}:generateContent). Incluirlo
+        // tambien en el body provoca HTTP 400 en generateContent, por eso se omite.
         return """
             {
               "contents":[{"parts":[{"text":$prompt}]}],
@@ -21,8 +22,7 @@ object GeminiTtsProtocol {
                     "prebuiltVoiceConfig":{"voiceName":$voiceName}
                   }
                 }
-              },
-              "model":$model
+              }
             }
         """.trimIndent()
     }
@@ -89,6 +89,17 @@ object GeminiTtsProtocol {
         val lower = mimeType.lowercase()
         return lower.contains("pcm") || lower.contains("l16") || lower == "audio/raw"
     }
+
+    /**
+     * Extrae el sample rate del mimeType PCM de Gemini, por ejemplo
+     * "audio/L16;codec=pcm;rate=24000". Si no se indica, asume 24000 Hz.
+     */
+    fun pcmSampleRate(mimeType: String, default: Int = 24000): Int {
+        val match = sampleRateRegex.find(mimeType) ?: return default
+        return match.groupValues[1].toIntOrNull()?.takeIf { it in 8000..48000 } ?: default
+    }
+
+    private val sampleRateRegex = Regex("""rate=(\d+)""", RegexOption.IGNORE_CASE)
 
     data class AudioPayload(
         val bytes: ByteArray,

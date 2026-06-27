@@ -156,13 +156,15 @@ class GeminiTtsVoiceProvider(
                         VoicePlaybackResult.Error(VoiceErrorType.INVALID_AUDIO, e.safeMessage)
                     )
                 }
+                val wrapAsWav = GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)
+                val sampleRate = GeminiTtsProtocol.pcmSampleRate(payload.mimeType)
                 Log.d(
                     TAG,
                     "eventType=GEMINI_TTS_AUDIO mimeType=${payload.mimeType} " +
-                        "decodedBytes=${payload.bytes.size} wrapAsWav=${GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)}"
+                        "decodedBytes=${payload.bytes.size} wrapAsWav=$wrapAsWav sampleRate=$sampleRate"
                 )
-                val bytes = if (GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)) {
-                    GeminiWavWriter.wrapPcm16Mono24Khz(payload.bytes)
+                val bytes = if (wrapAsWav) {
+                    GeminiWavWriter.wrapPcm16Mono(payload.bytes, sampleRate)
                 } else {
                     payload.bytes
                 }
@@ -205,8 +207,9 @@ class GeminiTtsVoiceProvider(
     }
 
     private fun safeHttpMessage(code: Int, detail: String? = null): String = when (code) {
-        400, 401, 403 -> "Gemini fallo: error HTTP $code."
-        429 -> "Gemini fallo: limite de cuota."
+        401, 403 -> "Gemini fallo: API key no autorizada (HTTP $code)."
+        400 -> "Gemini fallo: solicitud invalida (HTTP 400)."
+        429 -> "Gemini fallo: limite de cuota del plan (HTTP 429). Reintenta en ~1 min."
         else -> "Gemini fallo: error HTTP $code."
     }.let { base ->
         if (detail.isNullOrBlank()) base else "$base ${detail.take(MAX_SAFE_HTTP_DETAIL_LENGTH)}"
