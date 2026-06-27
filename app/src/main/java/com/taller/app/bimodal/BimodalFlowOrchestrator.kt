@@ -1,5 +1,7 @@
 package com.taller.app.bimodal
 
+import com.taller.app.attention.AttentionSnapshot
+import com.taller.app.attention.AttentionState
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
 import com.taller.app.semantic.SemanticResult
@@ -42,6 +44,10 @@ class BimodalFlowOrchestrator(
     var summary: BimodalSessionSummary = BimodalSessionSummary()
         private set
 
+    /** Contexto local de atencion observado por el modo inteligente. */
+    var attentionContext: BimodalAttentionContext = BimodalAttentionContext()
+        private set
+
     /** Listener opcional que recibe cada estado por el que pasa el flujo. */
     var onStateChange: ((BimodalInteractionState) -> Unit)? = null
 
@@ -79,6 +85,7 @@ class BimodalFlowOrchestrator(
             BimodalInteractionEvent.StartQuestion -> handleStartQuestion()
             BimodalInteractionEvent.FaceDetected -> handleFaceDetected()
             BimodalInteractionEvent.FaceLost -> handleFaceLost()
+            is BimodalInteractionEvent.AttentionUpdated -> handleAttentionUpdated(event.snapshot)
             BimodalInteractionEvent.StartListening -> handleStartListening()
             is BimodalInteractionEvent.SpeechCaptured -> handleSpeechCaptured(event.transcription)
             is BimodalInteractionEvent.SpeechFailed -> handleSpeechFailed(event.reason)
@@ -106,6 +113,9 @@ class BimodalFlowOrchestrator(
     fun onFaceDetected() = onEvent(BimodalInteractionEvent.FaceDetected)
 
     fun onFaceLost() = onEvent(BimodalInteractionEvent.FaceLost)
+
+    fun onAttentionUpdated(snapshot: AttentionSnapshot) =
+        onEvent(BimodalInteractionEvent.AttentionUpdated(snapshot))
 
     fun startListening() = onEvent(BimodalInteractionEvent.StartListening)
 
@@ -201,6 +211,42 @@ class BimodalFlowOrchestrator(
                 transition(BimodalInteractionState.PAUSED_FACE_LOST)
             else -> Unit
         }
+    }
+
+    private fun handleAttentionUpdated(snapshot: AttentionSnapshot) {
+        val previous = attentionContext
+        val previousState = previous.lastAttentionState
+        val newState = snapshot.state
+        val hasUnrecoveredLoss =
+            previous.attentionLostEventCount > previous.attentionRecoveredEventCount
+        val recovered = hasUnrecoveredLoss &&
+            previousState != AttentionState.ATTENTION_STABLE &&
+            newState == AttentionState.ATTENTION_STABLE
+        val becameLost = previousState != AttentionState.ATTENTION_LOST &&
+            newState == AttentionState.ATTENTION_LOST
+
+        attentionContext = BimodalAttentionContext(
+            snapshot = snapshot,
+            lastAttentionState = newState,
+            attentionLostSinceMs = when {
+                newState == AttentionState.ATTENTION_LOST && previous.attentionLostSinceMs != null ->
+                    previous.attentionLostSinceMs
+                newState == AttentionState.ATTENTION_LOST -> snapshot.stateChangedAtMs
+                else -> null
+            },
+            temporarilyLostSinceMs = when {
+                newState == AttentionState.TEMPORARILY_LOST &&
+                    previous.temporarilyLostSinceMs != null ->
+                    previous.temporarilyLostSinceMs
+                newState == AttentionState.TEMPORARILY_LOST -> snapshot.stateChangedAtMs
+                else -> null
+            },
+            attentionLostEventCount = previous.attentionLostEventCount +
+                if (becameLost) 1 else 0,
+            attentionRecoveredEventCount = previous.attentionRecoveredEventCount +
+                if (recovered) 1 else 0,
+            shouldConsiderRecapture = newState == AttentionState.ATTENTION_LOST
+        )
     }
 
     private fun handleStartListening() {
@@ -396,6 +442,7 @@ class BimodalFlowOrchestrator(
         lastResult = null
         errorMessage = null
         summary = BimodalSessionSummary()
+        attentionContext = BimodalAttentionContext()
     }
 
     /**

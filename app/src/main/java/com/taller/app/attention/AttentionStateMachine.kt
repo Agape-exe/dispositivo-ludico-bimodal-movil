@@ -1,5 +1,7 @@
 package com.taller.app.attention
 
+import kotlin.math.abs
+
 class AttentionStateMachine(
     private val thresholds: AttentionThresholds = AttentionThresholds()
 ) {
@@ -60,10 +62,10 @@ class AttentionStateMachine(
         val timestampMs = evidence.timestampMs
         val previousState = state
         faceDetected = evidence.faceDetected
-        lookingAtDevice = evidence.faceDetected && evidence.lookingAtDevice
         headYawDegrees = evidence.headYawDegrees
         headPitchDegrees = evidence.headPitchDegrees
         headRollDegrees = evidence.headRollDegrees
+        lookingAtDevice = resolveLookingAtDevice(evidence)
 
         if (faceDetected) {
             lastFaceDetectedAtMs = timestampMs
@@ -99,11 +101,10 @@ class AttentionStateMachine(
             consecutiveStableFrames >= thresholds.minStableFrames
 
         return when {
-            state == AttentionState.TEMPORARILY_LOST && wasStableBeforeLoss -> {
+            stableEnough -> {
                 wasStableBeforeLoss = false
                 AttentionState.ATTENTION_STABLE
             }
-            stableEnough -> AttentionState.ATTENTION_STABLE
             else -> AttentionState.FACE_PRESENT
         }
     }
@@ -144,10 +145,40 @@ class AttentionStateMachine(
                     AttentionState.TEMPORARILY_LOST
                 }
             }
-            AttentionState.ATTENTION_LOST ->
-                if (faceDetected) AttentionState.FACE_PRESENT else AttentionState.ATTENTION_LOST
+            AttentionState.ATTENTION_LOST -> AttentionState.ATTENTION_LOST
         }
     }
+
+    private fun resolveLookingAtDevice(evidence: AttentionEvidence): Boolean {
+        if (!evidence.faceDetected) return false
+        if (evidence.eyeLookingAtDevice == false) return false
+
+        val hasHeadAngles = evidence.headYawDegrees != null ||
+            evidence.headPitchDegrees != null ||
+            evidence.headRollDegrees != null
+        if (!hasHeadAngles) {
+            return evidence.lookingAtDevice
+        }
+
+        val wasLooking = lookingAtDevice &&
+            state != AttentionState.ATTENTION_LOST &&
+            state != AttentionState.FACE_ABSENT
+        val margin = thresholds.hysteresisMarginDegrees
+        val yawLimit = hysteresisLimit(thresholds.maxYawDegrees, margin, wasLooking)
+        val pitchLimit = hysteresisLimit(thresholds.maxPitchDegrees, margin, wasLooking)
+        val rollLimit = hysteresisLimit(thresholds.maxRollDegrees, margin, wasLooking)
+
+        return (evidence.headYawDegrees == null || abs(evidence.headYawDegrees) <= yawLimit) &&
+            (evidence.headPitchDegrees == null || abs(evidence.headPitchDegrees) <= pitchLimit) &&
+            (evidence.headRollDegrees == null || abs(evidence.headRollDegrees) <= rollLimit)
+    }
+
+    private fun hysteresisLimit(base: Float, margin: Float, wasLooking: Boolean): Float =
+        if (wasLooking) {
+            base + margin
+        } else {
+            (base - margin).coerceAtLeast(0f)
+        }
 
     private fun reset(timestampMs: Long): AttentionSnapshot {
         state = AttentionState.UNKNOWN
@@ -191,7 +222,11 @@ class AttentionStateMachine(
                 0L
             }
         val lostDurationMs =
-            if (!faceDetected) timestampMs - (faceLostStartedAtMs ?: timestampMs) else 0L
+            if (!lookingAtDevice) {
+                timestampMs - (attentionLossStartedAtMs ?: timestampMs)
+            } else {
+                0L
+            }
 
         return AttentionSnapshot(
             state = state,

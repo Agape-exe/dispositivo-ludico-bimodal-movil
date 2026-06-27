@@ -93,7 +93,10 @@ import com.taller.app.bimodal.feedback.AnimalMediationBank
 import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
-import com.taller.app.attention.AttentionRepository
+import com.taller.app.attention.AttentionInput
+import com.taller.app.attention.AttentionSnapshot
+import com.taller.app.attention.AttentionState
+import com.taller.app.attention.AttentionStateMachine
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
@@ -140,6 +143,9 @@ private const val BIMODAL_SEMANTIC_TAG = "BimodalSemantic"
 
 /** Etiqueta de logs de la voz del juguete (solo proveedor, nunca claves ni texto). */
 private const val BIMODAL_VOICE_TAG = "BimodalVoice"
+
+/** Etiqueta de logs de atencion del modo inteligente (solo senales tecnicas). */
+private const val BIMODAL_ATTENTION_TAG = "BimodalAttention"
 
 private val IntelligentModeBlue = Color(0xFF0095B8)
 private val IntelligentModeCardTurquoise = Color(0xFF78C5CC)
@@ -599,6 +605,7 @@ private fun BimodalSession(
     var lastResult by remember(activity) { mutableStateOf(orchestrator.lastResult) }
     var errorMessage by remember(activity) { mutableStateOf(orchestrator.errorMessage) }
     var summary by remember(activity) { mutableStateOf(orchestrator.summary) }
+    var attentionContext by remember(activity) { mutableStateOf(orchestrator.attentionContext) }
 
     // Origen del ultimo resultado semantico mostrado (evaluacion real vs. control
     // tecnico de simulacion) y latencia aproximada de la evaluacion real, para
@@ -635,6 +642,7 @@ private fun BimodalSession(
         lastResult = orchestrator.lastResult
         errorMessage = orchestrator.errorMessage
         summary = orchestrator.summary
+        attentionContext = orchestrator.attentionContext
     }
 
     fun dispatch(action: () -> Unit) {
@@ -883,18 +891,44 @@ private fun BimodalSession(
                 else -> Unit
             }
         } else {
-            // Si la perdida ocurre durante una pregunta activa, incrementamos la
-            // version del job de pausa ANTES del dispatch para que el LaunchedEffect
-            // correspondiente arranque con la version correcta desde el principio.
-            val pauseableStates = setOf(
-                BimodalInteractionState.PRESENTING_QUESTION,
-                BimodalInteractionState.WAITING_FOR_RESPONSE,
-                BimodalInteractionState.LISTENING
-            )
-            if (orchestrator.state in pauseableStates) {
-                faceLostJobVersion++
+            // ATT03: la perdida de rostro/atencion se observa como contexto, pero no
+            // pausa la pregunta, no corta STT y no activa voz de recaptura. La senal
+            // detallada llega por AttentionSnapshot y queda lista para REC02.
+        }
+    }
+
+    fun onAttentionSnapshot(snapshot: AttentionSnapshot) {
+        val previous = orchestrator.attentionContext.lastAttentionState
+        dispatch { orchestrator.onAttentionUpdated(snapshot) }
+        if (previous == snapshot.state) return
+
+        val eventType = intelligentAttentionEventType(previous, snapshot.state)
+        val phase = attentionPhaseFor(state)
+        val message = "previousState=$previous newState=${snapshot.state} " +
+            "timestampMs=${snapshot.stateChangedAtMs} " +
+            "stableDurationMs=${snapshot.stableDurationMs} " +
+            "lookAwayDurationMs=${snapshot.lookAwayDurationMs} " +
+            "lostDurationMs=${snapshot.lostDurationMs} " +
+            "faceDetected=${snapshot.faceDetected} " +
+            "lookingAtDevice=${snapshot.lookingAtDevice} phase=$phase"
+        Log.d(BIMODAL_ATTENTION_TAG, "event=$eventType $message")
+
+        val sid = logSessionId
+        if (sid > 0L) {
+            val aid = logAttemptId
+            val qId = progress?.currentQuestionId?.toLongOrNull()
+            scope.launch {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = sid,
+                        questionId = qId,
+                        attemptId = if (aid > 0L) aid else null,
+                        operationMode = "ADVANCED",
+                        eventType = eventType,
+                        message = message
+                    )
+                }
             }
-            dispatch { orchestrator.onFaceLost() }
         }
     }
 
@@ -1660,7 +1694,8 @@ private fun BimodalSession(
             FacePresenceCard(
                 cameraGranted = cameraGranted,
                 facePresent = facePresent,
-                onPresenceChanged = { onPresenceTransition(it) }
+                onPresenceChanged = { onPresenceTransition(it) },
+                onAttentionSnapshot = { onAttentionSnapshot(it) }
             )
         }
 
@@ -1900,7 +1935,8 @@ private fun BimodalSession(
         FacePresenceCard(
             cameraGranted = cameraGranted,
             facePresent = facePresent,
-            onPresenceChanged = { onPresenceTransition(it) }
+            onPresenceChanged = { onPresenceTransition(it) },
+            onAttentionSnapshot = { onAttentionSnapshot(it) }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -2563,7 +2599,8 @@ private enum class BimodalCameraStatus { INITIALIZING, READY, ERROR }
 private fun FacePresenceCard(
     cameraGranted: Boolean,
     facePresent: Boolean,
-    onPresenceChanged: (Boolean) -> Unit
+    onPresenceChanged: (Boolean) -> Unit,
+    onAttentionSnapshot: (AttentionSnapshot) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -2574,6 +2611,7 @@ private fun FacePresenceCard(
 
     val analyzerExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val cameraProviderHolder = remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    val attentionStateMachine = remember { AttentionStateMachine() }
     // Umbrales asimetricos reducidos para una reaccion rapida: ~270-400 ms para
     // confirmar aparicion/recuperacion (8 frames) y ~400-600 ms para confirmar
     // desaparicion (12 frames), segun los frames efectivos que entregue ML Kit. Es un
@@ -2602,7 +2640,12 @@ private fun FacePresenceCard(
                 }
             },
             onEvidence = { evidence ->
-                AttentionRepository.onEvidence(evidence)
+                mainExecutor.execute {
+                    val snapshot = attentionStateMachine.onInput(
+                        AttentionInput.FaceObserved(evidence)
+                    )
+                    onAttentionSnapshot(snapshot)
+                }
             },
             onError = { msg ->
                 mainExecutor.execute { errorDetail = msg }
@@ -2617,7 +2660,7 @@ private fun FacePresenceCard(
             } catch (_: Exception) {
                 // Ignorar: el proveedor puede ya estar liberado.
             }
-            AttentionRepository.reset()
+            attentionStateMachine.onInput(AttentionInput.Reset(System.currentTimeMillis()))
             faceAnalyzer.close()
             analyzerExecutor.shutdown()
         }
@@ -2889,6 +2932,47 @@ private fun stateLabel(state: BimodalInteractionState): String = when (state) {
     BimodalInteractionState.SESSION_COMPLETED -> "Sesión finalizada"
     BimodalInteractionState.SESSION_CANCELLED -> "Sesión cancelada"
     BimodalInteractionState.ERROR -> "Error"
+}
+
+private fun intelligentAttentionEventType(
+    previous: AttentionState,
+    new: AttentionState
+): String = when (new) {
+    AttentionState.ATTENTION_STABLE ->
+        if (previous == AttentionState.TEMPORARILY_LOST ||
+            previous == AttentionState.ATTENTION_LOST
+        ) {
+            "INTELLIGENT_ATTENTION_RECOVERED"
+        } else {
+            "INTELLIGENT_ATTENTION_STABLE"
+        }
+    AttentionState.TEMPORARILY_LOST -> "INTELLIGENT_ATTENTION_TEMPORARILY_LOST"
+    AttentionState.ATTENTION_LOST -> "INTELLIGENT_ATTENTION_LOST"
+    else -> "INTELLIGENT_ATTENTION_STATE_CHANGED"
+}
+
+private fun attentionPhaseFor(state: BimodalInteractionState): String = when (state) {
+    BimodalInteractionState.IDLE,
+    BimodalInteractionState.LOADING_ACTIVITY,
+    BimodalInteractionState.READY,
+    BimodalInteractionState.WAITING_FOR_FACE,
+    BimodalInteractionState.FACE_DETECTED -> "WAITING_START"
+    BimodalInteractionState.PRESENTING_QUESTION -> "SPEAKING"
+    BimodalInteractionState.WAITING_FOR_RESPONSE,
+    BimodalInteractionState.LISTENING,
+    BimodalInteractionState.TRANSCRIBING -> "LISTENING"
+    BimodalInteractionState.EVALUATING -> "EVALUATING"
+    BimodalInteractionState.FEEDBACK_CORRECT,
+    BimodalInteractionState.FEEDBACK_INCORRECT,
+    BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
+    BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+    BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR,
+    BimodalInteractionState.TIME_EXPIRED -> "FEEDBACK"
+    BimodalInteractionState.NEXT_QUESTION,
+    BimodalInteractionState.PAUSED_FACE_LOST,
+    BimodalInteractionState.SESSION_COMPLETED,
+    BimodalInteractionState.SESSION_CANCELLED,
+    BimodalInteractionState.ERROR -> "BETWEEN_QUESTIONS"
 }
 
 /** Etiqueta legible para el estado de la captura de voz. */

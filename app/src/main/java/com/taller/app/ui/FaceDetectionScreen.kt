@@ -376,7 +376,7 @@ private fun AttentionTestCard(
             AttentionInfoRow("Pérdida temporal", yesNo(snapshot.isTemporarilyLost))
             AttentionInfoRow("Atención perdida", yesNo(snapshot.isAttentionLost))
             AttentionInfoRow("Duración estable", formatDuration(snapshot.stableDurationMs))
-            AttentionInfoRow("Duración sin rostro", formatDuration(snapshot.lostDurationMs))
+            AttentionInfoRow("Duración sin atención", formatDuration(snapshot.lostDurationMs))
             AttentionInfoRow(
                 "Último rostro detectado",
                 formatTimestamp(snapshot.lastFaceDetectedAtMs)
@@ -431,6 +431,7 @@ private fun AttentionThresholdRows() {
     AttentionInfoRow("maxYawDegrees", thresholds.maxYawDegrees.toString())
     AttentionInfoRow("maxPitchDegrees", thresholds.maxPitchDegrees.toString())
     AttentionInfoRow("maxRollDegrees", thresholds.maxRollDegrees.toString())
+    AttentionInfoRow("hysteresisMarginDegrees", thresholds.hysteresisMarginDegrees.toString())
 }
 
 private fun formatDuration(durationMs: Long): String =
