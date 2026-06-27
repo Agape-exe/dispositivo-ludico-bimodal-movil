@@ -83,6 +83,26 @@ android {
             "OPENAI_TTS_INSTRUCTIONS",
             buildConfigString(localSecret("OPENAI_TTS_INSTRUCTIONS").ifBlank { "Habla en espanol latino con una voz calida, clara, amable y expresiva, como un companero de juego para ninos. Manten un ritmo natural, no demasiado rapido, con tono curioso y alegre. Evita sonar como profesor serio o como robot." })
         )
+        buildConfigField(
+            "String",
+            "GEMINI_API_KEY",
+            buildConfigString(localSecret("GEMINI_API_KEY"))
+        )
+        buildConfigField(
+            "String",
+            "GEMINI_TTS_MODEL",
+            buildConfigString(localSecret("GEMINI_TTS_MODEL").ifBlank { "gemini-3.1-flash-tts-preview" })
+        )
+        buildConfigField(
+            "String",
+            "GEMINI_TTS_VOICE",
+            buildConfigString(localSecret("GEMINI_TTS_VOICE").ifBlank { "Puck" })
+        )
+        buildConfigField(
+            "String",
+            "GEMINI_TTS_INSTRUCTIONS",
+            buildConfigString(localSecret("GEMINI_TTS_INSTRUCTIONS").ifBlank { "Habla en espanol latino con una voz calida, clara, curiosa y amigable para ninos. Manten un ritmo natural, tono alegre y expresivo, como Seven, un pequeno alien explorador que aprende sobre la Tierra." })
+        )
 
         // Mediacion ludica generativa (opcional). Desactivada por defecto: la app
         // funciona sin credenciales y usa el banco local de frases. Si se quiere

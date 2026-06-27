@@ -46,6 +46,28 @@ class ToyVoiceFallbackTest {
     }
 
     @Test
+    fun speakWithFallback_geminiFailureFallsBackToOpenAi() = runBlocking {
+        val outcome = ToyVoiceFallback.speakWithFallback(
+            text = "Hola",
+            providerRequested = ToyVoiceProviderType.GEMINI_TTS,
+            providers = listOf(
+                ToyVoiceProviderType.GEMINI_TTS to FakeProvider(
+                    VoicePlaybackResult.Error(VoiceErrorType.HTTP_ERROR, "sin gemini")
+                ),
+                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(VoicePlaybackResult.Success()),
+                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success()),
+                ToyVoiceProviderType.LOCAL to FakeProvider(VoicePlaybackResult.Success())
+            )
+        )
+
+        assertTrue(outcome is VoiceOutcome.Completed)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, outcome.providerRequested)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, outcome.providerUsed)
+        assertTrue(outcome.fallbackUsed)
+        assertEquals("sin gemini", outcome.errorMessage)
+    }
+
+    @Test
     fun speakWithFallback_nullText_skipsProviders() = runBlocking {
         val provider = CountingProvider(VoicePlaybackResult.Success())
 
