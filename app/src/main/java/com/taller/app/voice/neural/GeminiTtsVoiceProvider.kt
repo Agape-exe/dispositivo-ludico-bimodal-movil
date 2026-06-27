@@ -4,12 +4,15 @@ import android.content.Context
 import android.media.MediaPlayer
 import android.util.Log
 import com.taller.app.voice.ToyVoiceProvider
+import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceTextValidator
 import com.taller.app.voice.VoiceErrorType
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoicePlaybackResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -25,6 +28,9 @@ class GeminiTtsVoiceProvider(
     private val context: Context,
     private val configProvider: () -> GeminiTtsConfig
 ) : ToyVoiceProvider {
+    private val audioCache = OpenAiTtsAudioCache(context)
+    private val synthesisLocks = mutableMapOf<String, Mutex>()
+    private val synthesisLocksGuard = Any()
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -59,41 +65,119 @@ class GeminiTtsVoiceProvider(
             "eventType=GEMINI_TTS_CONFIG configured=${config.isComplete} " +
                 "apiKeyLength=${config.apiKey.length} model=${config.model} voice=${config.voiceName}"
         )
-        if (!config.hasApiKey) {
-            return VoicePlaybackResult.Error(
-                VoiceErrorType.NOT_CONFIGURED,
-                "Gemini fallo: no configurado."
-            )
-        }
-
         val startedAt = System.currentTimeMillis()
-        val audio = when (val download = requestAudio(validation.normalizedText, config)) {
+        val cacheEntry = audioCache.entryFor(
+            text = validation.normalizedText,
+            config = config,
+            responseFormat = RESPONSE_FORMAT
+        )
+        val audio = when (val download = getOrCreateAudio(validation.normalizedText, config, cacheEntry)) {
             is AudioResult.Failure -> return download.error
             is AudioResult.Ok -> download
         }
 
-        return try {
-            val playbackStartedAt = System.currentTimeMillis()
-            val playback = playFile(audio.file, onPlaybackStart)
-            val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
-            val totalLatencyMs = System.currentTimeMillis() - startedAt
-            if (playback is VoicePlaybackResult.Success) {
-                playback.copy(
-                    cacheHit = false,
-                    synthesisLatencyMs = audio.synthesisLatencyMs,
-                    playbackLatencyMs = playbackLatencyMs,
-                    totalLatencyMs = totalLatencyMs
+        val playbackStartedAt = System.currentTimeMillis()
+        val playback = playFile(audio.file, onPlaybackStart)
+        val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
+        val totalLatencyMs = System.currentTimeMillis() - startedAt
+        if (playback is VoicePlaybackResult.Success) {
+            audioCache.rememberCacheResult(ToyVoiceProviderType.GEMINI_TTS, audio.cacheHit)
+            return playback.copy(
+                cacheHit = audio.cacheHit,
+                cacheKey = audio.cacheShortKey,
+                synthesisLatencyMs = audio.synthesisLatencyMs,
+                playbackLatencyMs = playbackLatencyMs,
+                totalLatencyMs = totalLatencyMs
+            )
+        }
+
+        if (audio.cacheHit) {
+            runCatching { audio.file.delete() }
+            Log.w(TAG, "eventType=GEMINI_TTS_CACHE_CORRUPT cacheKey=${audio.cacheShortKey}")
+            return speakWithoutCachedFile(validation.normalizedText, config, cacheEntry, onPlaybackStart, startedAt)
+        }
+
+        return playback
+    }
+
+    private suspend fun getOrCreateAudio(
+        text: String,
+        config: GeminiTtsConfig,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry
+    ): AudioResult {
+        if (cacheEntry.file.isFile && cacheEntry.file.length() > 0L) {
+            return AudioResult.Ok(
+                file = cacheEntry.file,
+                cacheHit = true,
+                cacheShortKey = cacheEntry.shortKey,
+                synthesisLatencyMs = 0L
+            )
+        }
+
+        val lock = lockFor(cacheEntry.key)
+        return lock.withLock {
+            if (cacheEntry.file.isFile && cacheEntry.file.length() > 0L) {
+                AudioResult.Ok(
+                    file = cacheEntry.file,
+                    cacheHit = true,
+                    cacheShortKey = cacheEntry.shortKey,
+                    synthesisLatencyMs = 0L
                 )
             } else {
-                playback
+                requestAudio(text, config, cacheEntry)
             }
-        } finally {
-            audio.file.delete()
         }
     }
 
-    private suspend fun requestAudio(text: String, config: GeminiTtsConfig): AudioResult =
+    private suspend fun speakWithoutCachedFile(
+        text: String,
+        config: GeminiTtsConfig,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry,
+        onPlaybackStart: () -> Unit,
+        startedAt: Long
+    ): VoicePlaybackResult {
+        val audio = when (val result = lockFor(cacheEntry.key).withLock {
+            requestAudio(text, config, cacheEntry)
+        }) {
+            is AudioResult.Failure -> return result.error
+            is AudioResult.Ok -> result
+        }
+        val playbackStartedAt = System.currentTimeMillis()
+        val playback = playFile(audio.file, onPlaybackStart)
+        val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
+        val totalLatencyMs = System.currentTimeMillis() - startedAt
+        return if (playback is VoicePlaybackResult.Success) {
+            audioCache.rememberCacheResult(ToyVoiceProviderType.GEMINI_TTS, false)
+            playback.copy(
+                cacheHit = false,
+                cacheKey = audio.cacheShortKey,
+                synthesisLatencyMs = audio.synthesisLatencyMs,
+                playbackLatencyMs = playbackLatencyMs,
+                totalLatencyMs = totalLatencyMs
+            )
+        } else {
+            playback
+        }
+    }
+
+    private fun lockFor(cacheKey: String): Mutex = synchronized(synthesisLocksGuard) {
+        synthesisLocks.getOrPut(cacheKey) { Mutex() }
+    }
+
+    private suspend fun requestAudio(
+        text: String,
+        config: GeminiTtsConfig,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry
+    ): AudioResult =
         withContext(Dispatchers.IO) {
+            if (!config.hasApiKey) {
+                return@withContext AudioResult.Failure(
+                    VoicePlaybackResult.Error(
+                        VoiceErrorType.NOT_CONFIGURED,
+                        "Gemini fallo: no configurado."
+                    )
+                )
+            }
             val body = GeminiTtsProtocol.buildRequestJson(text, config).toRequestBody(JSON_MEDIA_TYPE)
             val url = GeminiTtsProtocol.endpointUrl(config.model)
             Log.d(
@@ -108,7 +192,7 @@ class GeminiTtsVoiceProvider(
                 .post(body)
                 .build()
 
-            executeAudioRequest(request, retryServerError = true)?.let { return@withContext it }
+            executeAudioRequest(request, cacheEntry, retryServerError = true)?.let { return@withContext it }
             AudioResult.Failure(
                 VoicePlaybackResult.Error(
                     VoiceErrorType.UNKNOWN,
@@ -117,7 +201,11 @@ class GeminiTtsVoiceProvider(
             )
         }
 
-    private fun executeAudioRequest(request: Request, retryServerError: Boolean): AudioResult? {
+    private fun executeAudioRequest(
+        request: Request,
+        cacheEntry: OpenAiTtsAudioCache.CacheEntry,
+        retryServerError: Boolean
+    ): AudioResult? {
         val startedAt = System.currentTimeMillis()
         try {
             client.newCall(request).execute().use { response ->
@@ -132,7 +220,7 @@ class GeminiTtsVoiceProvider(
                     )
                     if (retryServerError && response.code >= 500) {
                         Log.w(TAG, "eventType=GEMINI_TTS_RETRY code=${response.code}")
-                        return executeAudioRequest(request, retryServerError = false)
+                        return executeAudioRequest(request, cacheEntry, retryServerError = false)
                     }
                     return AudioResult.Failure(
                         VoicePlaybackResult.Error(
@@ -173,11 +261,18 @@ class GeminiTtsVoiceProvider(
                 } else {
                     payload.bytes
                 }
-                val suffix = if (GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)) ".wav" else audioSuffix(payload.mimeType)
-                val file = try {
-                    File.createTempFile("toy_gemini_", suffix, context.cacheDir).also { tempFile ->
-                        tempFile.writeBytes(bytes)
+                val file = cacheEntry.file
+                try {
+                    val tempFile = File(file.parentFile, "${file.name}.tmp")
+                    tempFile.writeBytes(bytes)
+                    if (file.exists()) {
+                        runCatching { file.delete() }
                     }
+                    if (!tempFile.renameTo(file)) {
+                        tempFile.copyTo(file, overwrite = true)
+                        tempFile.delete()
+                    }
+                    audioCache.writeMetadata(cacheEntry)
                 } catch (e: IOException) {
                     Log.w(TAG, "eventType=GEMINI_TTS_FILE_ERROR message=temporary_audio_write_failed")
                     return AudioResult.Failure(
@@ -187,9 +282,11 @@ class GeminiTtsVoiceProvider(
                         )
                     )
                 }
-                Log.d(TAG, "eventType=GEMINI_TTS_FILE_READY suffix=$suffix fileBytes=${file.length()}")
+                Log.d(TAG, "eventType=GEMINI_TTS_FILE_READY suffix=.$RESPONSE_FORMAT fileBytes=${file.length()}")
                 return AudioResult.Ok(
                     file = file,
+                    cacheHit = false,
+                    cacheShortKey = cacheEntry.shortKey,
                     synthesisLatencyMs = System.currentTimeMillis() - startedAt
                 )
             }
@@ -218,16 +315,6 @@ class GeminiTtsVoiceProvider(
         else -> "Gemini fallo: error HTTP $code."
     }.let { base ->
         if (detail.isNullOrBlank()) base else "$base ${detail.take(MAX_SAFE_HTTP_DETAIL_LENGTH)}"
-    }
-
-    private fun audioSuffix(mimeType: String): String {
-        val lower = mimeType.lowercase()
-        return when {
-            lower.contains("wav") -> ".wav"
-            lower.contains("mpeg") || lower.contains("mp3") -> ".mp3"
-            lower.contains("ogg") -> ".ogg"
-            else -> ".audio"
-        }
     }
 
     private suspend fun playFile(
@@ -303,7 +390,12 @@ class GeminiTtsVoiceProvider(
     override fun release() = stop()
 
     private sealed interface AudioResult {
-        data class Ok(val file: File, val synthesisLatencyMs: Long) : AudioResult
+        data class Ok(
+            val file: File,
+            val cacheHit: Boolean,
+            val cacheShortKey: String,
+            val synthesisLatencyMs: Long
+        ) : AudioResult
         data class Failure(val error: VoicePlaybackResult.Error) : AudioResult
     }
 
@@ -311,6 +403,7 @@ class GeminiTtsVoiceProvider(
         private const val TAG = "GeminiTtsVoice"
         private const val REQUEST_TIMEOUT_SECONDS = 30L
         private const val MAX_SAFE_HTTP_DETAIL_LENGTH = 120
+        private const val RESPONSE_FORMAT = OpenAiTtsAudioCache.RESPONSE_FORMAT_WAV
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }

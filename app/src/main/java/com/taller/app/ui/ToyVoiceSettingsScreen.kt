@@ -384,6 +384,13 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         playbackUi = PlaybackUi.IDLE
     }
 
+    fun clearVoiceCache() {
+        stopPlayback()
+        cacheStats = voiceCache.clear()
+        lastOutcome = null
+        lastGeminiOutcome = null
+    }
+
     val localReady = ttsState == ToySpeechState.READY || ttsState == ToySpeechState.SPEAKING
 
     Column(
@@ -460,11 +467,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                     saveMessage = null
                 },
                 onSaveVoice = { saveSevenVoice() },
-                onClearCache = {
-                    stopPlayback()
-                    cacheStats = voiceCache.clear()
-                    lastOutcome = null
-                },
+                onClearCache = { clearVoiceCache() },
                 onFallbackChange = {
                     fallbackEnabled = it
                     applyAndSave()
@@ -513,6 +516,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             selectedPhrase = selectedGeminiTestPhrase,
             lastVoiceUsed = lastGeminiVoiceUsed,
             lastOutcome = lastGeminiOutcome,
+            cacheStats = cacheStats,
             message = geminiMessage,
             saveMessage = saveMessage,
             enabled = playbackUi == PlaybackUi.IDLE,
@@ -526,6 +530,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             },
             onPhraseSelected = { selectedGeminiTestPhrase = it },
             onSaveVoice = { saveGeminiVoice() },
+            onClearCache = { clearVoiceCache() },
             onTest = { playGeminiTest() }
         )
 
@@ -956,6 +961,7 @@ private fun GeminiTestSection(
     selectedPhrase: Pair<String, String>,
     lastVoiceUsed: String?,
     lastOutcome: VoiceOutcome?,
+    cacheStats: VoiceCacheStats,
     message: String?,
     saveMessage: String?,
     enabled: Boolean,
@@ -963,6 +969,7 @@ private fun GeminiTestSection(
     onInstructionsSelected: (String) -> Unit,
     onPhraseSelected: (Pair<String, String>) -> Unit,
     onSaveVoice: () -> Unit,
+    onClearCache: () -> Unit,
     onTest: () -> Unit
 ) {
     Card(
@@ -1029,6 +1036,11 @@ private fun GeminiTestSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text(
+                text = "Desde cache: ${lastOutcome?.cacheHit?.let { if (it) "Si" else "No" } ?: "No"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (message != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -1048,6 +1060,13 @@ private fun GeminiTestSection(
                     color = MaterialTheme.colorScheme.error
                 )
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            VoiceCacheInfoSection(
+                stats = cacheStats,
+                onClearCache = onClearCache
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -1163,6 +1182,21 @@ private fun VoiceCacheInfoSection(
     )
     Text(
         text = "Ultima reproduccion desde cache: ${stats.lastCacheHit?.let { if (it) "Si" else "No" } ?: "No"}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = "Proveedor de cache usado: ${stats.lastCacheProvider?.let { providerLabel(it) } ?: "Ninguno"}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = "Audios Gemini cacheados: ${stats.geminiAudioCount}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = "Audios OpenAI cacheados: ${stats.openAiAudioCount}",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -1464,7 +1498,12 @@ private fun PlaybackStatusCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (outcome.providerUsed == ToyVoiceProviderType.OPENAI_TTS && outcome.cacheHit != null) {
+                if (
+                    outcome.providerUsed in listOf(
+                        ToyVoiceProviderType.GEMINI_TTS,
+                        ToyVoiceProviderType.OPENAI_TTS
+                    ) && outcome.cacheHit != null
+                ) {
                     Text(
                         text = "Desde cache: ${if (outcome.cacheHit == true) "Si" else "No"}",
                         style = MaterialTheme.typography.bodySmall,

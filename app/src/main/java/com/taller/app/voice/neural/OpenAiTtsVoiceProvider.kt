@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaPlayer
 import android.util.Log
 import com.taller.app.voice.ToyVoiceProvider
+import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceTextValidator
 import com.taller.app.voice.VoiceErrorType
 import com.taller.app.voice.VoiceOutcome
@@ -73,7 +74,7 @@ class OpenAiTtsVoiceProvider(
         val totalLatencyMs = System.currentTimeMillis() - startedAt
 
         if (playback is VoicePlaybackResult.Success) {
-            OpenAiTtsAudioCache.rememberLastCacheHit(audio.cacheHit)
+            audioCache.rememberCacheResult(ToyVoiceProviderType.OPENAI_TTS, audio.cacheHit)
             Log.d(
                 TAG,
                 "reproduccion: cacheHit=${audio.cacheHit} cacheKey=${audio.cacheShortKey} " +
@@ -145,7 +146,7 @@ class OpenAiTtsVoiceProvider(
         val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
         val totalLatencyMs = System.currentTimeMillis() - startedAt
         return if (playback is VoicePlaybackResult.Success) {
-            OpenAiTtsAudioCache.rememberLastCacheHit(false)
+            audioCache.rememberCacheResult(ToyVoiceProviderType.OPENAI_TTS, false)
             playback.copy(
                 cacheHit = false,
                 cacheKey = audio.cacheShortKey,
@@ -221,6 +222,7 @@ class OpenAiTtsVoiceProvider(
                         tempFile.copyTo(cacheEntry.file, overwrite = true)
                         tempFile.delete()
                     }
+                    audioCache.writeMetadata(cacheEntry)
                     AudioResult.Ok(
                         file = cacheEntry.file,
                         cacheHit = false,
