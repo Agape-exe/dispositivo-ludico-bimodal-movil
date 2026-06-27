@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.taller.app.attention.AttentionRepository
 import com.taller.app.vision.FaceAnalyzer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -70,6 +71,11 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
     val faceAnalyzer = remember {
         FaceAnalyzer(
             onFaceCount = { count ->
+                if (count > 0) {
+                    AttentionRepository.onFaceDetected()
+                } else {
+                    AttentionRepository.onFaceNotDetected()
+                }
                 faceCount = count
                 if (analysisStatus != AnalysisStatus.OK) analysisStatus = AnalysisStatus.OK
             },
@@ -87,6 +93,7 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
             } catch (_: Exception) {
                 // Ignorar: el proveedor puede ya estar liberado.
             }
+            AttentionRepository.reset()
             faceAnalyzer.close()
             analyzerExecutor.shutdown()
         }
