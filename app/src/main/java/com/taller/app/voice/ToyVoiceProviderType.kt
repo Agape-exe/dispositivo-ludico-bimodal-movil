@@ -10,6 +10,9 @@ enum class ToyVoiceProviderType {
     /** Microsoft Azure Cognitive Services Speech. Respaldo neural secundario. */
     AZURE_NEURAL,
 
+    /** Gemini Text-to-Speech. Proveedor tecnico alternativo para pruebas. */
+    GEMINI_TTS,
+
     /** ElevenLabs Text-to-Speech. Proveedor neural opcional. Requiere suscripcion activa. */
     ELEVENLABS
 }

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.InvalidToyVoiceTextReason
 import com.taller.app.voice.SevenVoiceService
+import com.taller.app.voice.ToyVoiceFallback
 import com.taller.app.voice.ToySpeechService
 import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceInfo
@@ -49,6 +50,8 @@ import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import com.taller.app.voice.neural.GeminiTtsConfig
+import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsAudioCache
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
@@ -71,6 +74,9 @@ private val TEST_PHRASES = listOf(
     "Recaptura futura" to "¡Hey, explorador! Seven todavía necesita tu ayuda. Mira mi pantalla para continuar la misión.",
     "Cierre" to "¡Misión completada! Gracias por ayudarme a aprender más sobre la Tierra."
 )
+
+private const val GEMINI_TEST_PHRASE =
+    "\u00a1Hola! Soy Seven, tu amigo explorador. Hoy necesito tu ayuda para aprender cosas nuevas de la Tierra."
 
 private val OPENAI_VOICE_PROFILES = listOf(
     VoiceProfile(
@@ -121,6 +127,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
     var playbackUi by remember { mutableStateOf(PlaybackUi.IDLE) }
     var lastOutcome by remember { mutableStateOf<VoiceOutcome?>(null) }
+    var lastGeminiOutcome by remember { mutableStateOf<VoiceOutcome?>(null) }
+    var geminiMessage by remember { mutableStateOf<String?>(null) }
     var selectedTestPhrase by remember { mutableStateOf<Pair<String, String>?>(null) }
     var lastTestedVoice by remember { mutableStateOf<String?>(null) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
@@ -151,6 +159,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             OpenAiTtsConfig.fromBuild(openAiVoiceName, openAiInstructions)
         }
     }
+    val geminiProvider = remember {
+        GeminiTtsVoiceProvider(context) { GeminiTtsConfig.fromBuild() }
+    }
     val elevenLabsProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
     }
@@ -170,6 +181,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     val azureRegionPresent = remember { AzureSpeechConfig.regionFromBuild().isNotBlank() }
     val azureConfigured = azureKeyPresent && azureRegionPresent
 
+    val effectiveGeminiConfig = remember { GeminiTtsConfig.fromBuild() }
+    val geminiConfigured = remember { GeminiTtsConfig.apiKeyFromBuild().isNotBlank() }
+
     val elevenLabsApiKeyPresent = remember { ElevenLabsConfig.apiKeyFromBuild().isNotBlank() }
     val elevenLabsDefaultVoiceId = remember { ElevenLabsConfig.defaultVoiceIdFromBuild() }
     val effectiveElevenLabsVoiceId = neuralVoiceId.ifBlank { elevenLabsDefaultVoiceId }
@@ -180,6 +194,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         onDispose {
             service.shutdown()
             sevenVoiceService.release()
+            geminiProvider.release()
             elevenLabsProvider.release()
         }
     }
@@ -253,8 +268,51 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    fun playGeminiTest() {
+        if (playbackUi != PlaybackUi.IDLE) return
+        if (!geminiConfigured) {
+            lastGeminiOutcome = VoiceOutcome.Failed(
+                providerRequested = ToyVoiceProviderType.GEMINI_TTS,
+                errorMessage = "Gemini TTS no esta configurado.",
+                latencyMs = 0L
+            )
+            geminiMessage = "Falta GEMINI_API_KEY en local.properties."
+            return
+        }
+        scope.launch {
+            playbackUi = PlaybackUi.GENERATING
+            lastGeminiOutcome = null
+            geminiMessage = null
+            val outcome = ToyVoiceFallback.speakWithFallback(
+                text = GEMINI_TEST_PHRASE,
+                providerRequested = ToyVoiceProviderType.GEMINI_TTS,
+                providers = listOf(
+                    ToyVoiceProviderType.GEMINI_TTS to geminiProvider,
+                    ToyVoiceProviderType.OPENAI_TTS to openAiProvider,
+                    ToyVoiceProviderType.AZURE_NEURAL to azureProvider,
+                    ToyVoiceProviderType.LOCAL to localProvider
+                ),
+                onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
+            )
+            playbackUi = PlaybackUi.IDLE
+            lastGeminiOutcome = outcome
+            lastOutcome = outcome
+            geminiMessage = when (outcome) {
+                is VoiceOutcome.Completed -> if (outcome.providerUsed == ToyVoiceProviderType.GEMINI_TTS) {
+                    "Gemini TTS reproducido correctamente."
+                } else {
+                    "Gemini TTS fallo; se uso ${providerLabel(outcome.providerUsed)} como respaldo."
+                }
+                is VoiceOutcome.Failed -> "No se pudo reproducir Gemini TTS."
+                is VoiceOutcome.SkippedInvalidText -> VoiceOutcome.SAFE_INVALID_TEXT_MESSAGE
+            }
+            cacheStats = voiceCache.stats()
+        }
+    }
+
     fun stopPlayback() {
         sevenVoiceService.stop()
+        geminiProvider.stop()
         elevenLabsProvider.stop()
         playbackUi = PlaybackUi.IDLE
     }
@@ -364,12 +422,25 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                     applyAndSave()
                 }
             )
+            ToyVoiceProviderType.GEMINI_TTS -> Unit
             ToyVoiceProviderType.LOCAL -> Unit
         }
 
         if (providerType != ToyVoiceProviderType.LOCAL) {
             Spacer(modifier = Modifier.height(16.dp))
         }
+
+        GeminiTestSection(
+            configured = geminiConfigured,
+            model = effectiveGeminiConfig.model,
+            voiceName = effectiveGeminiConfig.voiceName,
+            lastOutcome = lastGeminiOutcome,
+            message = geminiMessage,
+            enabled = playbackUi == PlaybackUi.IDLE,
+            onTest = { playGeminiTest() }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         PlaybackStatusCard(
             providerType = providerType,
@@ -719,6 +790,88 @@ private fun OpenAiConfigSection(
 }
 
 @Composable
+private fun GeminiTestSection(
+    configured: Boolean,
+    model: String,
+    voiceName: String,
+    lastOutcome: VoiceOutcome?,
+    message: String?,
+    enabled: Boolean,
+    onTest: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Prueba Gemini TTS",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = if (configured) "Estado Gemini: configurado" else "Estado Gemini: no configurado",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = "Modelo Gemini: $model",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz Gemini: $voiceName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Ultima reproduccion Gemini: ${geminiPlaybackLabel(lastOutcome)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Ultimo proveedor usado: ${lastOutcome?.providerUsed?.let { providerLabel(it) } ?: "Ninguno"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (message != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (lastOutcome is VoiceOutcome.Failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            } else if (!configured) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Falta GEMINI_API_KEY en local.properties.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onTest,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Probar Gemini TTS")
+            }
+        }
+    }
+}
+
+@Composable
 private fun VoiceCacheInfoSection(
     stats: VoiceCacheStats,
     onClearCache: () -> Unit
@@ -961,7 +1114,15 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
     ToyVoiceProviderType.LOCAL -> "Voz local"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
+    ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
+}
+
+private fun geminiPlaybackLabel(outcome: VoiceOutcome?): String = when (outcome) {
+    is VoiceOutcome.Completed -> if (outcome.providerUsed == ToyVoiceProviderType.GEMINI_TTS) "exitosa" else "fallida"
+    is VoiceOutcome.Failed -> "fallida"
+    is VoiceOutcome.SkippedInvalidText -> "fallida"
+    null -> "sin prueba"
 }
 
 private fun formatCacheBytes(bytes: Long): String {
@@ -982,6 +1143,7 @@ private fun PlaybackStatusCard(
         ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
         ToyVoiceProviderType.LOCAL -> "Voz local"
         ToyVoiceProviderType.AZURE_NEURAL -> "Azure Neural"
+        ToyVoiceProviderType.GEMINI_TTS -> "Gemini TTS"
         ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
     }
 

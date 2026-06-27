@@ -2876,6 +2876,7 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
     ToyVoiceProviderType.LOCAL -> "Voz local"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
+    ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
