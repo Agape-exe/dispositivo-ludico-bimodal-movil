@@ -225,6 +225,127 @@ class ToyVoiceFallbackTest {
     }
 
     @Test
+    fun voiceMetric_geminiSuccessIncludesRequestedUsedAndModel() = runBlocking {
+        val service = SevenVoiceService(
+            geminiProvider = CountingProvider(
+                VoicePlaybackResult.Success(cacheHit = false, synthesisLatencyMs = 42L, playbackLatencyMs = 90L)
+            ),
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS },
+            providerInfo = { VoiceProviderInfo(model = "gemini-3.1-flash-tts-preview", voice = "Puck") }
+        )
+
+        val outcome = service.speak("Hola desde Seven", mode = VoiceMode.INTELLIGENT, voiceContext = VoiceContext.GREETING)
+
+        val metric = requireNotNull(outcome.metric)
+        assertEquals(VoiceMetricEventType.VOICE_PLAYBACK_COMPLETED, metric.eventType)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, metric.providerRequested)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, metric.providerUsed)
+        assertEquals(false, metric.cacheHit)
+        assertEquals("gemini-3.1-flash-tts-preview", metric.model)
+        assertEquals("Puck", metric.voice)
+        assertEquals(VoiceMode.INTELLIGENT, metric.mode)
+        assertEquals(VoiceContext.GREETING, metric.voiceContext)
+        assertFalse(metric.toTechnicalMessage().contains("Hola desde Seven"))
+    }
+
+    @Test
+    fun voiceMetric_cacheHitGeminiIncludesCacheHitTrue() = runBlocking {
+        val service = SevenVoiceService(
+            geminiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = true, cacheKey = "abc123")),
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val metric = requireNotNull(service.speak("Hola cache").metric)
+
+        assertEquals(true, metric.cacheHit)
+        assertEquals("abc123", metric.cacheKey)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, metric.cacheProvider)
+    }
+
+    @Test
+    fun voiceMetric_geminiFallbackToOpenAiDoesNotCountAsGeminiSuccess() = runBlocking {
+        val service = SevenVoiceService(
+            geminiProvider = CountingProvider(VoicePlaybackResult.Error(VoiceErrorType.HTTP_ERROR, "Gemini HTTP 429")),
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val metric = requireNotNull(service.speak("Hola fallback").metric)
+
+        assertEquals(VoiceMetricEventType.VOICE_FALLBACK_USED, metric.eventType)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, metric.providerRequested)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, metric.providerUsed)
+        assertEquals(true, metric.fallbackUsed)
+        assertEquals(ToyVoiceProviderType.GEMINI_TTS, metric.fallbackFrom)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, metric.fallbackTo)
+        assertEquals(VoiceErrorType.HTTP_429, metric.errorType)
+    }
+
+    @Test
+    fun voiceMetric_openAiSuccessIncludesRequestedAndUsedOpenAi() = runBlocking {
+        val service = SevenVoiceService(
+            geminiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.OPENAI_TTS }
+        )
+
+        val metric = requireNotNull(service.speak("Hola OpenAI").metric)
+
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, metric.providerRequested)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, metric.providerUsed)
+        assertFalse(metric.fallbackUsed)
+    }
+
+    @Test
+    fun voiceMetric_invalidTextUsesNoneAndSkippedTrue() = runBlocking {
+        val service = SevenVoiceService(
+            geminiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val metric = requireNotNull(service.speak("No text provided").metric)
+
+        assertEquals(VoiceMetricEventType.VOICE_SKIPPED_INVALID_TEXT, metric.eventType)
+        assertEquals(null, metric.providerUsed)
+        assertTrue(metric.skippedInvalidText)
+        assertEquals(VoiceErrorType.INVALID_TTS_TEXT, metric.errorType)
+    }
+
+    @Test
+    fun voiceMetric_http429KeepsSafeErrorTypeWithoutCredentials() = runBlocking {
+        val outcome = ToyVoiceFallback.speakWithFallback(
+            text = "Hola error",
+            providerRequested = ToyVoiceProviderType.GEMINI_TTS,
+            providers = listOf(
+                ToyVoiceProviderType.GEMINI_TTS to CountingProvider(
+                    VoicePlaybackResult.Error(VoiceErrorType.HTTP_ERROR, "HTTP 429 bearercredential_marker")
+                )
+            )
+        )
+
+        val metric = requireNotNull(outcome.metric)
+        val message = metric.toTechnicalMessage()
+
+        assertEquals(VoiceMetricEventType.VOICE_PLAYBACK_FAILED, metric.eventType)
+        assertEquals(VoiceErrorType.HTTP_429, metric.errorType)
+        assertTrue(message.contains("voiceSafeErrorMessage="))
+        assertFalse(message.contains("credential_marker"))
+    }
+
+    @Test
     fun sevenVoiceService_serializesConcurrentPlaybackRequests() = runBlocking {
         val local = SlowCountingProvider(VoicePlaybackResult.Success())
         val service = SevenVoiceService(

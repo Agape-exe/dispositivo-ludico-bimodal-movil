@@ -32,6 +32,7 @@ sealed interface VoicePlaybackResult {
     data class Success(
         val cacheHit: Boolean? = null,
         val cacheKey: String? = null,
+        val cacheLookupLatencyMs: Long? = null,
         val synthesisLatencyMs: Long? = null,
         val playbackLatencyMs: Long? = null,
         val totalLatencyMs: Long? = null
@@ -45,6 +46,13 @@ enum class VoiceErrorType {
     NOT_CONFIGURED,
     NO_NETWORK,
     HTTP_ERROR,
+    HTTP_401,
+    HTTP_403,
+    HTTP_429,
+    RESPONSE_WITHOUT_AUDIO,
+    BASE64_INVALID,
+    WAV_WRITE_ERROR,
+    NETWORK_ERROR,
     TIMEOUT,
     INVALID_AUDIO,
     PLAYBACK_FAILED,

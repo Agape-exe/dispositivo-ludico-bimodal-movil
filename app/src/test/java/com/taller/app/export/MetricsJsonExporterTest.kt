@@ -114,6 +114,40 @@ class MetricsJsonExporterTest {
         assertTrue(json.contains("\"latencyMs\": 320"))
     }
 
+    @Test
+    fun eventoVoz_incluyeCamposDeVozEnJson() {
+        val event = ExportTechnicalEventDto(
+            eventId = 3L,
+            questionId = 10L,
+            attemptId = 1L,
+            operationMode = "ADVANCED",
+            eventType = "VOICE_PLAYBACK_COMPLETED",
+            message = "voiceProviderRequested=GEMINI_TTS voiceProviderUsed=GEMINI_TTS",
+            timestampMs = 2000L,
+            latencyMs = 250L,
+            voiceProviderRequested = "GEMINI_TTS",
+            voiceProviderUsed = "GEMINI_TTS",
+            voiceFallbackUsed = "false",
+            voiceModel = "gemini-3.1-flash-tts-preview",
+            voiceName = "Puck",
+            voiceCacheHit = "true",
+            voiceSynthesisLatencyMs = "0",
+            voicePlaybackDurationMs = "120",
+            voiceTotalLatencyMs = "250",
+            voiceErrorType = null,
+            voiceContext = "QUESTION"
+        )
+        val json = exporter.export(
+            listOf(bimodalSession().copy(technicalEvents = listOf(event))),
+            exportedAtMs = 4000L
+        )
+
+        assertTrue(json.contains("\"voiceProviderRequested\": \"GEMINI_TTS\""))
+        assertTrue(json.contains("\"voiceProviderUsed\": \"GEMINI_TTS\""))
+        assertTrue(json.contains("\"voiceModel\": \"gemini-3.1-flash-tts-preview\""))
+        assertTrue(json.contains("\"voiceContext\": \"QUESTION\""))
+    }
+
     // -------------------------------------------------------------------------
     // Escapes JSON
     // -------------------------------------------------------------------------

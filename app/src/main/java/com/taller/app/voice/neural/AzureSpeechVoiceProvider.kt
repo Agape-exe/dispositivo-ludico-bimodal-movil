@@ -66,13 +66,26 @@ class AzureSpeechVoiceProvider(
             )
         }
 
+        val startedAt = System.currentTimeMillis()
         val audioFile = when (val download = requestAudio(validation.normalizedText, config)) {
             is AudioResult.Failure -> return download.error
             is AudioResult.Ok -> download.file
         }
 
         return try {
-            playFile(audioFile, onPlaybackStart)
+            val playbackStartedAt = System.currentTimeMillis()
+            val playback = playFile(audioFile, onPlaybackStart)
+            val playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt
+            if (playback is VoicePlaybackResult.Success) {
+                playback.copy(
+                    cacheHit = false,
+                    synthesisLatencyMs = playbackStartedAt - startedAt,
+                    playbackLatencyMs = playbackLatencyMs,
+                    totalLatencyMs = System.currentTimeMillis() - startedAt
+                )
+            } else {
+                playback
+            }
         } finally {
             audioFile.delete()
         }

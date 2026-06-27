@@ -3,6 +3,7 @@ package com.taller.app.export
 import com.taller.app.data.local.dao.AttemptDao
 import com.taller.app.data.local.dao.SessionDao
 import com.taller.app.data.local.dao.TechnicalEventDao
+import com.taller.app.voice.VoicePlaybackMetricParser
 
 class MetricsExportRepository(
     private val sessionDao: SessionDao,
@@ -72,6 +73,7 @@ class MetricsExportRepository(
                     )
                 },
                 technicalEvents = events.map { e ->
+                    val voice = VoicePlaybackMetricParser.parse(e.message)
                     ExportTechnicalEventDto(
                         eventId = e.id,
                         questionId = e.questionId,
@@ -80,7 +82,18 @@ class MetricsExportRepository(
                         eventType = e.eventType,
                         message = e.message,
                         timestampMs = e.timestamp,
-                        latencyMs = e.latencyMs
+                        latencyMs = e.latencyMs,
+                        voiceProviderRequested = voice["voiceProviderRequested"],
+                        voiceProviderUsed = voice["voiceProviderUsed"],
+                        voiceFallbackUsed = voice["voiceFallbackUsed"],
+                        voiceModel = voice["voiceModel"],
+                        voiceName = voice["voiceName"],
+                        voiceCacheHit = voice["voiceCacheHit"],
+                        voiceSynthesisLatencyMs = voice["voiceSynthesisLatencyMs"],
+                        voicePlaybackDurationMs = voice["voicePlaybackDurationMs"],
+                        voiceTotalLatencyMs = voice["voiceTotalLatencyMs"],
+                        voiceErrorType = voice["voiceErrorType"],
+                        voiceContext = voice["voiceContext"]
                     )
                 }
             )
