@@ -103,7 +103,18 @@ class MetricsCsvExporter {
             f(e.eventType),
             f(e.message),
             f(e.timestampMs),
-            f(e.latencyMs)
+            f(e.latencyMs),
+            f(e.voiceProviderRequested),
+            f(e.voiceProviderUsed),
+            f(e.voiceFallbackUsed),
+            f(e.voiceModel),
+            f(e.voiceName),
+            f(e.voiceCacheHit),
+            f(e.voiceSynthesisLatencyMs),
+            f(e.voicePlaybackDurationMs),
+            f(e.voiceTotalLatencyMs),
+            f(e.voiceErrorType),
+            f(e.voiceContext)
         ).joinToString(SEP)
 
     private fun f(value: Any?): String {
@@ -145,7 +156,10 @@ class MetricsCsvExporter {
 
         val EVENTS_HEADER = listOf(
             "session_id", "event_id", "operation_mode", "question_id", "attempt_id",
-            "event_type", "message", "timestamp_ms", "latency_ms"
+            "event_type", "message", "timestamp_ms", "latency_ms",
+            "voiceProviderRequested", "voiceProviderUsed", "voiceFallbackUsed",
+            "voiceModel", "voiceName", "voiceCacheHit", "voiceSynthesisLatencyMs",
+            "voicePlaybackDurationMs", "voiceTotalLatencyMs", "voiceErrorType", "voiceContext"
         )
     }
 }

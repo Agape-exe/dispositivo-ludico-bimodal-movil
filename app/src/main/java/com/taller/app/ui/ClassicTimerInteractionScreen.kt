@@ -90,7 +90,10 @@ import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceOutcome
+import com.taller.app.voice.VoiceMode
+import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.GeminiTtsConfig
@@ -731,7 +734,8 @@ private fun ClassicSession(
             openAiProvider = openAiVoiceProvider,
             azureProvider = azureVoiceProvider,
             localProvider = localVoiceProvider,
-            preferredProvider = { voiceSettings.provider }
+            preferredProvider = { voiceSettings.provider },
+            providerInfo = { buildVoiceProviderInfo(voiceSettings, it) }
         )
     }
 
@@ -767,30 +771,34 @@ private fun ClassicSession(
         )
     }
 
-    suspend fun speakAndAwait(text: String) {
+    suspend fun speakAndAwait(text: String, voiceContext: VoiceContext = VoiceContext.UNKNOWN) {
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
         try {
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(text, source = "temporizador")
+                    sevenVoiceService.speak(
+                        text = text,
+                        source = "temporizador",
+                        mode = VoiceMode.TIMER,
+                        voiceContext = voiceContext
+                    )
                 }.getOrNull()
             }
             if (outcome == null) {
                 Log.w(CLASSIC_LOG_TAG, "voz: sin resultado tras ${timeoutMs}ms, flujo continúa")
             }
-            if (outcome is VoiceOutcome.SkippedInvalidText && logSessionId > 0L) {
+            outcome?.metric?.let { metric ->
                 runCatching {
                     dataLogger.logTechnicalEvent(
                         sessionId = logSessionId,
                         questionId = progress?.currentQuestionId?.toLongOrNull(),
                         attemptId = logAttemptId.takeIf { it > 0L },
                         operationMode = "CLASSIC",
-                        eventType = "TTS_SKIPPED_INVALID_TEXT",
-                        message = "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
-                            "textLength=${outcome.textLength} reason=${outcome.reason}",
-                        latencyMs = outcome.latencyMs
+                        eventType = metric.eventType.name,
+                        message = metric.toTechnicalMessage(),
+                        latencyMs = metric.totalVoiceLatencyMs
                     )
                 }
             }
@@ -862,7 +870,7 @@ private fun ClassicSession(
     LaunchedEffect(state == ClassicTimerState.SESSION_STARTING, resumeToken, isPausedByTeacher) {
         if (state != ClassicTimerState.SESSION_STARTING || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "SESSION_STARTING: frase apertura")
-        speakAndAwait(phraseBank.getSessionStart())
+        speakAndAwait(phraseBank.getSessionStart(), VoiceContext.GREETING)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.SESSION_STARTING) {
             dispatch { runner.presentCurrentQuestion() }
         }
@@ -882,7 +890,7 @@ private fun ClassicSession(
         val mediationKey = LocalMediationKey.fromKey(progress?.currentQuestionMediationKey)
         Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION round=$round isLast=$isLast key=$mediationKey")
         // Transición + pregunta en una sola reproducción para reducir demora.
-        speakAndAwait(phraseBank.getRoundPrompt(round, questionText, isLast, mediationKey))
+        speakAndAwait(phraseBank.getRoundPrompt(round, questionText, isLast, mediationKey), VoiceContext.QUESTION)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.PRESENTING_QUESTION) {
             dispatch { runner.startResponseWindow() }
         }
@@ -945,7 +953,7 @@ private fun ClassicSession(
 
         // Última ronda: frase de cierre de participación sin anunciar otra pregunta,
         // y avance inmediato al cierre (sin transición intermedia).
-        speakAndAwait(phraseBank.getAnswerReceived(isLast))
+        speakAndAwait(phraseBank.getAnswerReceived(isLast), VoiceContext.FEEDBACK_CORRECT)
         if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.ANSWER_RECEIVED) {
             dispatch { runner.advanceQuestion() }
@@ -993,7 +1001,7 @@ private fun ClassicSession(
         }
 
         // En la última ronda la frase no anuncia otra pregunta; encadena al cierre.
-        speakAndAwait(phraseBank.getTimeExpired(hadPartial, isLast))
+        speakAndAwait(phraseBank.getTimeExpired(hadPartial, isLast), VoiceContext.COUNTDOWN)
         if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.TIME_EXPIRED) {
             dispatch { runner.advanceQuestion() }
@@ -1004,7 +1012,7 @@ private fun ClassicSession(
     LaunchedEffect(state == ClassicTimerState.SESSION_COMPLETED, isPausedByTeacher) {
         if (state != ClassicTimerState.SESSION_COMPLETED || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "SESSION_COMPLETED")
-        speakAndAwait(phraseBank.getSessionCompleted())
+        speakAndAwait(phraseBank.getSessionCompleted(), VoiceContext.CLOSING)
     }
 
     // Registra el cierre de la sesion clasica cuando se alcanza un estado terminal.

@@ -16,13 +16,16 @@ class SevenVoiceService(
     private val openAiProvider: ToyVoiceProvider,
     private val azureProvider: ToyVoiceProvider,
     private val localProvider: ToyVoiceProvider,
-    private val preferredProvider: () -> ToyVoiceProviderType = { ToyVoiceProviderType.GEMINI_TTS }
+    private val preferredProvider: () -> ToyVoiceProviderType = { ToyVoiceProviderType.GEMINI_TTS },
+    private val providerInfo: (ToyVoiceProviderType) -> VoiceProviderInfo = { VoiceProviderInfo() }
 ) {
     private val playbackMutex = Mutex()
 
     suspend fun speak(
         text: String?,
         source: String = "unknown",
+        mode: VoiceMode = modeFromSource(source),
+        voiceContext: VoiceContext = VoiceContext.UNKNOWN,
         providerOverride: ToyVoiceProviderType? = null,
         onPlaybackStart: () -> Unit = {}
     ): VoiceOutcome = playbackMutex.withLock {
@@ -31,17 +34,19 @@ class SevenVoiceService(
             text = text,
             providerRequested = requested,
             providers = buildProviderChain(requested),
+            mode = mode,
+            voiceContext = voiceContext,
+            providerInfo = providerInfo,
             onPlaybackStart = onPlaybackStart
         )
-        if (outcome is VoiceOutcome.SkippedInvalidText) {
+        outcome.metric?.let { metric ->
+            val message = "eventType=${metric.eventType.name} source=$source ${metric.toTechnicalMessage()}"
             runCatching {
-                Log.w(
-                    TAG,
-                    "eventType=TTS_SKIPPED_INVALID_TEXT source=$source " +
-                        "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
-                        "textLength=${outcome.textLength} reason=${outcome.reason} " +
-                        "timestamp=${System.currentTimeMillis()}"
-                )
+                if (outcome is VoiceOutcome.SkippedInvalidText || outcome is VoiceOutcome.Failed) {
+                    Log.w(TAG, message)
+                } else {
+                    Log.d(TAG, message)
+                }
             }
         }
         return outcome
@@ -104,3 +109,10 @@ object ToyVoiceProviderFallbackOrder {
 
 private fun normalizeProvider(provider: ToyVoiceProviderType): ToyVoiceProviderType =
     if (provider == ToyVoiceProviderType.ELEVENLABS) ToyVoiceProviderType.GEMINI_TTS else provider
+
+private fun modeFromSource(source: String): VoiceMode = when (source.lowercase()) {
+    "configurar" -> VoiceMode.CONFIGURAR
+    "inteligente" -> VoiceMode.INTELLIGENT
+    "temporizador" -> VoiceMode.TIMER
+    else -> VoiceMode.UNKNOWN
+}

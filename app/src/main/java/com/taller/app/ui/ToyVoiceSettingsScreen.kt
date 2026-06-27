@@ -45,7 +45,10 @@ import com.taller.app.voice.ToyVoiceInfo
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceOutcome
+import com.taller.app.voice.VoiceMode
+import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
@@ -212,7 +215,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             openAiProvider = openAiProvider,
             azureProvider = azureProvider,
             localProvider = localProvider,
-            preferredProvider = { buildCurrentSettings().provider }
+            preferredProvider = { buildCurrentSettings().provider },
+            providerInfo = { buildVoiceProviderInfo(buildCurrentSettings(), it) }
         )
     }
 
@@ -323,6 +327,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             val outcome = sevenVoiceService.speak(
                 text = text,
                 source = "configurar",
+                mode = VoiceMode.CONFIGURAR,
+                voiceContext = VoiceContext.TEST,
                 providerOverride = sevenSettings.provider,
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
@@ -353,10 +359,13 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                 providerRequested = ToyVoiceProviderType.GEMINI_TTS,
                 providers = listOf(
                     ToyVoiceProviderType.GEMINI_TTS to geminiProvider,
-                    ToyVoiceProviderType.OPENAI_TTS to openAiProvider,
-                    ToyVoiceProviderType.AZURE_NEURAL to azureProvider,
-                    ToyVoiceProviderType.LOCAL to localProvider
+                ToyVoiceProviderType.OPENAI_TTS to openAiProvider,
+                ToyVoiceProviderType.AZURE_NEURAL to azureProvider,
+                ToyVoiceProviderType.LOCAL to localProvider
                 ),
+                mode = VoiceMode.CONFIGURAR,
+                voiceContext = VoiceContext.TEST,
+                providerInfo = { buildVoiceProviderInfo(buildCurrentSettings(), it) },
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
             playbackUi = PlaybackUi.IDLE
@@ -1510,11 +1519,39 @@ private fun PlaybackStatusCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                outcome.metric?.model?.let { model ->
+                    Text(
+                        text = "Modelo: $model",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                outcome.metric?.voice?.let { voice ->
+                    Text(
+                        text = "Voz: $voice",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                outcome.synthesisLatencyMs?.let { synthesis ->
+                    Text(
+                        text = "Sintesis: $synthesis ms",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
-                    text = "Latencia: ${outcome.latencyMs} ms",
+                    text = "Latencia total: ${outcome.totalLatencyMs ?: outcome.latencyMs} ms",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                outcome.errorType?.let { errorType ->
+                    Text(
+                        text = "Ultimo error seguro: ${errorType.name}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             if (localState == ToySpeechState.ERROR) {
                 Spacer(modifier = Modifier.height(4.dp))

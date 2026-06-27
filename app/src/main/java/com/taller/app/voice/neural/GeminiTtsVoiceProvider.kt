@@ -66,11 +66,13 @@ class GeminiTtsVoiceProvider(
                 "apiKeyLength=${config.apiKey.length} model=${config.model} voice=${config.voiceName}"
         )
         val startedAt = System.currentTimeMillis()
+        val cacheLookupStartedAt = System.currentTimeMillis()
         val cacheEntry = audioCache.entryFor(
             text = validation.normalizedText,
             config = config,
             responseFormat = RESPONSE_FORMAT
         )
+        val cacheLookupLatencyMs = System.currentTimeMillis() - cacheLookupStartedAt
         val audio = when (val download = getOrCreateAudio(validation.normalizedText, config, cacheEntry)) {
             is AudioResult.Failure -> return download.error
             is AudioResult.Ok -> download
@@ -85,6 +87,7 @@ class GeminiTtsVoiceProvider(
             return playback.copy(
                 cacheHit = audio.cacheHit,
                 cacheKey = audio.cacheShortKey,
+                cacheLookupLatencyMs = cacheLookupLatencyMs,
                 synthesisLatencyMs = audio.synthesisLatencyMs,
                 playbackLatencyMs = playbackLatencyMs,
                 totalLatencyMs = totalLatencyMs

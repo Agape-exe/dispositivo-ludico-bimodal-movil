@@ -111,7 +111,10 @@ import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceOutcome
+import com.taller.app.voice.VoiceMode
+import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.GeminiTtsConfig
@@ -988,7 +991,8 @@ private fun BimodalSession(
             openAiProvider = openAiVoiceProvider,
             azureProvider = azureVoiceProvider,
             localProvider = localVoiceProvider,
-            preferredProvider = { voiceSettings.provider }
+            preferredProvider = { voiceSettings.provider },
+            providerInfo = { buildVoiceProviderInfo(voiceSettings, it) }
         )
     }
 
@@ -1055,7 +1059,7 @@ private fun BimodalSession(
     //
     // Si la corrutina que la invoca se cancela (por ejemplo, el docente fuerza una
     // accion manual), el bloque finally detiene el audio residual de forma ordenada.
-    suspend fun speakAndAwait(text: String) {
+    suspend fun speakAndAwait(text: String, voiceContext: VoiceContext = VoiceContext.UNKNOWN) {
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
         try {
@@ -1067,7 +1071,12 @@ private fun BimodalSession(
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(text, source = "inteligente")
+                    sevenVoiceService.speak(
+                        text = text,
+                        source = "inteligente",
+                        mode = VoiceMode.INTELLIGENT,
+                        voiceContext = voiceContext
+                    )
                 }.getOrNull()
             }
             if (outcome == null) {
@@ -1076,17 +1085,16 @@ private fun BimodalSession(
                     "voz: sin resultado tras ${timeoutMs}ms (timeout o fallo); el flujo continua"
                 )
             }
-            if (outcome is VoiceOutcome.SkippedInvalidText && logSessionId > 0L) {
+            outcome?.metric?.let { metric ->
                 runCatching {
                     dataLogger.logTechnicalEvent(
                         sessionId = logSessionId,
                         questionId = progress?.currentQuestionId?.toLongOrNull(),
                         attemptId = logAttemptId.takeIf { it > 0L },
                         operationMode = "ADVANCED",
-                        eventType = "TTS_SKIPPED_INVALID_TEXT",
-                        message = "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
-                            "textLength=${outcome.textLength} reason=${outcome.reason}",
-                        latencyMs = outcome.latencyMs
+                        eventType = metric.eventType.name,
+                        message = metric.toTechnicalMessage(),
+                        latencyMs = metric.totalVoiceLatencyMs
                     )
                 }
             }
@@ -1215,12 +1223,17 @@ private fun BimodalSession(
             "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos)"
         )
         var interruptedByFaceLost = false
-        for (segment in presentationSegments) {
+        for ((index, segment) in presentationSegments.withIndex()) {
             if (faceLostJobVersion != versionAtStart) {
                 interruptedByFaceLost = true
                 break
             }
-            speakAndAwait(segment)
+            val segmentContext = if (playInitialGreeting && index < 2) {
+                VoiceContext.GREETING
+            } else {
+                VoiceContext.QUESTION
+            }
+            speakAndAwait(segment, segmentContext)
         }
         Log.d(BIMODAL_VOICE_TAG, "preparacion: reproduccion intro fin estado=${orchestrator.state}")
 
@@ -1295,7 +1308,7 @@ private fun BimodalSession(
 
         // Si el orquestador sigue en pausa, Seven avisa que no detecta el rostro.
         if (orchestrator.state == BimodalInteractionState.PAUSED_FACE_LOST) {
-            speakAndAwait(facePhraseBank.getFaceLostPhrase())
+            speakAndAwait(facePhraseBank.getFaceLostPhrase(), VoiceContext.FEEDBACK_RETRY)
         }
 
         // Espera a que el rostro vuelva (PAUSED_FACE_LOST → PRESENTING_QUESTION o
@@ -1318,9 +1331,9 @@ private fun BimodalSession(
                     )
                 }
             }
-            speakAndAwait(facePhraseBank.getFaceReturnedPhrase())
+            speakAndAwait(facePhraseBank.getFaceReturnedPhrase(), VoiceContext.FEEDBACK_RETRY)
             if (questionText.isNotBlank()) {
-                speakAndAwait(facePhraseBank.getResumeQuestionPhrase(questionText))
+                speakAndAwait(facePhraseBank.getResumeQuestionPhrase(questionText), VoiceContext.QUESTION)
             }
             // Reabre la escucha para el mismo intento.
             if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION && audioGranted) {
@@ -1459,7 +1472,7 @@ private fun BimodalSession(
             lastFeedbackMessage = GeneralTeacherFeedbackMessage(category, spokenText)
             Log.d(BIMODAL_VOICE_TAG, "feedback: categoria=$category mediacion=local")
             // Reproduce el feedback completo: SUSPENDE hasta que el audio termina.
-            speakAndAwait(spokenText)
+            speakAndAwait(spokenText, voiceContextForFeedback(category))
         }
 
         // 3) Solo despues de que la retroalimentacion termino por completo, decide el
@@ -1478,7 +1491,7 @@ private fun BimodalSession(
                 lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
                 lastMediationFallbackReason = null
                 Log.d(BIMODAL_VOICE_TAG, "cierre: mediacion=local")
-                speakAndAwait(closingText)
+                speakAndAwait(closingText, VoiceContext.CLOSING)
                 dispatch { orchestrator.moveToNextQuestion() }
             }
             BimodalAutoAction.NONE -> Unit
@@ -2890,6 +2903,23 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
+}
+
+private fun voiceContextForFeedback(type: GeneralTeacherFeedbackType): VoiceContext = when (type) {
+    GeneralTeacherFeedbackType.CORRECT -> VoiceContext.FEEDBACK_CORRECT
+    GeneralTeacherFeedbackType.INCORRECT_RETRY,
+    GeneralTeacherFeedbackType.NO_RESPONSE_RETRY,
+    GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY,
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY -> VoiceContext.FEEDBACK_RETRY
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY,
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT -> VoiceContext.NOT_INTERPRETABLE
+    GeneralTeacherFeedbackType.INCORRECT_NEXT,
+    GeneralTeacherFeedbackType.NO_RESPONSE_NEXT,
+    GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT,
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT -> VoiceContext.FEEDBACK_INCORRECT
+    GeneralTeacherFeedbackType.SESSION_COMPLETED -> VoiceContext.CLOSING
+    GeneralTeacherFeedbackType.SESSION_START -> VoiceContext.GREETING
+    GeneralTeacherFeedbackType.QUESTION_INTRO -> VoiceContext.QUESTION
 }
 
 /** Etiqueta legible para la categoria de retroalimentacion general. */

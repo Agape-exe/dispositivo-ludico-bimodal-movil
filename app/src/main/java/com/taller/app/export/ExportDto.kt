@@ -65,5 +65,16 @@ data class ExportTechnicalEventDto(
     val eventType: String,
     val message: String?,
     val timestampMs: Long,
-    val latencyMs: Long?
+    val latencyMs: Long?,
+    val voiceProviderRequested: String? = null,
+    val voiceProviderUsed: String? = null,
+    val voiceFallbackUsed: String? = null,
+    val voiceModel: String? = null,
+    val voiceName: String? = null,
+    val voiceCacheHit: String? = null,
+    val voiceSynthesisLatencyMs: String? = null,
+    val voicePlaybackDurationMs: String? = null,
+    val voiceTotalLatencyMs: String? = null,
+    val voiceErrorType: String? = null,
+    val voiceContext: String? = null
 )

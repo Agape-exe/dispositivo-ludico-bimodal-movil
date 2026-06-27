@@ -62,7 +62,9 @@ class OpenAiTtsVoiceProvider(
         val config = configProvider()
         val startedAt = System.currentTimeMillis()
         val safeText = validation.normalizedText
+        val cacheLookupStartedAt = System.currentTimeMillis()
         val cacheEntry = audioCache.entryFor(safeText, config, RESPONSE_FORMAT)
+        val cacheLookupLatencyMs = System.currentTimeMillis() - cacheLookupStartedAt
         val audio = when (val result = getOrCreateAudio(safeText, config, cacheEntry)) {
             is AudioResult.Failure -> return result.error
             is AudioResult.Ok -> result
@@ -84,6 +86,7 @@ class OpenAiTtsVoiceProvider(
             return playback.copy(
                 cacheHit = audio.cacheHit,
                 cacheKey = audio.cacheShortKey,
+                cacheLookupLatencyMs = cacheLookupLatencyMs,
                 synthesisLatencyMs = audio.synthesisLatencyMs,
                 playbackLatencyMs = playbackLatencyMs,
                 totalLatencyMs = totalLatencyMs

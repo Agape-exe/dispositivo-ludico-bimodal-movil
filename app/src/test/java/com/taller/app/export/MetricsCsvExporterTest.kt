@@ -295,6 +295,17 @@ class MetricsCsvExporterTest {
         assertTrue(cols.contains("event_type"))
         assertTrue(cols.contains("timestamp_ms"))
         assertTrue(cols.contains("latency_ms"))
+        assertTrue(cols.contains("voiceProviderRequested"))
+        assertTrue(cols.contains("voiceProviderUsed"))
+        assertTrue(cols.contains("voiceFallbackUsed"))
+        assertTrue(cols.contains("voiceModel"))
+        assertTrue(cols.contains("voiceName"))
+        assertTrue(cols.contains("voiceCacheHit"))
+        assertTrue(cols.contains("voiceSynthesisLatencyMs"))
+        assertTrue(cols.contains("voicePlaybackDurationMs"))
+        assertTrue(cols.contains("voiceTotalLatencyMs"))
+        assertTrue(cols.contains("voiceErrorType"))
+        assertTrue(cols.contains("voiceContext"))
     }
 
     @Test
@@ -317,6 +328,36 @@ class MetricsCsvExporterTest {
         val csv = exporter.exportEventsCsv(listOf(session))
         val dataRow = csv.trim().lines()[1]
         assertTrue(dataRow.endsWith(";"))
+    }
+
+    @Test
+    fun eventoVoz_exportaCamposDeVoz() {
+        val event = ExportTechnicalEventDto(
+            eventId = 3L,
+            questionId = 10L,
+            attemptId = 1L,
+            operationMode = "ADVANCED",
+            eventType = "VOICE_PLAYBACK_COMPLETED",
+            message = "voiceProviderRequested=GEMINI_TTS voiceProviderUsed=GEMINI_TTS",
+            timestampMs = 2000L,
+            latencyMs = 250L,
+            voiceProviderRequested = "GEMINI_TTS",
+            voiceProviderUsed = "GEMINI_TTS",
+            voiceFallbackUsed = "false",
+            voiceModel = "gemini-3.1-flash-tts-preview",
+            voiceName = "Puck",
+            voiceCacheHit = "true",
+            voiceSynthesisLatencyMs = "0",
+            voicePlaybackDurationMs = "120",
+            voiceTotalLatencyMs = "250",
+            voiceErrorType = null,
+            voiceContext = "QUESTION"
+        )
+        val csv = exporter.exportEventsCsv(listOf(bimodalSession().copy(technicalEvents = listOf(event))))
+
+        assertTrue(csv.contains("GEMINI_TTS"))
+        assertTrue(csv.contains("gemini-3.1-flash-tts-preview"))
+        assertTrue(csv.contains("QUESTION"))
     }
 
     // -------------------------------------------------------------------------

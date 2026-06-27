@@ -22,6 +22,7 @@ class LocalToyVoiceProvider(
     override fun isConfigured(): Boolean = true
 
     override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+        val startedAt = System.currentTimeMillis()
         val validation = ToyVoiceTextValidator.validate(text)
         if (!validation.isValid) {
             return VoicePlaybackResult.Error(
@@ -41,6 +42,7 @@ class LocalToyVoiceProvider(
         }
 
         service.applySettings(settingsProvider())
+        val playbackStartedAt = System.currentTimeMillis()
         onPlaybackStart()
         service.speak(validation.normalizedText)
 
@@ -55,7 +57,12 @@ class LocalToyVoiceProvider(
                 "Error al reproducir con la voz local."
             )
         } else {
-            VoicePlaybackResult.Success()
+            VoicePlaybackResult.Success(
+                cacheHit = false,
+                synthesisLatencyMs = 0L,
+                playbackLatencyMs = System.currentTimeMillis() - playbackStartedAt,
+                totalLatencyMs = System.currentTimeMillis() - startedAt
+            )
         }
     }
 
