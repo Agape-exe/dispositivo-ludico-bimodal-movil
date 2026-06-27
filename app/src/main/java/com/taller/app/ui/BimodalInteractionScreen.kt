@@ -93,6 +93,7 @@ import com.taller.app.bimodal.feedback.AnimalMediationBank
 import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
+import com.taller.app.attention.AttentionRepository
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
@@ -2589,6 +2590,11 @@ private fun FacePresenceCard(
     val faceAnalyzer = remember {
         FaceAnalyzer(
             onFaceCount = { count ->
+                if (count > 0) {
+                    AttentionRepository.onFaceDetected()
+                } else {
+                    AttentionRepository.onFaceNotDetected()
+                }
                 // onFaceCount llega siempre desde el hilo del analizador (un solo
                 // hilo), por lo que el tracker se actualiza de forma segura.
                 val transition = presenceTracker.onFaceCount(count)
@@ -2613,6 +2619,7 @@ private fun FacePresenceCard(
             } catch (_: Exception) {
                 // Ignorar: el proveedor puede ya estar liberado.
             }
+            AttentionRepository.reset()
             faceAnalyzer.close()
             analyzerExecutor.shutdown()
         }

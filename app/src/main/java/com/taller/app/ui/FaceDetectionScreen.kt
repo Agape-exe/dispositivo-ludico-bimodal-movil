@@ -12,6 +12,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +28,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +43,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.taller.app.attention.AttentionSnapshot
+import com.taller.app.attention.AttentionRepository
 import com.taller.app.vision.FaceAnalyzer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -64,12 +69,22 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
     var analysisStatus by remember { mutableStateOf(AnalysisStatus.PENDING) }
     var faceCount by remember { mutableIntStateOf(0) }
     var errorDetail by remember { mutableStateOf("") }
+    val attentionSnapshot by AttentionRepository.snapshot.collectAsState()
+
+    LaunchedEffect(Unit) {
+        AttentionRepository.reset()
+    }
 
     val analyzerExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val cameraProviderHolder = remember { mutableStateOf<ProcessCameraProvider?>(null) }
     val faceAnalyzer = remember {
         FaceAnalyzer(
             onFaceCount = { count ->
+                if (count > 0) {
+                    AttentionRepository.onFaceDetected()
+                } else {
+                    AttentionRepository.onFaceNotDetected()
+                }
                 faceCount = count
                 if (analysisStatus != AnalysisStatus.OK) analysisStatus = AnalysisStatus.OK
             },
@@ -87,6 +102,7 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
             } catch (_: Exception) {
                 // Ignorar: el proveedor puede ya estar liberado.
             }
+            AttentionRepository.reset()
             faceAnalyzer.close()
             analyzerExecutor.shutdown()
         }
@@ -282,6 +298,13 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
             }
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        AttentionTestCard(
+            snapshot = attentionSnapshot,
+            onReset = { AttentionRepository.reset() }
+        )
+
         // Detalle de error (si lo hubiera)
         AnimatedVisibility(
             visible = errorDetail.isNotBlank()
@@ -314,3 +337,84 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun AttentionTestCard(
+    snapshot: AttentionSnapshot,
+    onReset: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Prueba de atención local",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Mira a la cámara para llegar a ATTENTION_STABLE. Sal del encuadre menos de 3 segundos para TEMPORARILY_LOST, o más de 3 segundos para ATTENTION_LOST.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            AttentionInfoRow("Rostro detectado", yesNo(snapshot.faceDetected))
+            AttentionInfoRow("Estado de atención", snapshot.state.name)
+            AttentionInfoRow("Atención estable", yesNo(snapshot.isAttentionStable))
+            AttentionInfoRow("Pérdida temporal", yesNo(snapshot.isTemporarilyLost))
+            AttentionInfoRow("Atención perdida", yesNo(snapshot.isAttentionLost))
+            AttentionInfoRow("Duración estable", formatDuration(snapshot.stableDurationMs))
+            AttentionInfoRow("Duración sin rostro", formatDuration(snapshot.lostDurationMs))
+            AttentionInfoRow(
+                "Último rostro detectado",
+                formatTimestamp(snapshot.lastFaceDetectedAtMs)
+            )
+            AttentionInfoRow(
+                "Última pérdida de rostro",
+                formatTimestamp(snapshot.lastFaceLostAtMs)
+            )
+            AttentionInfoRow(
+                "Último cambio de estado",
+                formatTimestamp(snapshot.stateChangedAtMs.takeIf { it > 0L })
+            )
+            Button(onClick = onReset) {
+                Text("Reiniciar estado de atención")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttentionInfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+private fun yesNo(value: Boolean): String = if (value) "Sí" else "No"
+
+private fun formatDuration(durationMs: Long): String =
+    if (durationMs >= 1_000L) {
+        "${durationMs / 1_000L}.${(durationMs % 1_000L) / 100L} s"
+    } else {
+        "$durationMs ms"
+    }
+
+private fun formatTimestamp(timestampMs: Long?): String =
+    timestampMs?.toString() ?: "Sin datos"
