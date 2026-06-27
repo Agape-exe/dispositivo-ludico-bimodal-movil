@@ -30,15 +30,19 @@ class GptClientImplTest {
         enabled: Boolean = true,
         apiKey: String = "test-key",
         model: String = "gpt-5.4-mini",
-        fallbackModel: String = "gpt-5.4-nano"
+        fallbackModel: String = "gpt-5.4-nano",
+        localFallbackEnabled: Boolean = true,
+        maxOutputTokens: Int = 220,
+        timeoutMs: Long = 12_000L
     ) = GptConfig(
         apiKey = apiKey,
         model = model,
         fallbackModel = fallbackModel,
-        maxOutputTokens = 220,
-        timeoutMs = 12_000L,
+        maxOutputTokens = maxOutputTokens,
+        timeoutMs = timeoutMs,
         temperature = 0.4f,
-        enabled = enabled
+        enabled = enabled,
+        localFallbackEnabled = localFallbackEnabled
     )
 
     @Test
@@ -84,6 +88,22 @@ class GptClientImplTest {
     }
 
     @Test
+    fun missingApiKeyWithLocalFallbackDisabled_returnsSafeFailureWithoutLocalText() = runBlocking {
+        var calls = 0
+        val client = GptClientImpl(
+            configProvider = { config(apiKey = "", localFallbackEnabled = false) },
+            clientProvider = { respondingClient { calls++; successResponse(it, outputText = "remoto") } }
+        )
+
+        val result = client.generate(prompt)
+
+        assertTrue(result is GptResult.Failure)
+        assertEquals(GptErrorType.NOT_CONFIGURED, (result as GptResult.Failure).errorType)
+        assertEquals("", result.fallbackText)
+        assertEquals(0, calls)
+    }
+
+    @Test
     fun request_usesResponsesEndpointModelTokensAndSystemUserInput() = runBlocking {
         var capturedUrl = ""
         var capturedBody = ""
@@ -110,6 +130,36 @@ class GptClientImplTest {
         assertEquals(prompt.systemInstruction, input.getJSONObject(0).getString("content"))
         assertEquals("user", input.getJSONObject(1).getString("role"))
         assertEquals(prompt.userMessage, input.getJSONObject(1).getString("content"))
+    }
+
+    @Test
+    fun request_usesRuntimeModelTokensAndTimeout() = runBlocking {
+        var capturedBody = ""
+        var capturedTimeoutMs = 0L
+        val client = GptClientImpl(
+            configProvider = {
+                config(
+                    model = "gpt-5.4",
+                    maxOutputTokens = 333,
+                    timeoutMs = 7_000L
+                )
+            },
+            clientProvider = { config ->
+                capturedTimeoutMs = config.timeoutMs
+                respondingClient { request ->
+                    capturedBody = request.bodyString()
+                    successResponse(request, outputText = "Hola.")
+                }
+            }
+        )
+
+        val result = client.generate(prompt)
+        val json = JSONObject(capturedBody)
+
+        assertTrue(result is GptResult.Success)
+        assertEquals("gpt-5.4", json.getString("model"))
+        assertEquals(333, json.getInt("max_output_tokens"))
+        assertEquals(7_000L, capturedTimeoutMs)
     }
 
     @Test
@@ -500,6 +550,21 @@ class GptClientImplTest {
         assertTrue(result is StructuredGptResult.Fallback)
         assertEquals(GptErrorType.PARSE_ERROR, result.errorType)
         assertTrue(result.response.fallbackUsed)
+    }
+
+    @Test
+    fun structuredFailureWithLocalFallbackDisabled_doesNotCrashOrUseLocalFallback() = runBlocking {
+        val client = GptClientImpl(
+            configProvider = { config(localFallbackEnabled = false, fallbackModel = "gpt-5.4-mini") },
+            clientProvider = { respondingClient { jsonResponse(it, code = 200, body = """{"output_text":"texto plano"}""") } }
+        )
+
+        val result = client.generateStructured(structuredInput())
+
+        assertTrue(result is StructuredGptResult.Fallback)
+        assertFalse(result.fallbackUsed)
+        assertEquals(GptErrorType.PARSE_ERROR, result.errorType)
+        assertEquals("", result.response.visibleText)
     }
 
     @Test
