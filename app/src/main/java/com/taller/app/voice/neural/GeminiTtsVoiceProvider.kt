@@ -57,7 +57,7 @@ class GeminiTtsVoiceProvider(
         Log.d(
             TAG,
             "eventType=GEMINI_TTS_CONFIG configured=${config.isComplete} " +
-                "model=${config.model} voice=${config.voiceName}"
+                "apiKeyLength=${config.apiKey.length} model=${config.model} voice=${config.voiceName}"
         )
         if (!config.hasApiKey) {
             return VoicePlaybackResult.Error(
@@ -95,7 +95,7 @@ class GeminiTtsVoiceProvider(
     private suspend fun requestAudio(text: String, config: GeminiTtsConfig): AudioResult =
         withContext(Dispatchers.IO) {
             val body = GeminiTtsProtocol.buildRequestJson(text, config).toRequestBody(JSON_MEDIA_TYPE)
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent"
+            val url = GeminiTtsProtocol.endpointUrl(config.model)
             Log.d(
                 TAG,
                 "eventType=GEMINI_TTS_REQUEST configured=${config.isComplete} model=${config.model} " +
@@ -142,14 +142,19 @@ class GeminiTtsVoiceProvider(
                     )
                 }
                 val responseBody = response.body?.string().orEmpty()
+                Log.d(TAG, "eventType=GEMINI_TTS_HTTP_SUCCESS bodyLength=${responseBody.length}")
                 val payload = try {
                     GeminiTtsProtocol.parseAudio(responseBody)
                 } catch (e: GeminiTtsParseException) {
                     Log.w(
                         TAG,
                         "eventType=GEMINI_TTS_PARSE_ERROR hasCandidates=${e.diagnostics.hasCandidates} " +
-                            "hasInlineData=${e.diagnostics.hasInlineData} mimeType=${e.diagnostics.mimeType} " +
+                            "candidateCount=${e.diagnostics.candidateCount} hasContent=${e.diagnostics.hasContent} " +
+                            "hasParts=${e.diagnostics.hasParts} partCount=${e.diagnostics.partCount} " +
+                            "hasInlineData=${e.diagnostics.hasInlineData} hasText=${e.diagnostics.hasText} " +
+                            "mimeType=${e.diagnostics.mimeType} base64Chars=${e.diagnostics.base64Chars} " +
                             "audioBytes=${e.diagnostics.audioBytes} base64DecodeFailed=${e.diagnostics.base64DecodeFailed} " +
+                            "finishReason=${e.diagnostics.finishReason} hasPromptFeedback=${e.diagnostics.hasPromptFeedback} " +
                             "message=${e.safeMessage}"
                     )
                     return AudioResult.Failure(

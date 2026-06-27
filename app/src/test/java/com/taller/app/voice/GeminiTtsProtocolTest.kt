@@ -45,6 +45,13 @@ class GeminiTtsProtocolTest {
     }
 
     @Test
+    fun endpoint_includesModelInUrl() {
+        val endpoint = GeminiTtsProtocol.endpointUrl(GeminiTtsConfig.DEFAULT_MODEL)
+
+        assertTrue(endpoint.endsWith("/models/${GeminiTtsConfig.DEFAULT_MODEL}:generateContent"))
+    }
+
+    @Test
     fun request_doesNotIncludeModelInBody() {
         // El modelo viaja en la URL; incluirlo en el body provoca HTTP 400.
         val request = GeminiTtsProtocol.buildRequestJson("Hola", defaultConfig()).withoutWhitespace()
@@ -87,6 +94,19 @@ class GeminiTtsProtocolTest {
     }
 
     @Test
+    fun response_withAudioInSecondPart_parsesPayload() {
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val encoded = Base64.getEncoder().encodeToString(bytes)
+
+        val payload = GeminiTtsProtocol.parseAudio(
+            """{"candidates":[{"content":{"parts":[{"text":"nota"},{"inlineData":{"mimeType":"audio/l16; rate=24000; channels=1","data":"$encoded"}}]},"finishReason":"STOP"}]}"""
+        )
+
+        assertEquals("audio/l16; rate=24000; channels=1", payload.mimeType)
+        assertTrue(payload.bytes.contentEquals(bytes))
+    }
+
+    @Test
     fun response_withSnakeCaseInlineData_parsesPayload() {
         val bytes = byteArrayOf(1, 2, 3, 4)
         val encoded = Base64.getMimeEncoder(4, "\n".toByteArray()).encodeToString(bytes)
@@ -114,8 +134,49 @@ class GeminiTtsProtocolTest {
     @Test
     fun pcmSampleRate_isParsedFromMimeType() {
         assertEquals(24000, GeminiTtsProtocol.pcmSampleRate("audio/L16;codec=pcm;rate=24000"))
+        assertEquals(24000, GeminiTtsProtocol.pcmSampleRate("audio/l16; rate=24000; channels=1"))
         assertEquals(16000, GeminiTtsProtocol.pcmSampleRate("audio/L16;rate=16000"))
         assertEquals(24000, GeminiTtsProtocol.pcmSampleRate("audio/pcm"))
+    }
+
+    @Test
+    fun emptyCandidates_reportsSpecificError() {
+        val error = runCatching {
+            GeminiTtsProtocol.parseAudio("""{"candidates":[]}""")
+        }.exceptionOrNull()
+
+        assertTrue(error is GeminiTtsParseException)
+        assertEquals("Gemini fallo: candidates vacios.", (error as GeminiTtsParseException).safeMessage)
+    }
+
+    @Test
+    fun emptyParts_reportsSpecificError() {
+        val error = runCatching {
+            GeminiTtsProtocol.parseAudio("""{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}""")
+        }.exceptionOrNull()
+
+        assertTrue(error is GeminiTtsParseException)
+        assertEquals("Gemini fallo: candidates sin parts.", (error as GeminiTtsParseException).safeMessage)
+    }
+
+    @Test
+    fun textOnlyResponse_reportsTextualWithoutAudio() {
+        val error = runCatching {
+            GeminiTtsProtocol.parseAudio("""{"candidates":[{"content":{"parts":[{"text":"hola"}]},"finishReason":"STOP"}]}""")
+        }.exceptionOrNull()
+
+        assertTrue(error is GeminiTtsParseException)
+        assertEquals("Gemini fallo: respuesta textual sin audio.", (error as GeminiTtsParseException).safeMessage)
+    }
+
+    @Test
+    fun inlineDataWithoutData_reportsSpecificError() {
+        val error = runCatching {
+            GeminiTtsProtocol.parseAudio("""{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"audio/l16; rate=24000; channels=1"}}]},"finishReason":"STOP"}]}""")
+        }.exceptionOrNull()
+
+        assertTrue(error is GeminiTtsParseException)
+        assertEquals("Gemini fallo: inlineData sin data.", (error as GeminiTtsParseException).safeMessage)
     }
 
     @Test
