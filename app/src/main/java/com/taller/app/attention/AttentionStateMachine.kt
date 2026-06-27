@@ -1,103 +1,172 @@
 package com.taller.app.attention
 
 class AttentionStateMachine(
-    private val stableFaceMs: Long = 1_000L,
-    private val temporaryLostMs: Long = 1_500L,
-    private val attentionLostMs: Long = 3_000L
+    private val thresholds: AttentionThresholds = AttentionThresholds()
 ) {
-    init {
-        require(stableFaceMs >= 0L) { "stableFaceMs debe ser >= 0" }
-        require(temporaryLostMs >= 0L) { "temporaryLostMs debe ser >= 0" }
-        require(attentionLostMs >= temporaryLostMs) {
-            "attentionLostMs debe ser >= temporaryLostMs"
-        }
-    }
+    constructor(
+        stableFaceMs: Long,
+        temporaryLostMs: Long = 1_200L,
+        attentionLostMs: Long = 3_000L
+    ) : this(
+        AttentionThresholds(
+            stableLookMs = stableFaceMs,
+            temporaryLookAwayMs = temporaryLostMs,
+            attentionLostMs = attentionLostMs
+        )
+    )
 
     private var state: AttentionState = AttentionState.UNKNOWN
-    private var firstFaceDetectedAtMs: Long? = null
+    private var lookStartedAtMs: Long? = null
+    private var lookAwayStartedAtMs: Long? = null
+    private var faceLostStartedAtMs: Long? = null
+    private var attentionLossStartedAtMs: Long? = null
     private var lastFaceDetectedAtMs: Long? = null
-    private var lostStartedAtMs: Long? = null
+    private var lastLookingAtDeviceAtMs: Long? = null
+    private var lastLookAwayAtMs: Long? = null
     private var stateChangedAtMs: Long = 0L
     private var wasStableBeforeLoss: Boolean = false
+    private var faceDetected: Boolean = false
+    private var lookingAtDevice: Boolean = false
+    private var headYawDegrees: Float? = null
+    private var headPitchDegrees: Float? = null
+    private var headRollDegrees: Float? = null
+    private var consecutiveStableFrames: Int = 0
+    private var consecutiveLostFrames: Int = 0
 
     val currentSnapshot: AttentionSnapshot
         get() = snapshotAt(stateChangedAtMs)
 
     fun onInput(input: AttentionInput): AttentionSnapshot =
         when (input) {
-            is AttentionInput.FaceDetected -> onFaceDetected(input.timestampMs)
-            is AttentionInput.FaceNotDetected -> onFaceNotDetected(input.timestampMs)
+            is AttentionInput.FaceObserved -> onEvidence(input.evidence)
+            is AttentionInput.FaceDetected -> onEvidence(
+                AttentionEvidence(
+                    faceDetected = true,
+                    lookingAtDevice = true,
+                    timestampMs = input.timestampMs
+                )
+            )
+            is AttentionInput.FaceNotDetected -> onEvidence(
+                AttentionEvidence(
+                    faceDetected = false,
+                    lookingAtDevice = false,
+                    timestampMs = input.timestampMs
+                )
+            )
             is AttentionInput.Reset -> reset(input.timestampMs)
         }
 
-    private fun onFaceDetected(timestampMs: Long): AttentionSnapshot {
+    private fun onEvidence(evidence: AttentionEvidence): AttentionSnapshot {
+        val timestampMs = evidence.timestampMs
         val previousState = state
+        faceDetected = evidence.faceDetected
+        lookingAtDevice = evidence.faceDetected && evidence.lookingAtDevice
+        headYawDegrees = evidence.headYawDegrees
+        headPitchDegrees = evidence.headPitchDegrees
+        headRollDegrees = evidence.headRollDegrees
 
-        if (state == AttentionState.ATTENTION_LOST || state == AttentionState.FACE_ABSENT) {
-            firstFaceDetectedAtMs = timestampMs
-            wasStableBeforeLoss = false
-        } else if (firstFaceDetectedAtMs == null) {
-            firstFaceDetectedAtMs = timestampMs
+        if (faceDetected) {
+            lastFaceDetectedAtMs = timestampMs
+            faceLostStartedAtMs = null
+        } else if (faceLostStartedAtMs == null) {
+            faceLostStartedAtMs = timestampMs
         }
 
-        lastFaceDetectedAtMs = timestampMs
-
-        val recoveredFromTemporaryLoss = state == AttentionState.TEMPORARILY_LOST
-        lostStartedAtMs = null
-
-        val firstDetectedAt = firstFaceDetectedAtMs ?: timestampMs
-        val stableEnough = timestampMs - firstDetectedAt >= stableFaceMs
-        val nextState = if ((recoveredFromTemporaryLoss && wasStableBeforeLoss) || stableEnough) {
-            AttentionState.ATTENTION_STABLE
+        val nextState = if (lookingAtDevice) {
+            handleLookingAtDevice(timestampMs)
         } else {
-            AttentionState.FACE_PRESENT
+            handleNotLookingAtDevice(timestampMs)
         }
 
         transitionTo(nextState, previousState, timestampMs)
         return snapshotAt(timestampMs)
     }
 
-    private fun onFaceNotDetected(timestampMs: Long): AttentionSnapshot {
-        val previousState = state
-        val hasFaceHistory = firstFaceDetectedAtMs != null || lastFaceDetectedAtMs != null
+    private fun handleLookingAtDevice(timestampMs: Long): AttentionState {
+        lastLookingAtDeviceAtMs = timestampMs
+        lookAwayStartedAtMs = null
+        faceLostStartedAtMs = null
+        attentionLossStartedAtMs = null
+        consecutiveLostFrames = 0
+        consecutiveStableFrames += 1
 
-        val nextState = when (state) {
-            AttentionState.UNKNOWN ->
-                if (hasFaceHistory) AttentionState.TEMPORARILY_LOST else AttentionState.FACE_ABSENT
-            AttentionState.FACE_ABSENT,
-            AttentionState.ATTENTION_LOST ->
-                state
-            AttentionState.FACE_PRESENT,
-            AttentionState.ATTENTION_STABLE -> {
-                if (lostStartedAtMs == null) {
-                    lostStartedAtMs = timestampMs
-                    wasStableBeforeLoss = state == AttentionState.ATTENTION_STABLE
-                }
-                AttentionState.TEMPORARILY_LOST
+        if (lookStartedAtMs == null) {
+            lookStartedAtMs = timestampMs
+        }
+
+        val stableDurationMs = timestampMs - (lookStartedAtMs ?: timestampMs)
+        val stableEnough = stableDurationMs >= thresholds.stableLookMs &&
+            consecutiveStableFrames >= thresholds.minStableFrames
+
+        return when {
+            state == AttentionState.TEMPORARILY_LOST && wasStableBeforeLoss -> {
+                wasStableBeforeLoss = false
+                AttentionState.ATTENTION_STABLE
             }
+            stableEnough -> AttentionState.ATTENTION_STABLE
+            else -> AttentionState.FACE_PRESENT
+        }
+    }
+
+    private fun handleNotLookingAtDevice(timestampMs: Long): AttentionState {
+        lookStartedAtMs = null
+        consecutiveStableFrames = 0
+        consecutiveLostFrames += 1
+
+        if (attentionLossStartedAtMs == null) {
+            attentionLossStartedAtMs = timestampMs
+            wasStableBeforeLoss = state == AttentionState.ATTENTION_STABLE ||
+                (state == AttentionState.TEMPORARILY_LOST && wasStableBeforeLoss)
+        }
+
+        if (faceDetected) {
+            lastLookAwayAtMs = timestampMs
+            if (lookAwayStartedAtMs == null) lookAwayStartedAtMs = timestampMs
+        }
+
+        val lossDurationMs = timestampMs - (attentionLossStartedAtMs ?: timestampMs)
+        val lostEnough = lossDurationMs >= thresholds.attentionLostMs &&
+            consecutiveLostFrames >= thresholds.minLostFrames
+
+        return when (state) {
+            AttentionState.UNKNOWN ->
+                if (faceDetected) AttentionState.FACE_PRESENT else AttentionState.FACE_ABSENT
+            AttentionState.FACE_ABSENT ->
+                if (faceDetected) AttentionState.FACE_PRESENT else AttentionState.FACE_ABSENT
+            AttentionState.FACE_PRESENT ->
+                if (lostEnough) AttentionState.ATTENTION_LOST else AttentionState.FACE_PRESENT
+            AttentionState.ATTENTION_STABLE -> AttentionState.TEMPORARILY_LOST
             AttentionState.TEMPORARILY_LOST -> {
-                val lostAt = lostStartedAtMs ?: timestampMs.also { lostStartedAtMs = it }
-                if (timestampMs - lostAt >= attentionLostMs) {
-                    firstFaceDetectedAtMs = null
+                if (lostEnough) {
                     wasStableBeforeLoss = false
                     AttentionState.ATTENTION_LOST
                 } else {
                     AttentionState.TEMPORARILY_LOST
                 }
             }
+            AttentionState.ATTENTION_LOST ->
+                if (faceDetected) AttentionState.FACE_PRESENT else AttentionState.ATTENTION_LOST
         }
-
-        transitionTo(nextState, previousState, timestampMs)
-        return snapshotAt(timestampMs)
     }
 
     private fun reset(timestampMs: Long): AttentionSnapshot {
         state = AttentionState.UNKNOWN
-        firstFaceDetectedAtMs = null
+        lookStartedAtMs = null
+        lookAwayStartedAtMs = null
+        faceLostStartedAtMs = null
+        attentionLossStartedAtMs = null
         lastFaceDetectedAtMs = null
-        lostStartedAtMs = null
+        lastLookingAtDeviceAtMs = null
+        lastLookAwayAtMs = null
         stateChangedAtMs = timestampMs
         wasStableBeforeLoss = false
+        faceDetected = false
+        lookingAtDevice = false
+        headYawDegrees = null
+        headPitchDegrees = null
+        headRollDegrees = null
+        consecutiveStableFrames = 0
+        consecutiveLostFrames = 0
         return snapshotAt(timestampMs)
     }
 
@@ -113,33 +182,36 @@ class AttentionStateMachine(
     }
 
     private fun snapshotAt(timestampMs: Long): AttentionSnapshot {
-        val lostAt = lostStartedAtMs
         val stableDurationMs =
-            if (state == AttentionState.FACE_PRESENT || state == AttentionState.ATTENTION_STABLE) {
-                val firstDetectedAt = firstFaceDetectedAtMs
-                if (firstDetectedAt == null) 0L else (timestampMs - firstDetectedAt).coerceAtLeast(0L)
+            if (lookingAtDevice) timestampMs - (lookStartedAtMs ?: timestampMs) else 0L
+        val lookAwayDurationMs =
+            if (faceDetected && !lookingAtDevice) {
+                timestampMs - (lookAwayStartedAtMs ?: timestampMs)
             } else {
                 0L
             }
         val lostDurationMs =
-            if (state == AttentionState.TEMPORARILY_LOST || state == AttentionState.ATTENTION_LOST) {
-                if (lostAt == null) 0L else (timestampMs - lostAt).coerceAtLeast(0L)
-            } else {
-                0L
-            }
+            if (!faceDetected) timestampMs - (faceLostStartedAtMs ?: timestampMs) else 0L
 
         return AttentionSnapshot(
             state = state,
-            faceDetected = state == AttentionState.FACE_PRESENT ||
-                state == AttentionState.ATTENTION_STABLE,
+            faceDetected = faceDetected,
+            lookingAtDevice = lookingAtDevice,
             isAttentionStable = state == AttentionState.ATTENTION_STABLE,
             isTemporarilyLost = state == AttentionState.TEMPORARILY_LOST,
             isAttentionLost = state == AttentionState.ATTENTION_LOST,
+            headYawDegrees = headYawDegrees,
+            headPitchDegrees = headPitchDegrees,
+            headRollDegrees = headRollDegrees,
             lastFaceDetectedAtMs = lastFaceDetectedAtMs,
-            lastFaceLostAtMs = lostStartedAtMs,
+            lastLookingAtDeviceAtMs = lastLookingAtDeviceAtMs,
+            lastLookAwayAtMs = lastLookAwayAtMs,
             stateChangedAtMs = stateChangedAtMs,
-            stableDurationMs = stableDurationMs,
-            lostDurationMs = lostDurationMs
+            stableDurationMs = stableDurationMs.coerceAtLeast(0L),
+            lookAwayDurationMs = lookAwayDurationMs.coerceAtLeast(0L),
+            lostDurationMs = lostDurationMs.coerceAtLeast(0L),
+            consecutiveStableFrames = consecutiveStableFrames,
+            consecutiveLostFrames = consecutiveLostFrames
         )
     }
 }

@@ -45,6 +45,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.taller.app.attention.AttentionSnapshot
 import com.taller.app.attention.AttentionRepository
+import com.taller.app.attention.AttentionThresholds
 import com.taller.app.vision.FaceAnalyzer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -80,13 +81,11 @@ fun FaceDetectionScreen(onBack: () -> Unit) {
     val faceAnalyzer = remember {
         FaceAnalyzer(
             onFaceCount = { count ->
-                if (count > 0) {
-                    AttentionRepository.onFaceDetected()
-                } else {
-                    AttentionRepository.onFaceNotDetected()
-                }
                 faceCount = count
                 if (analysisStatus != AnalysisStatus.OK) analysisStatus = AnalysisStatus.OK
+            },
+            onEvidence = { evidence ->
+                AttentionRepository.onEvidence(evidence)
             },
             onError = { msg ->
                 analysisStatus = AnalysisStatus.ERROR
@@ -365,6 +364,13 @@ private fun AttentionTestCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             AttentionInfoRow("Rostro detectado", yesNo(snapshot.faceDetected))
+            AttentionInfoRow("Mirando al dispositivo", yesNo(snapshot.lookingAtDevice))
+            AttentionInfoRow("Yaw de cara", formatAngle(snapshot.headYawDegrees))
+            AttentionInfoRow("Pitch de cara", formatAngle(snapshot.headPitchDegrees))
+            AttentionInfoRow("Roll de cara", formatAngle(snapshot.headRollDegrees))
+            AttentionInfoRow("Frames estables", snapshot.consecutiveStableFrames.toString())
+            AttentionInfoRow("Frames perdidos/desviados", snapshot.consecutiveLostFrames.toString())
+            AttentionInfoRow("Duracion mirando fuera", formatDuration(snapshot.lookAwayDurationMs))
             AttentionInfoRow("Estado de atención", snapshot.state.name)
             AttentionInfoRow("Atención estable", yesNo(snapshot.isAttentionStable))
             AttentionInfoRow("Pérdida temporal", yesNo(snapshot.isTemporarilyLost))
@@ -377,12 +383,13 @@ private fun AttentionTestCard(
             )
             AttentionInfoRow(
                 "Última pérdida de rostro",
-                formatTimestamp(snapshot.lastFaceLostAtMs)
+                formatTimestamp(snapshot.lastLookAwayAtMs)
             )
             AttentionInfoRow(
                 "Último cambio de estado",
                 formatTimestamp(snapshot.stateChangedAtMs.takeIf { it > 0L })
             )
+            AttentionThresholdRows()
             Button(onClick = onReset) {
                 Text("Reiniciar estado de atención")
             }
@@ -409,6 +416,23 @@ private fun AttentionInfoRow(label: String, value: String) {
 
 private fun yesNo(value: Boolean): String = if (value) "Sí" else "No"
 
+@Composable
+private fun AttentionThresholdRows() {
+    val thresholds = AttentionThresholds()
+    Text(
+        text = "Umbrales actuales",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.Bold
+    )
+    AttentionInfoRow("stableLookMs", "${thresholds.stableLookMs} ms")
+    AttentionInfoRow("temporaryLookAwayMs", "${thresholds.temporaryLookAwayMs} ms")
+    AttentionInfoRow("attentionLostMs", "${thresholds.attentionLostMs} ms")
+    AttentionInfoRow("maxYawDegrees", thresholds.maxYawDegrees.toString())
+    AttentionInfoRow("maxPitchDegrees", thresholds.maxPitchDegrees.toString())
+    AttentionInfoRow("maxRollDegrees", thresholds.maxRollDegrees.toString())
+}
+
 private fun formatDuration(durationMs: Long): String =
     if (durationMs >= 1_000L) {
         "${durationMs / 1_000L}.${(durationMs % 1_000L) / 100L} s"
@@ -418,3 +442,6 @@ private fun formatDuration(durationMs: Long): String =
 
 private fun formatTimestamp(timestampMs: Long?): String =
     timestampMs?.toString() ?: "Sin datos"
+
+private fun formatAngle(value: Float?): String =
+    value?.let { String.format("%.1f grados", it) } ?: "no disponible"

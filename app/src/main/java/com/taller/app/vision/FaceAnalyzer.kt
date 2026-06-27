@@ -7,6 +7,8 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.taller.app.attention.AttentionEvidence
+import com.taller.app.attention.isLookingAtDevice
 
 /**
  * Analizador de frames de CameraX que delega la detección de rostros a ML Kit.
@@ -15,6 +17,7 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
  */
 class FaceAnalyzer(
     private val onFaceCount: (Int) -> Unit,
+    private val onEvidence: (AttentionEvidence) -> Unit = {},
     private val onError: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
 
@@ -40,7 +43,32 @@ class FaceAnalyzer(
             imageProxy.imageInfo.rotationDegrees
         )
         detector.process(input)
-            .addOnSuccessListener { faces -> onFaceCount(faces.size) }
+            .addOnSuccessListener { faces ->
+                val timestampMs = System.currentTimeMillis()
+                onFaceCount(faces.size)
+                val face = faces.firstOrNull()
+                val yaw = face?.headEulerAngleY
+                val pitch = face?.headEulerAngleX
+                val roll = face?.headEulerAngleZ
+                val faceDetected = face != null
+                val lookingAtDevice = isLookingAtDevice(
+                    faceDetected = faceDetected,
+                    headYawDegrees = yaw,
+                    headPitchDegrees = pitch,
+                    headRollDegrees = roll
+                )
+                onEvidence(
+                    AttentionEvidence(
+                        faceDetected = faceDetected,
+                        lookingAtDevice = lookingAtDevice,
+                        headYawDegrees = yaw,
+                        headPitchDegrees = pitch,
+                        headRollDegrees = roll,
+                        confidence = if (faceDetected && lookingAtDevice) 1f else null,
+                        timestampMs = timestampMs
+                    )
+                )
+            }
             .addOnFailureListener { e ->
                 onError(e.localizedMessage ?: "Error desconocido en análisis facial")
             }

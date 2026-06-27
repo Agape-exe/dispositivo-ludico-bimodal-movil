@@ -2590,11 +2590,6 @@ private fun FacePresenceCard(
     val faceAnalyzer = remember {
         FaceAnalyzer(
             onFaceCount = { count ->
-                if (count > 0) {
-                    AttentionRepository.onFaceDetected()
-                } else {
-                    AttentionRepository.onFaceNotDetected()
-                }
                 // onFaceCount llega siempre desde el hilo del analizador (un solo
                 // hilo), por lo que el tracker se actualiza de forma segura.
                 val transition = presenceTracker.onFaceCount(count)
@@ -2605,6 +2600,9 @@ private fun FacePresenceCard(
                         )
                     }
                 }
+            },
+            onEvidence = { evidence ->
+                AttentionRepository.onEvidence(evidence)
             },
             onError = { msg ->
                 mainExecutor.execute { errorDetail = msg }
