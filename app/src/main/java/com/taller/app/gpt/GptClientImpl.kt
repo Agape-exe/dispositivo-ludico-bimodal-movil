@@ -26,7 +26,7 @@ class GptClientImpl(
 
     override suspend fun generate(prompt: GptPrompt): GptResult {
         val config = configProvider()
-        val localFallback = GptLocalFallback.phraseFor(prompt.contextTag)
+        val localFallback = fallbackTextFor(prompt, config)
 
         if (!config.enabled) {
             logInfo(
@@ -94,6 +94,7 @@ class GptClientImpl(
             return structuredFallbackResult(
                 input = input,
                 model = config.model,
+                localFallbackEnabled = config.localFallbackEnabled,
                 errorType = GptErrorType.NOT_ENABLED,
                 safeMessage = "GPT desactivado.",
                 reason = SevenBlockedReason.UNKNOWN
@@ -105,6 +106,7 @@ class GptClientImpl(
             return structuredFallbackResult(
                 input = input,
                 model = config.model,
+                localFallbackEnabled = config.localFallbackEnabled,
                 errorType = GptErrorType.NOT_CONFIGURED,
                 safeMessage = "GPT: falta configurar API key.",
                 reason = SevenBlockedReason.UNKNOWN
@@ -172,6 +174,7 @@ class GptClientImpl(
             val result = structuredFallbackResult(
                 input = input,
                 model = model,
+                localFallbackEnabled = config.localFallbackEnabled,
                 errorType = GptErrorType.TIMEOUT,
                 safeMessage = "GPT: tiempo de espera agotado.",
                 reason = SevenBlockedReason.UNKNOWN
@@ -182,6 +185,7 @@ class GptClientImpl(
             val result = structuredFallbackResult(
                 input = input,
                 model = model,
+                localFallbackEnabled = config.localFallbackEnabled,
                 errorType = GptErrorType.NO_NETWORK,
                 safeMessage = "GPT: sin conexion disponible.",
                 reason = SevenBlockedReason.UNKNOWN
@@ -192,6 +196,7 @@ class GptClientImpl(
             val result = structuredFallbackResult(
                 input = input,
                 model = model,
+                localFallbackEnabled = config.localFallbackEnabled,
                 errorType = GptErrorType.UNKNOWN,
                 safeMessage = "GPT: error inesperado.",
                 reason = SevenBlockedReason.UNKNOWN
@@ -243,6 +248,7 @@ class GptClientImpl(
                 val result = structuredFallbackResult(
                     input = input,
                     model = model,
+                    localFallbackEnabled = config.localFallbackEnabled,
                     errorType = errorType,
                     safeMessage = safeMessageFor(errorType),
                     reason = SevenBlockedReason.UNKNOWN,
@@ -261,6 +267,7 @@ class GptClientImpl(
                 val result = structuredFallbackResult(
                     input = input,
                     model = model,
+                    localFallbackEnabled = config.localFallbackEnabled,
                     errorType = GptErrorType.EMPTY_RESPONSE,
                     safeMessage = "GPT: respuesta vacia.",
                     reason = SevenBlockedReason.UNKNOWN,
@@ -276,6 +283,7 @@ class GptClientImpl(
                 val result = structuredFallbackResult(
                     input = input,
                     model = model,
+                    localFallbackEnabled = config.localFallbackEnabled,
                     errorType = GptErrorType.PARSE_ERROR,
                     safeMessage = "GPT: respuesta no interpretable.",
                     reason = SevenBlockedReason.INVALID_CONTEXT,
@@ -295,6 +303,7 @@ class GptClientImpl(
                 val result = structuredFallbackResult(
                     input = input,
                     model = model,
+                    localFallbackEnabled = config.localFallbackEnabled,
                     errorType = GptErrorType.PARSE_ERROR,
                     safeMessage = "GPT: respuesta no interpretable.",
                     reason = SevenBlockedReason.INVALID_CONTEXT,
@@ -314,6 +323,7 @@ class GptClientImpl(
                 val result = structuredFallbackResult(
                     input = input,
                     model = model,
+                    localFallbackEnabled = config.localFallbackEnabled,
                     errorType = GptErrorType.PARSE_ERROR,
                     safeMessage = "GPT: respuesta no validada localmente.",
                     reason = validation.blockedReason,
@@ -350,20 +360,43 @@ class GptClientImpl(
     private fun structuredFallbackResult(
         input: SevenInputContract,
         model: String,
+        localFallbackEnabled: Boolean,
         errorType: GptErrorType,
         safeMessage: String,
         reason: SevenBlockedReason,
         latencyMs: Long = 0L,
         rawTextLength: Int = 0
     ): StructuredGptResult.Fallback {
-        val fallback = GptLocalFallback.structuredFallback(input, reason)
+        val fallback = if (localFallbackEnabled) {
+            GptLocalFallback.structuredFallback(input, reason)
+        } else {
+            SevenResponse(
+                intent = runCatching { SevenIntent.parse(input.intent) }.getOrDefault(SevenIntent.FALLBACK),
+                responseType = SevenResponseType.FALLBACK,
+                visibleText = "",
+                safetyLevel = SevenSafetyLevel.BLOCKED,
+                fallbackUsed = false,
+                canGiveHint = false,
+                canGiveFinalAnswer = false,
+                shouldAskRepeat = false,
+                shouldRecaptureAttention = false,
+                topic = input.topic,
+                localEvaluation = runCatching { SevenLocalEvaluation.parse(input.localEvaluation) }
+                    .getOrDefault(SevenLocalEvaluation.NOT_APPLICABLE),
+                attemptsRemaining = input.attemptsRemaining,
+                maxWords = input.maxWords,
+                blockedReason = reason,
+                safeForTts = false,
+                validationNotes = "fallback local desactivado"
+            )
+        }
         val validation = SevenResponseValidator.validate(fallback, input)
         return StructuredGptResult.Fallback(
             response = fallback,
             validation = validation.copy(effectiveSafeForTts = validation.isValid),
             modelUsed = model,
             latencyMs = latencyMs,
-            fallbackUsed = true,
+            fallbackUsed = localFallbackEnabled,
             errorType = errorType,
             safeMessage = safeMessage,
             rawTextLength = rawTextLength
@@ -390,7 +423,7 @@ class GptClientImpl(
             val result = failure(
                 type = GptErrorType.TIMEOUT,
                 message = "GPT: tiempo de espera agotado.",
-                fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                fallbackText = fallbackTextFor(prompt, config),
                 model = model
             )
             logWarn("AI_GPT_TEST_FAILED", "contextTag=${prompt.contextTag} model=$model errorType=TIMEOUT")
@@ -399,7 +432,7 @@ class GptClientImpl(
             val result = failure(
                 type = GptErrorType.NO_NETWORK,
                 message = "GPT: sin conexion disponible.",
-                fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                fallbackText = fallbackTextFor(prompt, config),
                 model = model
             )
             logWarn("AI_GPT_TEST_FAILED", "contextTag=${prompt.contextTag} model=$model errorType=NO_NETWORK")
@@ -408,7 +441,7 @@ class GptClientImpl(
             val result = failure(
                 type = GptErrorType.UNKNOWN,
                 message = "GPT: error inesperado.",
-                fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                fallbackText = fallbackTextFor(prompt, config),
                 model = model
             )
             logWarn("AI_GPT_TEST_FAILED", "contextTag=${prompt.contextTag} model=$model errorType=UNKNOWN")
@@ -457,7 +490,7 @@ class GptClientImpl(
                 val result = failure(
                     type = errorType,
                     message = safeMessageFor(errorType),
-                    fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                    fallbackText = fallbackTextFor(prompt, config),
                     model = model
                 )
                 logWarn(
@@ -472,7 +505,7 @@ class GptClientImpl(
                 val result = failure(
                     type = GptErrorType.EMPTY_RESPONSE,
                     message = "GPT: respuesta vacia.",
-                    fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                    fallbackText = fallbackTextFor(prompt, config),
                     model = model
                 )
                 logWarn("AI_GPT_EMPTY_RESPONSE", "contextTag=${prompt.contextTag} model=$model bodyLen=0")
@@ -501,7 +534,7 @@ class GptClientImpl(
                     val result = failure(
                         type = GptErrorType.EMPTY_RESPONSE,
                         message = "GPT: respuesta sin texto.",
-                        fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                        fallbackText = fallbackTextFor(prompt, config),
                         model = model
                     )
                     logWarn("AI_GPT_EMPTY_RESPONSE", "contextTag=${prompt.contextTag} model=$model bodyLen=${body.length}")
@@ -511,7 +544,7 @@ class GptClientImpl(
                     val result = failure(
                         type = GptErrorType.PARSE_ERROR,
                         message = "GPT: respuesta no interpretable.",
-                        fallbackText = GptLocalFallback.phraseFor(prompt.contextTag),
+                        fallbackText = fallbackTextFor(prompt, config),
                         model = model
                     )
                     logWarn("AI_GPT_PARSE_ERROR", "contextTag=${prompt.contextTag} model=$model bodyLen=${body.length}")
@@ -532,6 +565,13 @@ class GptClientImpl(
         fallbackText = fallbackText,
         modelAttempted = model
     )
+
+    private fun fallbackTextFor(prompt: GptPrompt, config: GptConfig): String =
+        if (config.localFallbackEnabled) {
+            GptLocalFallback.phraseFor(prompt.contextTag)
+        } else {
+            ""
+        }
 
     private fun logInfo(eventType: String, message: String) {
         logSink("d", "eventType=$eventType $message")
