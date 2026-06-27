@@ -310,6 +310,231 @@ class GptClientImplTest {
         assertEquals(listOf(true, false), temperatures)
     }
 
+    @Test
+    fun structuredRequest_includesJsonSchemaFormat() {
+        val json = JSONObject(
+            GptClientImpl.buildStructuredRequestJson(
+                input = structuredInput(),
+                config = config(),
+                model = "gpt-5.4-mini"
+            )
+        )
+        val format = json.getJSONObject("text").getJSONObject("format")
+
+        assertEquals("json_schema", format.getString("type"))
+        assertEquals("SevenResponse", format.getString("name"))
+        assertTrue(format.getBoolean("strict"))
+        assertFalse(format.getJSONObject("schema").getBoolean("additionalProperties"))
+    }
+
+    @Test
+    fun parser_parsesValidGreetingJson() {
+        val response = GptResponseParser.parseApiResponse(
+            """{"output_text":${JSONObject.quote(validSevenJson())}}"""
+        )
+
+        assertEquals(SevenIntent.GREETING, response.intent)
+        assertEquals(SevenResponseType.GREET, response.responseType)
+        assertEquals("Hola, explorador!", response.visibleText)
+    }
+
+    @Test(expected = SevenParseException::class)
+    fun parser_failsWhenRequiredFieldIsMissing() {
+        GptResponseParser.parseApiResponse(
+            """{"output_text":${JSONObject.quote(validSevenJson().replace(""""validationNotes":"ok"""", """"notes":"ok""""))}}"""
+        )
+    }
+
+    @Test(expected = SevenParseException::class)
+    fun parser_failsForPlainText() {
+        GptResponseParser.parseApiResponse("""{"output_text":"Hola sin JSON"}""")
+    }
+
+    @Test
+    fun validator_rejectsAiModelTerms() {
+        val validation = SevenResponseValidator.validate(
+            validResponse(visibleText = "Soy un modelo de IA."),
+            structuredInput()
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("V10_NO_AI_OR_SYSTEM_TERMS"))
+    }
+
+    @Test
+    fun validator_rejectsSurveillanceTerms() {
+        val validation = SevenResponseValidator.validate(
+            validResponse(visibleText = "Te veo por la camara."),
+            structuredInput()
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("V11_NO_SURVEILLANCE_TERMS"))
+    }
+
+    @Test
+    fun validator_rejectsPersonalDataRequests() {
+        val validation = SevenResponseValidator.validate(
+            validResponse(visibleText = "Como te llamas?"),
+            structuredInput()
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("V12_NO_PERSONAL_DATA_REQUEST"))
+    }
+
+    @Test
+    fun validator_rejectsFinalAnswerWhenNotAllowed() {
+        val input = structuredInput(
+            intent = "feedback_incorrect",
+            localEvaluation = "incorrect",
+            canGiveHint = true,
+            answerTokens = listOf("guau")
+        )
+        val validation = SevenResponseValidator.validate(
+            validResponse(
+                intent = SevenIntent.FEEDBACK_INCORRECT,
+                responseType = SevenResponseType.HINT,
+                visibleText = "La respuesta es guau.",
+                localEvaluation = SevenLocalEvaluation.INCORRECT
+            ),
+            input
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("V13_NO_FINAL_ANSWER"))
+    }
+
+    @Test
+    fun validator_acceptsBriefCorrectFeedback() {
+        val input = structuredInput(intent = "feedback_correct", localEvaluation = "correct")
+        val validation = SevenResponseValidator.validate(
+            validResponse(
+                intent = SevenIntent.FEEDBACK_CORRECT,
+                responseType = SevenResponseType.PRAISE,
+                visibleText = "Muy bien, explorador!",
+                localEvaluation = SevenLocalEvaluation.CORRECT
+            ),
+            input
+        )
+
+        assertTrue(validation.effectiveSafeForTts)
+    }
+
+    @Test
+    fun validator_acceptsNotInterpretableWithRepeat() {
+        val input = structuredInput(intent = "not_interpretable", localEvaluation = "not_interpretable")
+        val validation = SevenResponseValidator.validate(
+            validResponse(
+                intent = SevenIntent.NOT_INTERPRETABLE,
+                responseType = SevenResponseType.ASK_REPEAT,
+                visibleText = "Mis antenas no entendieron. Puedes repetirlo?",
+                localEvaluation = SevenLocalEvaluation.NOT_INTERPRETABLE,
+                shouldAskRepeat = true
+            ),
+            input
+        )
+
+        assertTrue(validation.effectiveSafeForTts)
+    }
+
+    @Test
+    fun validator_rejectsNotInterpretableWithoutRepeat() {
+        val input = structuredInput(intent = "not_interpretable", localEvaluation = "not_interpretable")
+        val validation = SevenResponseValidator.validate(
+            validResponse(
+                intent = SevenIntent.NOT_INTERPRETABLE,
+                responseType = SevenResponseType.ASK_REPEAT,
+                visibleText = "Intentemos otra vez.",
+                localEvaluation = SevenLocalEvaluation.NOT_INTERPRETABLE,
+                shouldAskRepeat = false
+            ),
+            input
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("V15_NOT_INTERPRETABLE_ASK_REPEAT"))
+    }
+
+    @Test
+    fun validator_requiresRecaptureFlag() {
+        val validation = SevenResponseValidator.validate(
+            validResponse(
+                intent = SevenIntent.RECAPTURE_ATTENTION,
+                responseType = SevenResponseType.RECAPTURE,
+                visibleText = "Ey, explorador! Sigamos.",
+                shouldRecaptureAttention = false
+            ),
+            structuredInput(intent = "recapture_attention")
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("V16_RECAPTURE_FLAG"))
+    }
+
+    @Test
+    fun structuredDisabled_returnsLocalFallbackWithoutNetwork() = runBlocking {
+        var calls = 0
+        val client = GptClientImpl(
+            configProvider = { config(enabled = false) },
+            clientProvider = { respondingClient { calls++; successStructuredResponse(it, validSevenJson()) } }
+        )
+
+        val result = client.generateStructured(structuredInput())
+
+        assertTrue(result is StructuredGptResult.Fallback)
+        assertEquals(0, calls)
+        assertTrue(result.fallbackUsed)
+        assertTrue(result.validation.effectiveSafeForTts)
+    }
+
+    @Test
+    fun structuredInvalidJson_returnsLocalFallback() = runBlocking {
+        val client = GptClientImpl(
+            configProvider = { config(fallbackModel = "gpt-5.4-mini") },
+            clientProvider = { respondingClient { jsonResponse(it, code = 200, body = """{"output_text":"texto plano"}""") } }
+        )
+
+        val result = client.generateStructured(structuredInput())
+
+        assertTrue(result is StructuredGptResult.Fallback)
+        assertEquals(GptErrorType.PARSE_ERROR, result.errorType)
+        assertTrue(result.response.fallbackUsed)
+    }
+
+    @Test
+    fun inputContract_doesNotContainProhibitedFields() {
+        val json = JSONObject(structuredInput().toJsonString())
+
+        listOf("childName", "age", "audio", "image", "biometric", "face", "camera", "transcript").forEach {
+            assertFalse(json.has(it))
+        }
+    }
+
+    @Test
+    fun safeForTtsFromGptIsNotAuthoritative() {
+        val validation = SevenResponseValidator.validate(
+            validResponse(visibleText = "Soy un modelo de IA.", safeForTts = true),
+            structuredInput()
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+    }
+
+    @Test
+    fun validator_rejectsBlockedSafetyLevel() {
+        val validation = SevenResponseValidator.validate(
+            validResponse(
+                safetyLevel = SevenSafetyLevel.BLOCKED,
+                blockedReason = SevenBlockedReason.UNSAFE_CONTENT
+            ),
+            structuredInput()
+        )
+
+        assertFalse(validation.effectiveSafeForTts)
+        assertTrue(validation.failedRules.contains("SAFETY_LEVEL_BLOCKED"))
+    }
+
     private fun respondingClient(handler: (okhttp3.Request) -> Response): OkHttpClient =
         OkHttpClient.Builder()
             .addInterceptor(Interceptor { chain -> handler(chain.request()) })
@@ -322,6 +547,9 @@ class GptClientImplTest {
 
     private fun successResponse(request: okhttp3.Request, outputText: String): Response =
         jsonResponse(request, code = 200, body = """{"output_text":"$outputText"}""")
+
+    private fun successStructuredResponse(request: okhttp3.Request, outputText: String): Response =
+        jsonResponse(request, code = 200, body = """{"output_text":${JSONObject.quote(outputText)}}""")
 
     private fun jsonResponse(request: okhttp3.Request, code: Int, body: String): Response =
         Response.Builder()
@@ -338,4 +566,75 @@ class GptClientImplTest {
         body.writeTo(buffer)
         return buffer.readUtf8()
     }
+
+    private fun structuredInput(
+        intent: String = "greeting",
+        localEvaluation: String = "not_applicable",
+        canGiveHint: Boolean = false,
+        answerTokens: List<String> = emptyList()
+    ) = SevenInputContract(
+        intent = intent,
+        topic = "Animales",
+        questionText = "",
+        localEvaluation = localEvaluation,
+        attemptsRemaining = 3,
+        expectedResponseType = "greet",
+        canGiveHint = canGiveHint,
+        canGiveFinalAnswer = false,
+        maxWords = 25,
+        allowedHint = "",
+        restrictions = listOf("no_personal_data", "no_ai_mention", "spanish_latin_only"),
+        language = "es-419",
+        tone = "friendly_curious_alien",
+        contextTag = "settings_test",
+        answerTokens = answerTokens
+    )
+
+    private fun validResponse(
+        intent: SevenIntent = SevenIntent.GREETING,
+        responseType: SevenResponseType = SevenResponseType.GREET,
+        visibleText: String = "Hola, explorador!",
+        safetyLevel: SevenSafetyLevel = SevenSafetyLevel.SAFE,
+        localEvaluation: SevenLocalEvaluation = SevenLocalEvaluation.NOT_APPLICABLE,
+        shouldAskRepeat: Boolean = false,
+        shouldRecaptureAttention: Boolean = false,
+        safeForTts: Boolean = true,
+        blockedReason: SevenBlockedReason = SevenBlockedReason.NONE
+    ) = SevenResponse(
+        intent = intent,
+        responseType = responseType,
+        visibleText = visibleText,
+        safetyLevel = safetyLevel,
+        fallbackUsed = false,
+        canGiveHint = false,
+        canGiveFinalAnswer = false,
+        shouldAskRepeat = shouldAskRepeat,
+        shouldRecaptureAttention = shouldRecaptureAttention,
+        topic = "Animales",
+        localEvaluation = localEvaluation,
+        attemptsRemaining = 3,
+        maxWords = 25,
+        blockedReason = blockedReason,
+        safeForTts = safeForTts,
+        validationNotes = "ok"
+    )
+
+    private fun validSevenJson(): String = JSONObject()
+        .put("intent", "greeting")
+        .put("responseType", "greet")
+        .put("visibleText", "Hola, explorador!")
+        .put("safetyLevel", "safe")
+        .put("fallbackUsed", false)
+        .put("canGiveHint", false)
+        .put("canGiveFinalAnswer", false)
+        .put("shouldAskRepeat", false)
+        .put("shouldRecaptureAttention", false)
+        .put("topic", "Animales")
+        .put("localEvaluation", "not_applicable")
+        .put("attemptsRemaining", 3)
+        .put("maxWords", 25)
+        .put("blockedReason", "none")
+        .put("safeForTts", true)
+        .put("validationNotes", "ok")
+        .toString()
 }
