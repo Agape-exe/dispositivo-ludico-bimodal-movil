@@ -27,6 +27,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.taller.app.attention.AttentionSnapshot
+import com.taller.app.attention.SevenAttentionVisualExpression
+import com.taller.app.attention.resolveSevenAttentionVisualExpression
 import com.taller.app.bimodal.BimodalInteractionState
 
 internal enum class IntelligentSevenExpression {
@@ -288,8 +291,11 @@ internal fun IntelligentSevenFace(
 
 internal fun BimodalInteractionState.toIntelligentSevenExpression(
     facePresent: Boolean,
-    toyVoiceSpeaking: Boolean
+    toyVoiceSpeaking: Boolean,
+    attentionSnapshot: AttentionSnapshot? = null
 ): IntelligentSevenExpression = when {
+    toyVoiceSpeaking -> IntelligentSevenExpression.SPEAKING
+
     this == BimodalInteractionState.FEEDBACK_CORRECT -> IntelligentSevenExpression.HAPPY
 
     this == BimodalInteractionState.FEEDBACK_INCORRECT ||
@@ -301,30 +307,43 @@ internal fun BimodalInteractionState.toIntelligentSevenExpression(
 
     this == BimodalInteractionState.SESSION_COMPLETED -> IntelligentSevenExpression.CELEBRATION
 
-    !facePresent && (
-        this == BimodalInteractionState.WAITING_FOR_FACE ||
-            this == BimodalInteractionState.PAUSED_FACE_LOST ||
-            this == BimodalInteractionState.FACE_DETECTED ||
-            this == BimodalInteractionState.PRESENTING_QUESTION ||
-            this == BimodalInteractionState.WAITING_FOR_RESPONSE ||
-            this == BimodalInteractionState.LISTENING
-        ) -> IntelligentSevenExpression.SEARCHING_FACE
-
-    toyVoiceSpeaking -> IntelligentSevenExpression.SPEAKING
-
     this == BimodalInteractionState.READY ||
-        this == BimodalInteractionState.FACE_DETECTED -> IntelligentSevenExpression.READY
-
-    this == BimodalInteractionState.WAITING_FOR_FACE ||
-        this == BimodalInteractionState.PAUSED_FACE_LOST -> IntelligentSevenExpression.SEARCHING_FACE
+        this == BimodalInteractionState.WAITING_FOR_FACE ||
+        this == BimodalInteractionState.PAUSED_FACE_LOST ||
+        this == BimodalInteractionState.FACE_DETECTED ||
+        this == BimodalInteractionState.NEXT_QUESTION -> {
+        val attentionVisual = resolveSevenAttentionVisualExpression(
+            interactionState = this,
+            attentionSnapshot = attentionSnapshot,
+            toyVoiceSpeaking = false
+        )
+        attentionVisual?.toIntelligentSevenExpression()
+            ?: if (facePresent) IntelligentSevenExpression.READY
+            else IntelligentSevenExpression.SEARCHING_FACE
+    }
 
     this == BimodalInteractionState.PRESENTING_QUESTION -> IntelligentSevenExpression.SPEAKING
 
     this == BimodalInteractionState.WAITING_FOR_RESPONSE ||
         this == BimodalInteractionState.LISTENING -> IntelligentSevenExpression.LISTENING
 
+    !facePresent && (
+        this == BimodalInteractionState.IDLE ||
+            this == BimodalInteractionState.LOADING_ACTIVITY
+        ) -> IntelligentSevenExpression.SEARCHING_FACE
+
     this == BimodalInteractionState.TRANSCRIBING ||
         this == BimodalInteractionState.EVALUATING -> IntelligentSevenExpression.THINKING
 
     else -> IntelligentSevenExpression.READY
 }
+
+private fun SevenAttentionVisualExpression.toIntelligentSevenExpression(): IntelligentSevenExpression =
+    when (this) {
+        SevenAttentionVisualExpression.WAITING -> IntelligentSevenExpression.READY
+        SevenAttentionVisualExpression.SEARCHING -> IntelligentSevenExpression.SEARCHING_FACE
+        SevenAttentionVisualExpression.CURIOUS -> IntelligentSevenExpression.READY
+        SevenAttentionVisualExpression.ATTENTIVE -> IntelligentSevenExpression.HAPPY
+        SevenAttentionVisualExpression.SOFT_CONFUSED -> IntelligentSevenExpression.CONFUSED
+        SevenAttentionVisualExpression.WAITING_PATIENTLY -> IntelligentSevenExpression.SEARCHING_FACE
+    }
