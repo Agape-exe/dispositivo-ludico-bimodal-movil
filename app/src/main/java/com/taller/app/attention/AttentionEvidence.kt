@@ -22,7 +22,8 @@ data class AttentionThresholds(
     val minLostFrames: Int = 3,
     val maxYawDegrees: Float = 25f,
     val maxPitchDegrees: Float = 20f,
-    val maxRollDegrees: Float = 35f
+    val maxRollDegrees: Float = 35f,
+    val hysteresisMarginDegrees: Float = 5f
 ) {
     init {
         require(stableLookMs >= 0L) { "stableLookMs debe ser >= 0" }
@@ -36,6 +37,7 @@ data class AttentionThresholds(
         require(maxYawDegrees >= 0f) { "maxYawDegrees debe ser >= 0" }
         require(maxPitchDegrees >= 0f) { "maxPitchDegrees debe ser >= 0" }
         require(maxRollDegrees >= 0f) { "maxRollDegrees debe ser >= 0" }
+        require(hysteresisMarginDegrees >= 0f) { "hysteresisMarginDegrees debe ser >= 0" }
     }
 }
 

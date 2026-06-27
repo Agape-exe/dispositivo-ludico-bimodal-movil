@@ -82,7 +82,8 @@ class AttentionStateMachineTest {
         machine.onInput(observed(true, false, 1_100L))
         val snapshot = machine.onInput(observed(true, true, 2_000L))
 
-        assertEquals(AttentionState.ATTENTION_STABLE, snapshot.state)
+        assertEquals(AttentionState.FACE_PRESENT, snapshot.state)
+        assertFalse(snapshot.isAttentionStable)
     }
 
     @Test
@@ -94,6 +95,45 @@ class AttentionStateMachineTest {
         val snapshot = machine.onInput(observed(true, false, 4_100L))
 
         assertEquals(AttentionState.ATTENTION_LOST, snapshot.state)
+    }
+
+    @Test
+    fun sustainedLookAwayBeforeLost_doesNotOscillateToFacePresent() {
+        val machine = stableMachine()
+
+        val first = machine.onInput(observed(true, false, 1_100L))
+        val second = machine.onInput(observed(true, false, 2_000L))
+        val third = machine.onInput(observed(true, false, 3_000L))
+
+        assertEquals(AttentionState.TEMPORARILY_LOST, first.state)
+        assertEquals(AttentionState.TEMPORARILY_LOST, second.state)
+        assertEquals(AttentionState.TEMPORARILY_LOST, third.state)
+    }
+
+    @Test
+    fun attentionLostWithFaceStillLookingAway_staysAttentionLost() {
+        val machine = stableMachine()
+        machine.onInput(observed(true, false, 1_100L))
+        machine.onInput(observed(true, false, 2_000L))
+        machine.onInput(observed(true, false, 4_100L))
+
+        val snapshot = machine.onInput(observed(true, false, 4_500L))
+
+        assertEquals(AttentionState.ATTENTION_LOST, snapshot.state)
+        assertTrue(snapshot.isAttentionLost)
+    }
+
+    @Test
+    fun attentionLostWithOneGoodFrame_doesNotRecoverDirectlyToStable() {
+        val machine = stableMachine()
+        machine.onInput(observed(true, false, 1_100L))
+        machine.onInput(observed(true, false, 2_000L))
+        machine.onInput(observed(true, false, 4_100L))
+
+        val snapshot = machine.onInput(observed(true, true, 4_200L))
+
+        assertEquals(AttentionState.FACE_PRESENT, snapshot.state)
+        assertFalse(snapshot.isAttentionStable)
     }
 
     @Test
@@ -168,6 +208,57 @@ class AttentionStateMachineTest {
     }
 
     @Test
+    fun sustainedYawOutsideThreshold_reachesAttentionLost() {
+        val machine = stableMachine()
+
+        machine.onInput(observedWithAngles(31f, 0f, 0f, 1_100L))
+        machine.onInput(observedWithAngles(31f, 0f, 0f, 2_000L))
+        val snapshot = machine.onInput(observedWithAngles(31f, 0f, 0f, 4_100L))
+
+        assertFalse(snapshot.lookingAtDevice)
+        assertEquals(AttentionState.ATTENTION_LOST, snapshot.state)
+    }
+
+    @Test
+    fun yawNearThresholdNoise_keepsLookingUntilExitHysteresis() {
+        val machine = stableMachine()
+
+        val first = machine.onInput(observedWithAngles(26f, 0f, 0f, 1_100L))
+        val second = machine.onInput(observedWithAngles(24f, 0f, 0f, 1_200L))
+        val third = machine.onInput(observedWithAngles(29f, 0f, 0f, 1_300L))
+
+        assertTrue(first.lookingAtDevice)
+        assertTrue(second.lookingAtDevice)
+        assertTrue(third.lookingAtDevice)
+        assertEquals(AttentionState.ATTENTION_STABLE, third.state)
+    }
+
+    @Test
+    fun yawMustReturnInsideRecoveryHysteresisAfterLoss() {
+        val machine = stableMachine()
+        machine.onInput(observedWithAngles(31f, 0f, 0f, 1_100L))
+        machine.onInput(observedWithAngles(31f, 0f, 0f, 2_000L))
+        machine.onInput(observedWithAngles(31f, 0f, 0f, 4_100L))
+
+        val nearThreshold = machine.onInput(observedWithAngles(24f, 0f, 0f, 4_200L))
+
+        assertFalse(nearThreshold.lookingAtDevice)
+        assertEquals(AttentionState.ATTENTION_LOST, nearThreshold.state)
+    }
+
+    @Test
+    fun lostDurationDoesNotRestartWhileFacePresentButLookingAway() {
+        val machine = stableMachine()
+
+        machine.onInput(observed(true, false, 1_100L))
+        val snapshot = machine.onInput(observed(true, false, 2_600L))
+
+        assertEquals(1_500L, snapshot.lostDurationMs)
+        assertEquals(1_500L, snapshot.lookAwayDurationMs)
+        assertEquals(AttentionState.TEMPORARILY_LOST, snapshot.state)
+    }
+
+    @Test
     fun pitchOutsideThreshold_isNotLookingAtDevice() {
         assertFalse(isLookingAtDevice(true, 0f, 25f, 0f))
     }
@@ -229,9 +320,36 @@ class AttentionStateMachineTest {
         AttentionEvidence(
             faceDetected = faceDetected,
             lookingAtDevice = lookingAtDevice,
-            headYawDegrees = if (faceDetected) 0f else null,
+            headYawDegrees = if (faceDetected) {
+                if (lookingAtDevice) 0f else thresholds.maxYawDegrees +
+                    thresholds.hysteresisMarginDegrees + 1f
+            } else {
+                null
+            },
             headPitchDegrees = if (faceDetected) 0f else null,
             headRollDegrees = if (faceDetected) 0f else null,
+            timestampMs = timestampMs
+        )
+    )
+
+    private fun observedWithAngles(
+        yaw: Float?,
+        pitch: Float?,
+        roll: Float?,
+        timestampMs: Long
+    ): AttentionInput = AttentionInput.FaceObserved(
+        AttentionEvidence(
+            faceDetected = true,
+            lookingAtDevice = isLookingAtDevice(
+                faceDetected = true,
+                headYawDegrees = yaw,
+                headPitchDegrees = pitch,
+                headRollDegrees = roll,
+                thresholds = thresholds
+            ),
+            headYawDegrees = yaw,
+            headPitchDegrees = pitch,
+            headRollDegrees = roll,
             timestampMs = timestampMs
         )
     )
