@@ -160,6 +160,17 @@ class ClassicTimerRunnerTest {
         assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
     }
 
+    @Test
+    fun classicRunner_hasNoCameraOrAttentionSurface() {
+        val memberNames = ClassicTimerRunner::class.java.declaredFields.map { it.type.name } +
+            ClassicTimerRunner::class.java.declaredMethods.map { it.name }
+        val joined = memberNames.joinToString(" ")
+
+        assertFalse(joined.contains("Attention"))
+        assertFalse(joined.contains("Camera"))
+        assertFalse(joined.contains("Face"))
+    }
+
     // ----- Avance de preguntas -------------------------------------------------
 
     @Test

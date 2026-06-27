@@ -1,5 +1,6 @@
 package com.taller.app.bimodal
 
+import com.taller.app.attention.AttentionSnapshot
 import com.taller.app.model.LearningActivity
 import com.taller.app.semantic.SemanticResult
 
@@ -27,6 +28,12 @@ sealed class BimodalInteractionEvent {
 
     /** Se perdio la presencia previamente detectada. */
     object FaceLost : BimodalInteractionEvent()
+
+    /**
+     * Snapshot local de atencion observado por la camara en modo inteligente.
+     * Es una senal interna: no clasifica respuestas ni dispara recaptura.
+     */
+    data class AttentionUpdated(val snapshot: AttentionSnapshot) : BimodalInteractionEvent()
 
     /** Comienza la captura de voz para la respuesta. */
     object StartListening : BimodalInteractionEvent()

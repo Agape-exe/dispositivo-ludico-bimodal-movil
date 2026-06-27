@@ -1,5 +1,7 @@
 package com.taller.app.bimodal
 
+import com.taller.app.attention.AttentionSnapshot
+import com.taller.app.attention.AttentionState
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
 import com.taller.app.model.OperationMode
@@ -46,6 +48,33 @@ class BimodalFlowOrchestratorTest {
         orchestrator.loadActivity(activity)
         orchestrator.markActivityLoaded()
     }
+
+    private fun attentionSnapshot(
+        state: AttentionState,
+        timestampMs: Long = 1_000L,
+        faceDetected: Boolean = state != AttentionState.FACE_ABSENT,
+        lookingAtDevice: Boolean = state == AttentionState.ATTENTION_STABLE ||
+            state == AttentionState.FACE_PRESENT
+    ) = AttentionSnapshot(
+        state = state,
+        faceDetected = faceDetected,
+        lookingAtDevice = faceDetected && lookingAtDevice,
+        isAttentionStable = state == AttentionState.ATTENTION_STABLE,
+        isTemporarilyLost = state == AttentionState.TEMPORARILY_LOST,
+        isAttentionLost = state == AttentionState.ATTENTION_LOST,
+        headYawDegrees = null,
+        headPitchDegrees = null,
+        headRollDegrees = null,
+        lastFaceDetectedAtMs = if (faceDetected) timestampMs else null,
+        lastLookingAtDeviceAtMs = if (lookingAtDevice) timestampMs else null,
+        lastLookAwayAtMs = if (state == AttentionState.TEMPORARILY_LOST) timestampMs else null,
+        stateChangedAtMs = timestampMs,
+        stableDurationMs = if (state == AttentionState.ATTENTION_STABLE) 1_500L else 0L,
+        lookAwayDurationMs = if (state == AttentionState.TEMPORARILY_LOST) 1_200L else 0L,
+        lostDurationMs = if (state == AttentionState.ATTENTION_LOST) 3_000L else 0L,
+        consecutiveStableFrames = if (state == AttentionState.ATTENTION_STABLE) 3 else 0,
+        consecutiveLostFrames = if (state == AttentionState.ATTENTION_LOST) 3 else 0
+    )
 
     /** Lleva el flujo hasta LISTENING en la pregunta actual. */
     private fun reachListening() {
@@ -384,6 +413,83 @@ class BimodalFlowOrchestratorTest {
 
         assertEquals(BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR, orchestrator.state)
         assertNull(orchestrator.lastResult!!.semanticResult)
+    }
+
+    // ----- Atencion local en modo inteligente ---------------------------------
+
+    @Test
+    fun attentionStable_updatesInternalContextWithoutChangingFlow() {
+        load(activity(question("q1")))
+        reachListening()
+
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.ATTENTION_STABLE))
+
+        assertEquals(BimodalInteractionState.LISTENING, orchestrator.state)
+        assertTrue(orchestrator.attentionContext.hasStableAttention)
+        assertFalse(orchestrator.attentionContext.shouldConsiderRecapture)
+    }
+
+    @Test
+    fun temporarilyLost_doesNotTriggerRecaptureOrStopListening() {
+        load(activity(question("q1")))
+        reachListening()
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.ATTENTION_STABLE))
+
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.TEMPORARILY_LOST, 2_000L))
+
+        assertEquals(BimodalInteractionState.LISTENING, orchestrator.state)
+        assertTrue(orchestrator.attentionContext.isTemporarilyLost)
+        assertFalse(orchestrator.attentionContext.shouldConsiderRecapture)
+        assertNull(orchestrator.lastResult)
+        assertEquals(0, orchestrator.summary.sttErrors)
+    }
+
+    @Test
+    fun attentionLost_marksContextOnly_andDoesNotClassifyAnswer() {
+        load(activity(question("q1")))
+        reachListening()
+
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.ATTENTION_LOST, 4_000L))
+
+        assertEquals(BimodalInteractionState.LISTENING, orchestrator.state)
+        assertTrue(orchestrator.attentionContext.isAttentionLost)
+        assertTrue(orchestrator.attentionContext.shouldConsiderRecapture)
+        assertEquals(1, orchestrator.attentionContext.attentionLostEventCount)
+        assertNull(orchestrator.lastResult)
+        assertEquals(0, orchestrator.summary.incorrect)
+        assertEquals(0, orchestrator.summary.noResponse)
+        assertEquals(0, orchestrator.summary.sttErrors)
+    }
+
+    @Test
+    fun attentionLost_doesNotReplaceSemanticEvaluation() {
+        load(activity(question("q1")))
+        reachListening()
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.ATTENTION_LOST, 4_000L))
+
+        orchestrator.onSpeechCaptured("otra cosa")
+        orchestrator.onSemanticEvaluated(SemanticResult.INCORRECT)
+
+        assertEquals(BimodalInteractionState.FEEDBACK_INCORRECT, orchestrator.state)
+        assertEquals(SemanticResult.INCORRECT, orchestrator.lastResult?.semanticResult)
+        assertEquals(1, orchestrator.summary.incorrect)
+        assertTrue(orchestrator.attentionContext.shouldConsiderRecapture)
+    }
+
+    @Test
+    fun attentionRecoveryFromLost_updatesInternalCounters() {
+        load(activity(question("q1")))
+        reachListening()
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.ATTENTION_LOST, 4_000L))
+
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.FACE_PRESENT, 5_000L))
+        orchestrator.onAttentionUpdated(attentionSnapshot(AttentionState.ATTENTION_STABLE, 6_000L))
+
+        assertEquals(BimodalInteractionState.LISTENING, orchestrator.state)
+        assertTrue(orchestrator.attentionContext.hasStableAttention)
+        assertFalse(orchestrator.attentionContext.shouldConsiderRecapture)
+        assertEquals(1, orchestrator.attentionContext.attentionLostEventCount)
+        assertEquals(1, orchestrator.attentionContext.attentionRecoveredEventCount)
     }
 
     @Test
