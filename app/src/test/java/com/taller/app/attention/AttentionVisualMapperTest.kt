@@ -83,18 +83,43 @@ class AttentionVisualMapperTest {
             interactionState = BimodalInteractionState.READY,
             attentionSnapshot = snapshot(AttentionState.ATTENTION_STABLE),
             toyVoiceSpeaking = false,
-            fixedTimerMode = true
+            fixedTimerMode = true,
+            attentionVisualDebugEnabled = true
         )
 
         assertNull(resolved)
     }
 
     @Test
-    fun waitingForFace_usesAttentionVisual() {
+    fun debugDisabled_waitingForFace_usesAttentionVisualOnlyWhenFlowAllowsIt() {
         val resolved = resolveSevenAttentionVisualExpression(
             interactionState = BimodalInteractionState.WAITING_FOR_FACE,
             attentionSnapshot = snapshot(AttentionState.FACE_ABSENT),
             toyVoiceSpeaking = false
+        )
+
+        assertEquals(SevenAttentionVisualExpression.SEARCHING, resolved)
+    }
+
+    @Test
+    fun debugEnabled_speakingUsesAttentionVisualForDiagnosis() {
+        val resolved = resolveSevenAttentionVisualExpression(
+            interactionState = BimodalInteractionState.PRESENTING_QUESTION,
+            attentionSnapshot = snapshot(AttentionState.ATTENTION_LOST),
+            toyVoiceSpeaking = true,
+            attentionVisualDebugEnabled = true
+        )
+
+        assertEquals(SevenAttentionVisualExpression.WAITING_PATIENTLY, resolved)
+    }
+
+    @Test
+    fun debugEnabled_faceAbsentMapsToSearching() {
+        val resolved = resolveSevenAttentionVisualExpression(
+            interactionState = BimodalInteractionState.LISTENING,
+            attentionSnapshot = snapshot(AttentionState.FACE_ABSENT),
+            toyVoiceSpeaking = false,
+            attentionVisualDebugEnabled = true
         )
 
         assertEquals(SevenAttentionVisualExpression.SEARCHING, resolved)

@@ -94,6 +94,8 @@ import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
 import com.taller.app.attention.AttentionInput
+import com.taller.app.attention.AttentionDebugSettings
+import com.taller.app.attention.AttentionDebugSettingsRepository
 import com.taller.app.attention.AttentionSnapshot
 import com.taller.app.attention.AttentionState
 import com.taller.app.attention.AttentionStateMachine
@@ -1005,6 +1007,13 @@ private fun BimodalSession(
     val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
     val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
     val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
+    val attentionDebugSettingsRepository = remember {
+        AttentionDebugSettingsRepository(context.applicationContext)
+    }
+    val attentionDebugSettings by attentionDebugSettingsRepository.settings.collectAsState(
+        initial = AttentionDebugSettings()
+    )
+    val attentionVisualDebugEnabled = attentionDebugSettings.attentionVisualDebugEnabled
     val toySpeechService = remember { ToySpeechService(context) }
     val localVoiceProvider = remember {
         LocalToyVoiceProvider(toySpeechService, ttsStateFlow) { voiceSettings }
@@ -1622,7 +1631,8 @@ private fun BimodalSession(
     val targetSevenExpression = state.toIntelligentSevenExpression(
         facePresent = facePresent,
         toyVoiceSpeaking = toyVoiceSpeaking,
-        attentionSnapshot = latestAttentionSnapshot
+        attentionSnapshot = latestAttentionSnapshot,
+        attentionVisualDebugEnabled = attentionVisualDebugEnabled
     )
     var sevenExpression by remember(activity) {
         mutableStateOf(IntelligentSevenExpression.READY)
@@ -1753,6 +1763,27 @@ private fun BimodalSession(
                 .width(92.dp)
         ) {
             Text("Salir")
+        }
+
+        if (attentionVisualDebugEnabled) {
+            Card(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 8.dp, top = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.White.copy(alpha = 0.84f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Text(
+                    text = attentionDebugLabel(latestAttentionSnapshot),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    color = IntelligentModePrimaryText,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Column(
@@ -2968,6 +2999,13 @@ private fun stateLabel(state: BimodalInteractionState): String = when (state) {
     BimodalInteractionState.SESSION_COMPLETED -> "Sesión finalizada"
     BimodalInteractionState.SESSION_CANCELLED -> "Sesión cancelada"
     BimodalInteractionState.ERROR -> "Error"
+}
+
+internal fun attentionDebugLabel(snapshot: AttentionSnapshot?): String {
+    val state = snapshot?.state ?: AttentionState.UNKNOWN
+    val face = if (snapshot?.faceDetected == true) "Si" else "No"
+    val looking = if (snapshot?.lookingAtDevice == true) "Si" else "No"
+    return "Atencion: $state\nRostro: $face\nMirando: $looking"
 }
 
 private fun intelligentAttentionEventType(

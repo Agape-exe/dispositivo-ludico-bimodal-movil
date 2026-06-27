@@ -28,9 +28,16 @@ fun resolveSevenAttentionVisualExpression(
     interactionState: BimodalInteractionState,
     attentionSnapshot: AttentionSnapshot?,
     toyVoiceSpeaking: Boolean,
-    fixedTimerMode: Boolean = false
+    fixedTimerMode: Boolean = false,
+    attentionVisualDebugEnabled: Boolean = false
 ): SevenAttentionVisualExpression? {
-    if (fixedTimerMode || toyVoiceSpeaking || interactionState.hasHighPriorityFlowVisual()) {
+    if (fixedTimerMode) {
+        return null
+    }
+    if (attentionVisualDebugEnabled) {
+        return attentionSnapshot.toSevenAttentionVisualExpression()
+    }
+    if (toyVoiceSpeaking || interactionState.hasHighPriorityFlowVisual()) {
         return null
     }
     return attentionSnapshot.toSevenAttentionVisualExpression()

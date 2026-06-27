@@ -45,15 +45,86 @@ class IntelligentSevenExpressionResolverTest {
     }
 
     @Test
-    fun temporarilyLostUsesSoftConfusedExpression() {
+    fun debugDisabledKeepsNormalVisualFlow() {
         val expression = BimodalInteractionState.WAITING_FOR_FACE
             .toIntelligentSevenExpression(
                 facePresent = true,
                 toyVoiceSpeaking = false,
-                attentionSnapshot = snapshot(AttentionState.TEMPORARILY_LOST)
+                attentionSnapshot = snapshot(AttentionState.TEMPORARILY_LOST),
+                attentionVisualDebugEnabled = false
+            )
+
+        assertEquals(IntelligentSevenExpression.READY, expression)
+    }
+
+    @Test
+    fun debugEnabledFaceAbsentUsesSearching() {
+        val expression = BimodalInteractionState.LISTENING
+            .toIntelligentSevenExpression(
+                facePresent = false,
+                toyVoiceSpeaking = false,
+                attentionSnapshot = snapshot(AttentionState.FACE_ABSENT),
+                attentionVisualDebugEnabled = true
+            )
+
+        assertEquals(IntelligentSevenExpression.SEARCHING_FACE, expression)
+    }
+
+    @Test
+    fun debugEnabledAttentionStableUsesReadyHappyExpression() {
+        val expression = BimodalInteractionState.LISTENING
+            .toIntelligentSevenExpression(
+                facePresent = true,
+                toyVoiceSpeaking = false,
+                attentionSnapshot = snapshot(AttentionState.ATTENTION_STABLE),
+                attentionVisualDebugEnabled = true
+            )
+
+        assertEquals(IntelligentSevenExpression.HAPPY, expression)
+    }
+
+    @Test
+    fun debugEnabledTemporarilyLostUsesSoftConfusedExpression() {
+        val expression = BimodalInteractionState.LISTENING
+            .toIntelligentSevenExpression(
+                facePresent = true,
+                toyVoiceSpeaking = false,
+                attentionSnapshot = snapshot(AttentionState.TEMPORARILY_LOST),
+                attentionVisualDebugEnabled = true
             )
 
         assertEquals(IntelligentSevenExpression.CONFUSED, expression)
+    }
+
+    @Test
+    fun debugEnabledAttentionLostUsesSearchingExpression() {
+        val expression = BimodalInteractionState.LISTENING
+            .toIntelligentSevenExpression(
+                facePresent = true,
+                toyVoiceSpeaking = false,
+                attentionSnapshot = snapshot(AttentionState.ATTENTION_LOST),
+                attentionVisualDebugEnabled = true
+            )
+
+        assertEquals(IntelligentSevenExpression.SEARCHING_FACE, expression)
+    }
+
+    @Test
+    fun attentionDebugLabelShowsOnlyStateFaceAndLooking() {
+        val label = attentionDebugLabel(snapshot(AttentionState.ATTENTION_LOST))
+
+        assertEquals(
+            "Atencion: ATTENTION_LOST\nRostro: Si\nMirando: No",
+            label
+        )
+    }
+
+    @Test
+    fun attentionDebugLabelDefaultsToUnknown() {
+        assertEquals(
+            "Atencion: UNKNOWN\nRostro: No\nMirando: No",
+            attentionDebugLabel(null)
+        )
     }
 
     private fun snapshot(state: AttentionState): AttentionSnapshot {

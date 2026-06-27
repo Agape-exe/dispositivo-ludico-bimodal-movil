@@ -292,8 +292,16 @@ internal fun IntelligentSevenFace(
 internal fun BimodalInteractionState.toIntelligentSevenExpression(
     facePresent: Boolean,
     toyVoiceSpeaking: Boolean,
-    attentionSnapshot: AttentionSnapshot? = null
+    attentionSnapshot: AttentionSnapshot? = null,
+    attentionVisualDebugEnabled: Boolean = false
 ): IntelligentSevenExpression = when {
+    attentionVisualDebugEnabled -> resolveSevenAttentionVisualExpression(
+        interactionState = this,
+        attentionSnapshot = attentionSnapshot,
+        toyVoiceSpeaking = toyVoiceSpeaking,
+        attentionVisualDebugEnabled = true
+    )?.toIntelligentSevenExpression() ?: IntelligentSevenExpression.READY
+
     toyVoiceSpeaking -> IntelligentSevenExpression.SPEAKING
 
     this == BimodalInteractionState.FEEDBACK_CORRECT -> IntelligentSevenExpression.HAPPY
@@ -311,16 +319,9 @@ internal fun BimodalInteractionState.toIntelligentSevenExpression(
         this == BimodalInteractionState.WAITING_FOR_FACE ||
         this == BimodalInteractionState.PAUSED_FACE_LOST ||
         this == BimodalInteractionState.FACE_DETECTED ||
-        this == BimodalInteractionState.NEXT_QUESTION -> {
-        val attentionVisual = resolveSevenAttentionVisualExpression(
-            interactionState = this,
-            attentionSnapshot = attentionSnapshot,
-            toyVoiceSpeaking = false
-        )
-        attentionVisual?.toIntelligentSevenExpression()
-            ?: if (facePresent) IntelligentSevenExpression.READY
-            else IntelligentSevenExpression.SEARCHING_FACE
-    }
+        this == BimodalInteractionState.NEXT_QUESTION ->
+        if (facePresent) IntelligentSevenExpression.READY
+        else IntelligentSevenExpression.SEARCHING_FACE
 
     this == BimodalInteractionState.PRESENTING_QUESTION -> IntelligentSevenExpression.SPEAKING
 
