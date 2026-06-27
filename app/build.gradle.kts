@@ -103,6 +103,43 @@ android {
             "GEMINI_TTS_INSTRUCTIONS",
             buildConfigString(localSecret("GEMINI_TTS_INSTRUCTIONS").ifBlank { "Habla en espanol latino con una voz calida, clara, curiosa y amigable para ninos. Manten un ritmo natural, tono alegre y expresivo, como Seven, un pequeno alien explorador que aprende sobre la Tierra." })
         )
+        buildConfigField(
+            "boolean",
+            "OPENAI_GPT_ENABLED",
+            localSecret("OPENAI_GPT_ENABLED").ifBlank { "false" }
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_GPT_API_KEY",
+            buildConfigString(localSecret("OPENAI_GPT_API_KEY"))
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_GPT_MODEL",
+            buildConfigString(localSecret("OPENAI_GPT_MODEL").ifBlank { "gpt-5.4-mini" })
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_GPT_FALLBACK_MODEL",
+            buildConfigString(localSecret("OPENAI_GPT_FALLBACK_MODEL").ifBlank { "gpt-5.4-nano" })
+        )
+        buildConfigField(
+            "int",
+            "OPENAI_GPT_MAX_OUTPUT_TOKENS",
+            localSecret("OPENAI_GPT_MAX_OUTPUT_TOKENS").ifBlank { "220" }
+        )
+        buildConfigField(
+            "int",
+            "OPENAI_GPT_TIMEOUT_MS",
+            localSecret("OPENAI_GPT_TIMEOUT_MS").ifBlank { "12000" }
+        )
+        buildConfigField(
+            "float",
+            "OPENAI_GPT_TEMPERATURE",
+            localSecret("OPENAI_GPT_TEMPERATURE").let { value ->
+                if (value.isBlank()) "0.4f" else "${value}f"
+            }
+        )
 
         // Mediacion ludica generativa (opcional). Desactivada por defecto: la app
         // funciona sin credenciales y usa el banco local de frases. Si se quiere
@@ -180,6 +217,7 @@ dependencies {
     // OkHttp — cliente HTTP para el proveedor de voz neural
     implementation(libs.okhttp)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.room.testing)

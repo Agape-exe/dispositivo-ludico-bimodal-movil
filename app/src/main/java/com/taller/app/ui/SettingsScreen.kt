@@ -35,6 +35,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.taller.app.gpt.GptClientImpl
+import com.taller.app.gpt.GptConfig
+import com.taller.app.gpt.GptPrompt
+import com.taller.app.gpt.GptResult
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,6 +64,9 @@ fun SettingsScreen(
     onNavigateToToyVoiceSettings: () -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val gptConfig = remember { GptConfig.fromBuild() }
+    val gptClient = remember { GptClientImpl(configProvider = { GptConfig.fromBuild() }) }
 
     fun isCameraGranted() = ContextCompat.checkSelfPermission(
         context, Manifest.permission.CAMERA
@@ -70,6 +79,8 @@ fun SettingsScreen(
     var cameraGranted by remember { mutableStateOf(isCameraGranted()) }
     var audioGranted by remember { mutableStateOf(isAudioGranted()) }
     var showSettingsHint by remember { mutableStateOf(false) }
+    var gptTesting by remember { mutableStateOf(false) }
+    var gptTestResult by remember { mutableStateOf<GptResult?>(null) }
 
     DisposableEffect(context) {
         val lifecycleOwner = context as? LifecycleOwner
@@ -243,6 +254,20 @@ fun SettingsScreen(
                 Text("Prueba de procesamiento semántico")
             }
 
+            GptSettingsSection(
+                config = gptConfig,
+                testing = gptTesting,
+                result = gptTestResult,
+                onTest = {
+                    gptTesting = true
+                    gptTestResult = null
+                    coroutineScope.launch {
+                        gptTestResult = gptClient.generate(settingsTestPrompt())
+                        gptTesting = false
+                    }
+                }
+            )
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
@@ -265,3 +290,101 @@ private fun PermissionRow(label: String, granted: Boolean) {
         )
     }
 }
+
+@Composable
+private fun GptSettingsSection(
+    config: GptConfig,
+    testing: Boolean,
+    result: GptResult?,
+    onTest: () -> Unit
+) {
+    Spacer(modifier = Modifier.height(12.dp))
+    Text(
+        text = "GPT — Cerebro de Seven",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    GptInfoRow(label = "GPT habilitado", value = if (config.enabled) "Si" else "No")
+    GptInfoRow(label = "GPT configurado", value = if (config.hasApiKey) "Si" else "No")
+    GptInfoRow(label = "Modelo", value = config.model)
+    GptInfoRow(label = "Modelo fallback", value = config.fallbackModel)
+    GptInfoRow(label = "Timeout", value = "${config.timeoutMs} ms")
+    GptInfoRow(label = "Maximo tokens", value = config.maxOutputTokens.toString())
+
+    Button(
+        onClick = onTest,
+        enabled = !testing,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color(0xFFBDE7D3),
+            contentColor = Color(0xFF124735)
+        )
+    ) {
+        Text(if (testing) "Probando GPT..." else "Probar GPT")
+    }
+
+    result?.let { GptResultBlock(it) }
+}
+
+@Composable
+private fun GptInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, fontSize = 13.sp)
+        Text(
+            text = value,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+        )
+    }
+}
+
+@Composable
+private fun GptResultBlock(result: GptResult) {
+    val text = when (result) {
+        is GptResult.Success -> buildString {
+            append("Resultado: ").append(result.text).append('\n')
+            append("Modelo usado: ").append(result.modelUsed).append('\n')
+            append("Latencia: ").append(result.latencyMs).append(" ms\n")
+            append("Fallback usado: ").append(if (result.fallbackUsed) "Si" else "No")
+        }
+        is GptResult.Disabled -> buildString {
+            append("Estado: GPT desactivado\n")
+            append("Texto local: ").append(result.fallbackText)
+        }
+        is GptResult.Failure -> buildString {
+            append("Error: ").append(result.safeMessage).append('\n')
+            append("Tipo: ").append(result.errorType.name).append('\n')
+            append("Modelo intentado: ").append(result.modelAttempted).append('\n')
+            append("Texto local: ").append(result.fallbackText)
+        }
+    }
+
+    Text(
+        text = text,
+        fontSize = 13.sp,
+        color = when (result) {
+            is GptResult.Success -> Color(0xFF1B5E20)
+            is GptResult.Disabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+            is GptResult.Failure -> MaterialTheme.colorScheme.error
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+    )
+}
+
+private fun settingsTestPrompt(): GptPrompt = GptPrompt(
+    systemInstruction = "Eres Seven, un pequeno alien explorador amigable. Respondes en espanol latino, en 1-2 frases breves, sin emojis. No eres una IA, eres Seven.",
+    userMessage = "Genera una frase de saludo breve para un nino explorador.",
+    contextTag = "TEST_SETTINGS"
+)
