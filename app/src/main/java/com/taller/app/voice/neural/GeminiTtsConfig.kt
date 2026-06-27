@@ -23,11 +23,41 @@ data class GeminiTtsConfig(
         fun instructionsFromBuild(): String =
             BuildConfig.GEMINI_TTS_INSTRUCTIONS.ifBlank { DEFAULT_INSTRUCTIONS }
 
-        fun fromBuild(): GeminiTtsConfig = GeminiTtsConfig(
+        fun fromBuild(
+            voiceName: String? = null,
+            instructions: String? = null
+        ): GeminiTtsConfig = GeminiTtsConfig(
             apiKey = apiKeyFromBuild(),
             model = modelFromBuild(),
-            voiceName = voiceFromBuild(),
-            instructions = instructionsFromBuild()
+            voiceName = GeminiTtsVoices.normalizeId(voiceName ?: voiceFromBuild()),
+            instructions = instructions?.takeIf { it.isNotBlank() } ?: instructionsFromBuild()
         )
     }
+}
+
+data class GeminiTtsVoice(
+    val id: String,
+    val displayName: String,
+    val description: String
+)
+
+object GeminiTtsVoices {
+    val supported: List<GeminiTtsVoice> = listOf(
+        GeminiTtsVoice("Puck", "Puck", "Animada"),
+        GeminiTtsVoice("Leda", "Leda", "Juvenil"),
+        GeminiTtsVoice("Achird", "Achird", "Amigable"),
+        GeminiTtsVoice("Sadachbia", "Sadachbia", "Vivaz"),
+        GeminiTtsVoice("Sulafat", "Sulafat", "Calida"),
+        GeminiTtsVoice("Aoede", "Aoede", "Ligera"),
+        GeminiTtsVoice("Laomedeia", "Laomedeia", "Animada"),
+        GeminiTtsVoice("Autonoe", "Autonoe", "Brillante"),
+        GeminiTtsVoice("Zephyr", "Zephyr", "Brillante"),
+        GeminiTtsVoice("Kore", "Kore", "Clara/firme")
+    )
+
+    fun normalizeId(id: String?): String =
+        supported.firstOrNull { it.id == id }?.id ?: GeminiTtsConfig.DEFAULT_VOICE
+
+    fun descriptionFor(id: String): String =
+        supported.firstOrNull { it.id == normalizeId(id) }?.description.orEmpty()
 }

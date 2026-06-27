@@ -51,6 +51,7 @@ import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
 import com.taller.app.voice.neural.GeminiTtsConfig
+import com.taller.app.voice.neural.GeminiTtsVoices
 import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsAudioCache
 import com.taller.app.voice.neural.OpenAiTtsConfig
@@ -75,8 +76,15 @@ private val TEST_PHRASES = listOf(
     "Cierre" to "¡Misión completada! Gracias por ayudarme a aprender más sobre la Tierra."
 )
 
-private const val GEMINI_TEST_PHRASE =
-    "\u00a1Hola! Soy Seven, tu amigo explorador. Hoy necesito tu ayuda para aprender cosas nuevas de la Tierra."
+private val GEMINI_TEST_PHRASES = listOf(
+    "Saludo" to "\u00a1Hola! Soy Seven, tu amigo explorador. Hoy necesito tu ayuda para aprender cosas nuevas de la Tierra.",
+    "Pregunta" to "Escucha con atencion. Tengo un reto para ti: \u00bfque sonido hace el perro?",
+    "Feedback correcto" to "\u00a1Muy bien! Mi nave registro una respuesta genial.",
+    "Reintento" to "Casi lo tenemos, explorador. Intentemos una vez mas.",
+    "No interpretable" to "No logre entender bien tu respuesta. Probemos otra vez.",
+    "Recaptura futura" to "\u00a1Hey, explorador! Seven todavia necesita tu ayuda. Mira mi pantalla para continuar la mision.",
+    "Cierre" to "\u00a1Mision completada! Gracias por ayudarme a aprender mas sobre la Tierra."
+)
 
 private val OPENAI_VOICE_PROFILES = listOf(
     VoiceProfile(
@@ -94,6 +102,25 @@ private val OPENAI_VOICE_PROFILES = listOf(
     VoiceProfile(
         name = "Más calmada",
         instructions = "Habla en español latino con voz tranquila, cálida y paciente. Mantén una entonación amable, clara y suave, adecuada para acompañar a un niño pequeño."
+    )
+)
+
+private val GEMINI_VOICE_PROFILES = listOf(
+    VoiceProfile(
+        name = "Seven natural",
+        instructions = GeminiTtsConfig.DEFAULT_INSTRUCTIONS
+    ),
+    VoiceProfile(
+        name = "Seven mas ludico",
+        instructions = "Habla en espanol latino con tono alegre, curioso y jugueton. Suena como un pequeno alien amigable que esta emocionado por aprender con un nino. Manten frases claras y ritmo natural."
+    ),
+    VoiceProfile(
+        name = "Seven calmado",
+        instructions = "Habla en espanol latino con voz tranquila, calida y paciente. Manten una entonacion amable, clara y suave, adecuada para acompanar a un nino pequeno."
+    ),
+    VoiceProfile(
+        name = "Seven explorador",
+        instructions = "Habla en espanol latino con tono curioso, expresivo y aventurero. Suena como un alien explorador descubriendo cosas nuevas de la Tierra con ayuda de un nino."
     )
 )
 
@@ -118,6 +145,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     var providerType by remember { mutableStateOf(ToyVoiceProviderType.GEMINI_TTS) }
     var openAiVoiceName by remember { mutableStateOf("") }
     var openAiInstructions by remember { mutableStateOf(OpenAiTtsConfig.DEFAULT_INSTRUCTIONS) }
+    var geminiVoiceName by remember { mutableStateOf(GeminiTtsConfig.DEFAULT_VOICE) }
+    var geminiInstructions by remember { mutableStateOf(GeminiTtsConfig.DEFAULT_INSTRUCTIONS) }
     var neuralVoiceId by remember { mutableStateOf("") }
     var azureVoiceName by remember { mutableStateOf("") }
     var fallbackEnabled by remember { mutableStateOf(true) }
@@ -130,7 +159,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     var lastGeminiOutcome by remember { mutableStateOf<VoiceOutcome?>(null) }
     var geminiMessage by remember { mutableStateOf<String?>(null) }
     var selectedTestPhrase by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var selectedGeminiTestPhrase by remember { mutableStateOf(GEMINI_TEST_PHRASES.first()) }
     var lastTestedVoice by remember { mutableStateOf<String?>(null) }
+    var lastGeminiVoiceUsed by remember { mutableStateOf<String?>(null) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
     var cacheStats by remember { mutableStateOf(voiceCache.stats()) }
 
@@ -144,6 +175,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         neuralVoiceId = neuralVoiceId.takeIf { it.isNotBlank() },
         openAiVoiceName = openAiVoiceName.takeIf { it.isNotBlank() },
         openAiInstructions = openAiInstructions.takeIf { it.isNotBlank() },
+        geminiVoiceName = GeminiTtsVoices.normalizeId(geminiVoiceName),
+        geminiInstructions = geminiInstructions.takeIf { it.isNotBlank() },
         azureVoiceName = azureVoiceName.takeIf { it.isNotBlank() },
         fallbackToLocal = fallbackEnabled
     )
@@ -160,14 +193,22 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         }
     }
     val geminiProvider = remember {
-        GeminiTtsVoiceProvider(context) { GeminiTtsConfig.fromBuild() }
+        GeminiTtsVoiceProvider(context) { GeminiTtsConfig.fromBuild(geminiVoiceName, geminiInstructions) }
+    }
+    val savedGeminiProvider = remember {
+        GeminiTtsVoiceProvider(context) {
+            GeminiTtsConfig.fromBuild(
+                savedSettings.geminiVoiceName,
+                savedSettings.geminiInstructions
+            )
+        }
     }
     val elevenLabsProvider = remember {
         ElevenLabsVoiceProvider(context) { ElevenLabsConfig.from(neuralVoiceId) }
     }
     val sevenVoiceService = remember {
         SevenVoiceService(
-            geminiProvider = geminiProvider,
+            geminiProvider = savedGeminiProvider,
             openAiProvider = openAiProvider,
             azureProvider = azureProvider,
             localProvider = localProvider,
@@ -183,7 +224,11 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     val azureRegionPresent = remember { AzureSpeechConfig.regionFromBuild().isNotBlank() }
     val azureConfigured = azureKeyPresent && azureRegionPresent
 
-    val effectiveGeminiConfig = remember { GeminiTtsConfig.fromBuild() }
+    val effectiveGeminiConfig = GeminiTtsConfig.fromBuild(geminiVoiceName, geminiInstructions)
+    val savedGeminiConfig = GeminiTtsConfig.fromBuild(
+        savedSettings.geminiVoiceName,
+        savedSettings.geminiInstructions
+    )
     val geminiConfigured = remember { GeminiTtsConfig.apiKeyFromBuild().isNotBlank() }
 
     val elevenLabsApiKeyPresent = remember { ElevenLabsConfig.apiKeyFromBuild().isNotBlank() }
@@ -197,6 +242,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             service.shutdown()
             sevenVoiceService.release()
             geminiProvider.release()
+            savedGeminiProvider.release()
             elevenLabsProvider.release()
         }
     }
@@ -209,6 +255,8 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             providerType = savedSettings.provider
             openAiVoiceName = savedSettings.openAiVoiceName ?: ""
             openAiInstructions = savedSettings.openAiInstructions ?: OpenAiTtsConfig.DEFAULT_INSTRUCTIONS
+            geminiVoiceName = GeminiTtsVoices.normalizeId(savedSettings.geminiVoiceName)
+            geminiInstructions = savedSettings.geminiInstructions ?: GeminiTtsConfig.DEFAULT_INSTRUCTIONS
             neuralVoiceId = savedSettings.neuralVoiceId ?: ""
             azureVoiceName = savedSettings.azureVoiceName ?: ""
             fallbackEnabled = savedSettings.fallbackToLocal
@@ -239,6 +287,17 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    fun saveGeminiVoice() {
+        val s = savedSettings.copy(
+            geminiVoiceName = GeminiTtsVoices.normalizeId(geminiVoiceName),
+            geminiInstructions = geminiInstructions.takeIf { it.isNotBlank() }
+        )
+        scope.launch {
+            repository.save(s)
+            saveMessage = "Voz Gemini guardada: ${GeminiTtsVoices.normalizeId(s.geminiVoiceName)}"
+        }
+    }
+
     fun playPhrase(text: String?) {
         if (playbackUi != PlaybackUi.IDLE) return
         if (text.isNullOrBlank()) {
@@ -258,6 +317,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                 sevenSettings.openAiVoiceName,
                 sevenSettings.openAiInstructions
             ).voice
+            if (sevenSettings.provider == ToyVoiceProviderType.GEMINI_TTS) {
+                lastGeminiVoiceUsed = savedGeminiConfig.voiceName
+            }
             val outcome = sevenVoiceService.speak(
                 text = text,
                 source = "configurar",
@@ -285,8 +347,9 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             playbackUi = PlaybackUi.GENERATING
             lastGeminiOutcome = null
             geminiMessage = null
+            lastGeminiVoiceUsed = effectiveGeminiConfig.voiceName
             val outcome = ToyVoiceFallback.speakWithFallback(
-                text = GEMINI_TEST_PHRASE,
+                text = selectedGeminiTestPhrase.second,
                 providerRequested = ToyVoiceProviderType.GEMINI_TTS,
                 providers = listOf(
                     ToyVoiceProviderType.GEMINI_TTS to geminiProvider,
@@ -316,6 +379,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     fun stopPlayback() {
         sevenVoiceService.stop()
         geminiProvider.stop()
+        savedGeminiProvider.stop()
         elevenLabsProvider.stop()
         playbackUi = PlaybackUi.IDLE
     }
@@ -362,7 +426,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             openAiConfigured = openAiConfigured,
             azureConfigured = azureConfigured,
             localReady = localReady,
-            geminiVoiceName = effectiveGeminiConfig.voiceName,
+            geminiVoiceName = savedGeminiConfig.voiceName,
             openAiVoiceName = effectiveOpenAiConfig.voice,
             saveMessage = saveMessage,
             onSelected = {
@@ -443,10 +507,25 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         GeminiTestSection(
             configured = geminiConfigured,
             model = effectiveGeminiConfig.model,
-            voiceName = effectiveGeminiConfig.voiceName,
+            currentVoice = savedGeminiConfig.voiceName,
+            selectedVoice = effectiveGeminiConfig.voiceName,
+            selectedInstructions = geminiInstructions,
+            selectedPhrase = selectedGeminiTestPhrase,
+            lastVoiceUsed = lastGeminiVoiceUsed,
             lastOutcome = lastGeminiOutcome,
             message = geminiMessage,
+            saveMessage = saveMessage,
             enabled = playbackUi == PlaybackUi.IDLE,
+            onVoiceSelected = {
+                geminiVoiceName = it
+                saveMessage = null
+            },
+            onInstructionsSelected = {
+                geminiInstructions = it
+                saveMessage = null
+            },
+            onPhraseSelected = { selectedGeminiTestPhrase = it },
+            onSaveVoice = { saveGeminiVoice() },
             onTest = { playGeminiTest() }
         )
 
@@ -871,10 +950,19 @@ private fun OpenAiConfigSection(
 private fun GeminiTestSection(
     configured: Boolean,
     model: String,
-    voiceName: String,
+    currentVoice: String,
+    selectedVoice: String,
+    selectedInstructions: String,
+    selectedPhrase: Pair<String, String>,
+    lastVoiceUsed: String?,
     lastOutcome: VoiceOutcome?,
     message: String?,
+    saveMessage: String?,
     enabled: Boolean,
+    onVoiceSelected: (String) -> Unit,
+    onInstructionsSelected: (String) -> Unit,
+    onPhraseSelected: (Pair<String, String>) -> Unit,
+    onSaveVoice: () -> Unit,
     onTest: () -> Unit
 ) {
     Card(
@@ -883,7 +971,7 @@ private fun GeminiTestSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Prueba Gemini TTS",
+                text = "Voces Gemini TTS",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -902,7 +990,17 @@ private fun GeminiTestSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = "Voz Gemini: $voiceName",
+                text = "Voz Gemini actual: $currentVoice",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz seleccionada: $selectedVoice - ${GeminiTtsVoices.descriptionFor(selectedVoice)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Frase seleccionada: ${selectedPhrase.first}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -912,7 +1010,22 @@ private fun GeminiTestSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
+                text = "Proveedor solicitado: ${lastOutcome?.providerRequested?.let { providerLabel(it) } ?: "Gemini TTS"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
                 text = "Ultimo proveedor usado: ${lastOutcome?.providerUsed?.let { providerLabel(it) } ?: "Ninguno"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Fallback usado: ${lastOutcome?.let { if (it.fallbackUsed) "Si" else "No" } ?: "No"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz usada: ${lastVoiceUsed ?: "Ninguna"}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -938,12 +1051,85 @@ private fun GeminiTestSection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            Text(
+                text = "Selector de voz Gemini",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            GeminiTtsVoices.supported.forEach { voice ->
+                ProviderOption(
+                    title = "${voice.displayName} - ${voice.description}",
+                    description = "voiceName: ${voice.id}",
+                    isSelected = selectedVoice == voice.id,
+                    onClick = { onVoiceSelected(voice.id) }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Perfil de estilo",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            GEMINI_VOICE_PROFILES.forEach { profile ->
+                ProviderOption(
+                    title = profile.name,
+                    description = profile.instructions,
+                    isSelected = selectedInstructions == profile.instructions,
+                    onClick = { onInstructionsSelected(profile.instructions) }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Frase de prueba",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            GEMINI_TEST_PHRASES.forEach { phrase ->
+                TestPhraseOption(
+                    label = phrase.first,
+                    phrase = phrase.second,
+                    isSelected = selectedPhrase.first == phrase.first,
+                    enabled = enabled,
+                    onClick = { onPhraseSelected(phrase) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onSaveVoice,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guardar voz Gemini")
+            }
+
+            if (saveMessage != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = saveMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             Button(
                 onClick = onTest,
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Probar Gemini TTS")
+                Text("Probar voz Gemini")
             }
         }
     }

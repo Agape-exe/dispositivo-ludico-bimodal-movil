@@ -975,7 +975,12 @@ private fun BimodalSession(
         }
     }
     val geminiVoiceProvider = remember {
-        GeminiTtsVoiceProvider(context) { GeminiTtsConfig.fromBuild() }
+        GeminiTtsVoiceProvider(context) {
+            GeminiTtsConfig.fromBuild(
+                voiceSettings.geminiVoiceName,
+                voiceSettings.geminiInstructions
+            )
+        }
     }
     val sevenVoiceService = remember {
         SevenVoiceService(
