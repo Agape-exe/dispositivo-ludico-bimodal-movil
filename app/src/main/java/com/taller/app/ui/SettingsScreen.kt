@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -259,6 +260,10 @@ fun SettingsScreen(
             AttentionDebugSettingsSection(
                 attentionVisualDebugEnabled =
                     attentionDebugSettings.attentionVisualDebugEnabled,
+                showTtsDebugInIntelligentMode =
+                    attentionDebugSettings.showTtsDebugInIntelligentMode,
+                showGptDebugInIntelligentMode =
+                    attentionDebugSettings.showGptDebugInIntelligentMode,
                 onAttentionVisualDebugChanged = { enabled ->
                     coroutineScope.launch {
                         attentionDebugSettingsRepository
@@ -267,6 +272,28 @@ fun SettingsScreen(
                             "SettingsScreen",
                             "eventType=ATTENTION_VISUAL_DEBUG_SETTING_CHANGED " +
                                 "attentionVisualDebugEnabled=$enabled"
+                        )
+                    }
+                },
+                onTtsDebugInIntelligentModeChanged = { enabled ->
+                    coroutineScope.launch {
+                        attentionDebugSettingsRepository
+                            .saveTtsDebugInIntelligentMode(enabled)
+                        Log.d(
+                            "SettingsScreen",
+                            "eventType=TTS_DEBUG_SETTING_CHANGED " +
+                                "showTtsDebugInIntelligentMode=$enabled"
+                        )
+                    }
+                },
+                onGptDebugInIntelligentModeChanged = { enabled ->
+                    coroutineScope.launch {
+                        attentionDebugSettingsRepository
+                            .saveGptDebugInIntelligentMode(enabled)
+                        Log.d(
+                            "SettingsScreen",
+                            "eventType=GPT_DEBUG_SETTING_CHANGED " +
+                                "showGptDebugInIntelligentMode=$enabled"
                         )
                     }
                 }
@@ -394,7 +421,11 @@ fun SettingsScreen(
 @Composable
 private fun AttentionDebugSettingsSection(
     attentionVisualDebugEnabled: Boolean,
-    onAttentionVisualDebugChanged: (Boolean) -> Unit
+    showTtsDebugInIntelligentMode: Boolean,
+    showGptDebugInIntelligentMode: Boolean,
+    onAttentionVisualDebugChanged: (Boolean) -> Unit,
+    onTtsDebugInIntelligentModeChanged: (Boolean) -> Unit,
+    onGptDebugInIntelligentModeChanged: (Boolean) -> Unit
 ) {
     Spacer(modifier = Modifier.height(16.dp))
     Text(
@@ -416,6 +447,20 @@ private fun AttentionDebugSettingsSection(
         label = "Mostrar atencion en modo inteligente",
         checked = attentionVisualDebugEnabled,
         onCheckedChange = onAttentionVisualDebugChanged
+    )
+    SettingsSwitchRow(
+        label = "Mostrar TTS en modo inteligente",
+        description = "Muestra durante el modo inteligente que proveedor de voz esta usando Seven. " +
+            "Util para validar Gemini, OpenAI, Azure o voz local.",
+        checked = showTtsDebugInIntelligentMode,
+        onCheckedChange = onTtsDebugInIntelligentModeChanged
+    )
+    SettingsSwitchRow(
+        label = "Mostrar GPT en modo inteligente",
+        description = "Muestra durante el modo inteligente si GPT esta activado y configurado. " +
+            "Util para validar recaptura y mediacion.",
+        checked = showGptDebugInIntelligentMode,
+        onCheckedChange = onGptDebugInIntelligentModeChanged
     )
 }
 
@@ -607,6 +652,7 @@ private fun ModelSelector(
 @Composable
 private fun SettingsSwitchRow(
     label: String,
+    description: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
@@ -617,7 +663,18 @@ private fun SettingsSwitchRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, fontSize = 14.sp)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = label, fontSize = 14.sp)
+            if (description != null) {
+                Text(
+                    text = description,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

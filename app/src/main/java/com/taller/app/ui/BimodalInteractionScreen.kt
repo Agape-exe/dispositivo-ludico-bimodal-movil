@@ -93,6 +93,10 @@ import com.taller.app.bimodal.feedback.AnimalMediationBank
 import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
+import com.taller.app.gpt.GptClientImpl
+import com.taller.app.gpt.GptConfig
+import com.taller.app.gpt.GptRuntimeSettings
+import com.taller.app.gpt.GptSettingsRepository
 import com.taller.app.attention.AttentionInput
 import com.taller.app.attention.AttentionDebugSettings
 import com.taller.app.attention.AttentionDebugSettingsRepository
@@ -108,6 +112,14 @@ import com.taller.app.model.LocalMediationKey
 import com.taller.app.semantic.SemanticResult
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
+import com.taller.app.recapture.FlowPhase
+import com.taller.app.recapture.RecaptureController
+import com.taller.app.recapture.RecaptureDecision
+import com.taller.app.recapture.RecapturePhraseBank
+import com.taller.app.recapture.RecapturePhraseGenerator
+import com.taller.app.recapture.RecapturePhraseKind
+import com.taller.app.recapture.RecapturePolicy
+import com.taller.app.recapture.RecaptureState
 import com.taller.app.vision.FaceAnalyzer
 import com.taller.app.vision.FacePresenceTracker
 import com.taller.app.voice.LocalToyVoiceProvider
@@ -152,6 +164,9 @@ private const val BIMODAL_ATTENTION_TAG = "BimodalAttention"
 
 /** Etiqueta de logs visuales de Seven (solo estados tecnicos locales). */
 private const val SEVEN_ATTENTION_VISUAL_TAG = "SevenAttentionVisual"
+
+/** Etiqueta de logs tecnicos de recaptura, sin datos sensibles. */
+private const val BIMODAL_RECAPTURE_TAG = "BimodalRecapture"
 
 private const val MIN_SEVEN_EXPRESSION_DURATION_MS = 400L
 
@@ -573,6 +588,8 @@ private fun BimodalSession(
     onChangeActivity: () -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+
     // Una sola instancia del orquestador por actividad cargada.
     val orchestrator = remember(activity) { BimodalFlowOrchestrator() }
 
@@ -597,6 +614,26 @@ private fun BimodalSession(
     // Frases de pausa facial: Seven anuncia que perdio el rostro, que lo recupero y
     // propone retomar la pregunta. No requiere red ni IA. Una instancia por actividad.
     val facePhraseBank = remember(activity) { FacePausePhraseBank() }
+
+    // Recaptura de atencion REC02: politica local pura + banco seguro local.
+    val recaptureController = remember(activity) { RecaptureController(isIntelligentMode = true) }
+    val recapturePhraseBank = remember(activity) { RecapturePhraseBank() }
+    var recaptureJobActive by remember(activity) { mutableStateOf(false) }
+    var lastRecapturePhraseSource by remember(activity) { mutableStateOf<String?>(null) }
+    var lastRecaptureDecisionLabel by remember(activity) { mutableStateOf("Idle") }
+    val gptSettingsRepository = remember { GptSettingsRepository(context.applicationContext) }
+    val gptSettings by gptSettingsRepository.settings.collectAsState(
+        initial = GptRuntimeSettings.defaults()
+    )
+    val recaptureGptClient = remember(gptSettings) {
+        GptClientImpl(configProvider = { GptConfig.fromBuild(gptSettings.sanitized()) })
+    }
+    val recapturePhraseGenerator = remember(recaptureGptClient, recapturePhraseBank) {
+        RecapturePhraseGenerator(
+            gptClient = recaptureGptClient,
+            localBank = recapturePhraseBank
+        )
+    }
 
     // Diagnostico de la ultima mediacion para la interfaz tecnica: origen efectivo
     // (siempre local en esta actividad), latencia de seleccion, tipo y motivo del
@@ -658,7 +695,6 @@ private fun BimodalSession(
         sync()
     }
 
-    val context = LocalContext.current
     val cameraGranted = remember {
         ContextCompat.checkSelfPermission(
             context, Manifest.permission.CAMERA
@@ -1014,6 +1050,10 @@ private fun BimodalSession(
         initial = AttentionDebugSettings()
     )
     val attentionVisualDebugEnabled = attentionDebugSettings.attentionVisualDebugEnabled
+    val ttsDebugInIntelligentModeEnabled =
+        attentionDebugSettings.showTtsDebugInIntelligentMode
+    val gptDebugInIntelligentModeEnabled =
+        attentionDebugSettings.showGptDebugInIntelligentMode
     val toySpeechService = remember { ToySpeechService(context) }
     val localVoiceProvider = remember {
         LocalToyVoiceProvider(toySpeechService, ttsStateFlow) { voiceSettings }
@@ -1067,6 +1107,8 @@ private fun BimodalSession(
     // el proveedor configurado y fallback solo cuando corresponde.
     var lastVoiceProviderUsed by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackUsed by remember(activity) { mutableStateOf<Boolean?>(null) }
+    var lastVoiceStatus by remember(activity) { mutableStateOf("Sin probar") }
+    var lastGptUsageStatus by remember(activity) { mutableStateOf("sin datos") }
 
     // Registra que proveedor termino reproduciendo la frase y si hubo fallback,
     // tanto en la UI como en un log seguro (solo nombres de proveedor, nunca
@@ -1077,16 +1119,19 @@ private fun BimodalSession(
         val fallback: Boolean
         when (outcome) {
             is VoiceOutcome.Completed -> {
-                usedLabel = providerLabel(outcome.providerUsed)
+                usedLabel = ttsProviderDebugName(outcome.providerUsed)
                 fallback = outcome.fallbackUsed
+                lastVoiceStatus = "OK"
             }
             is VoiceOutcome.Failed, null -> {
                 usedLabel = "Ninguno"
                 fallback = false
+                lastVoiceStatus = "Error seguro"
             }
             is VoiceOutcome.SkippedInvalidText -> {
                 usedLabel = "Ninguno"
                 fallback = false
+                lastVoiceStatus = "Error seguro"
             }
         }
         lastVoiceProviderUsed = usedLabel
@@ -1111,7 +1156,11 @@ private fun BimodalSession(
     //
     // Si la corrutina que la invoca se cancela (por ejemplo, el docente fuerza una
     // accion manual), el bloque finally detiene el audio residual de forma ordenada.
-    suspend fun speakAndAwait(text: String, voiceContext: VoiceContext = VoiceContext.UNKNOWN) {
+    suspend fun speakAndAwait(
+        text: String,
+        voiceContext: VoiceContext = VoiceContext.UNKNOWN,
+        onPlaybackStart: () -> Unit = {}
+    ) {
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
         try {
@@ -1127,7 +1176,8 @@ private fun BimodalSession(
                         text = text,
                         source = "inteligente",
                         mode = VoiceMode.INTELLIGENT,
-                        voiceContext = voiceContext
+                        voiceContext = voiceContext,
+                        onPlaybackStart = onPlaybackStart
                     )
                 }.getOrNull()
             }
@@ -1154,6 +1204,217 @@ private fun BimodalSession(
         } finally {
             sevenVoiceService.stop()
             toyVoiceSpeaking = false
+        }
+    }
+
+    fun logRecaptureEvent(
+        eventType: String,
+        message: String? = null,
+        latencyMs: Long? = null
+    ) {
+        val safeMessage = message?.take(500)
+        Log.d(BIMODAL_RECAPTURE_TAG, "event=$eventType ${safeMessage ?: ""}".trim())
+        val sid = logSessionId
+        if (sid > 0L) {
+            val aid = logAttemptId
+            val qId = progress?.currentQuestionId?.toLongOrNull()
+            scope.launch {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = sid,
+                        questionId = qId,
+                        attemptId = if (aid > 0L) aid else null,
+                        operationMode = "ADVANCED",
+                        eventType = eventType,
+                        message = safeMessage,
+                        latencyMs = latencyMs
+                    )
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(progress?.currentQuestionIndex) {
+        if (progress != null) {
+            recaptureController.resetForNextQuestion()
+        }
+    }
+
+    LaunchedEffect(
+        latestAttentionSnapshot?.state,
+        latestAttentionSnapshot?.lostDurationMs,
+        latestAttentionSnapshot?.stateChangedAtMs,
+        state,
+        toyVoiceSpeaking,
+        sttState,
+        recaptureJobActive
+    ) {
+        val snapshot = latestAttentionSnapshot ?: return@LaunchedEffect
+        val nowMs = System.currentTimeMillis()
+
+        if (snapshot.state == AttentionState.ATTENTION_STABLE &&
+            recaptureController.state.value in listOf(
+                RecaptureState.PENDING,
+                RecaptureState.GENERATING_PHRASE,
+                RecaptureState.SPEAKING,
+                RecaptureState.WAITING_RETURN
+            )
+        ) {
+            val decision = recaptureController.onAttentionRestored(
+                nowMs = nowMs,
+                duringTts = toyVoiceSpeaking
+            )
+            lastRecaptureDecisionLabel = decision.javaClass.simpleName
+            val eventType = if (toyVoiceSpeaking) {
+                "RECAPTURE_CHILD_RETURNED_DURING_SPEECH"
+            } else {
+                "RECAPTURE_CHILD_RETURNED_AFTER_SPEECH"
+            }
+            logRecaptureEvent(
+                eventType,
+                "attemptNumberInQuestion=${recaptureController.attemptsInQuestion} " +
+                    "attemptNumberInSession=${recaptureController.attemptsInSession}"
+            )
+            return@LaunchedEffect
+        }
+
+        val flowPhase = recaptureFlowPhaseFor(
+            state = state,
+            toyVoiceSpeaking = toyVoiceSpeaking,
+            sttState = sttState,
+            hasProgress = progress != null
+        )
+        val decision = recaptureController.evaluate(snapshot, flowPhase, nowMs)
+        lastRecaptureDecisionLabel = when (decision) {
+            is RecaptureDecision.Execute -> "Execute"
+            is RecaptureDecision.Suppress -> "Suppress"
+            is RecaptureDecision.WaitMore -> "WaitMore"
+            is RecaptureDecision.WaitCooldown -> "WaitCooldown"
+            is RecaptureDecision.CloseGracefully -> "CloseGracefully"
+            is RecaptureDecision.Cancel -> "Cancel"
+            RecaptureDecision.Idle -> "Idle"
+        }
+
+        when (decision) {
+            is RecaptureDecision.Suppress -> logRecaptureEvent(
+                "RECAPTURE_DECISION_SUPPRESSED",
+                "reason=${decision.reason} flowPhaseAtTrigger=$flowPhase"
+            )
+            is RecaptureDecision.WaitCooldown -> logRecaptureEvent(
+                "RECAPTURE_DECISION_COOLDOWN",
+                "msRemaining=${decision.msRemaining} flowPhaseAtTrigger=$flowPhase"
+            )
+            is RecaptureDecision.CloseGracefully -> logRecaptureEvent(
+                "RECAPTURE_LIMIT_REACHED",
+                "reason=${decision.reason} attemptNumberInQuestion=${recaptureController.attemptsInQuestion} " +
+                    "attemptNumberInSession=${recaptureController.attemptsInSession}"
+            )
+            else -> Unit
+        }
+
+        if (decision !is RecaptureDecision.Execute || recaptureJobActive) return@LaunchedEffect
+
+        recaptureJobActive = true
+        logRecaptureEvent(
+            "RECAPTURE_DECISION_EXECUTE",
+            "attentionStateAtTrigger=${snapshot.state} flowPhaseAtTrigger=$flowPhase " +
+                "attemptNumberInQuestion=${decision.attemptInQuestion} " +
+                "attemptNumberInSession=${decision.attemptInSession} " +
+                "msElapsedSinceLost=${snapshot.lostDurationMs}"
+        )
+        scope.launch {
+            try {
+                val phraseResult = recapturePhraseGenerator.generate(
+                    topic = activity.title.ifBlank { "Animales" },
+                    attemptNumber = decision.attemptInQuestion
+                )
+                lastRecapturePhraseSource = phraseResult.source.name
+                lastGptUsageStatus = if (phraseResult.source.name == "GPT") {
+                    "GPT usado"
+                } else if (phraseResult.fallbackUsed) {
+                    "fallback local"
+                } else {
+                    "sin datos"
+                }
+                logRecaptureEvent(
+                    "RECAPTURE_PHRASE_SOURCE",
+                    "phraseSource=${phraseResult.source.name} fallbackUsed=${phraseResult.fallbackUsed} " +
+                        "errorType=${phraseResult.errorType ?: "NONE"}",
+                    latencyMs = phraseResult.latencyMs
+                )
+
+                val latestBeforeSpeech = latestAttentionSnapshot
+                val currentPhase = recaptureFlowPhaseFor(
+                    state = orchestrator.state,
+                    toyVoiceSpeaking = toyVoiceSpeaking,
+                    sttState = sttState,
+                    hasProgress = orchestrator.progress != null
+                )
+                if (latestBeforeSpeech?.state == AttentionState.ATTENTION_STABLE ||
+                    toyVoiceSpeaking ||
+                    sttState == SttState.LISTENING ||
+                    sttState == SttState.STOPPING ||
+                    currentPhase == FlowPhase.SEVEN_SPEAKING ||
+                    currentPhase == FlowPhase.STT_LISTENING ||
+                    currentPhase == FlowPhase.CHILD_RESPONDING ||
+                    currentPhase == FlowPhase.EVALUATING_RESPONSE ||
+                    currentPhase == FlowPhase.ACTIVITY_ENDING
+                ) {
+                    val cancel = recaptureController.onAttentionRestored(
+                        nowMs = System.currentTimeMillis(),
+                        duringTts = false
+                    )
+                    lastRecaptureDecisionLabel = cancel.javaClass.simpleName
+                    logRecaptureEvent(
+                        "RECAPTURE_CANCELLED_BEFORE_SPEECH",
+                        "flowPhaseAtTrigger=$currentPhase attentionStateAtTrigger=${latestBeforeSpeech?.state}"
+                    )
+                    return@launch
+                }
+
+                recaptureController.onRecaptureStarted(System.currentTimeMillis())
+                speakAndAwait(
+                    text = phraseResult.text,
+                    voiceContext = VoiceContext.FEEDBACK_RETRY,
+                    onPlaybackStart = {
+                        recaptureController.onRecaptureTtsStarted(System.currentTimeMillis())
+                        logRecaptureEvent(
+                            "RECAPTURE_TTS_STARTED",
+                            "attemptNumberInQuestion=${recaptureController.attemptsInQuestion} " +
+                                "attemptNumberInSession=${recaptureController.attemptsInSession}"
+                        )
+                    }
+                )
+                recaptureController.onRecaptureTtsEnded(System.currentTimeMillis())
+                logRecaptureEvent(
+                    "RECAPTURE_TTS_ENDED",
+                    "attemptNumberInQuestion=${recaptureController.attemptsInQuestion} " +
+                        "attemptNumberInSession=${recaptureController.attemptsInSession}"
+                )
+
+                if (recaptureController.attemptsInQuestion >= RecapturePolicy.MAX_RECAPTURES_PER_QUESTION ||
+                    recaptureController.attemptsInSession >= RecapturePolicy.MAX_RECAPTURES_PER_SESSION
+                ) {
+                    delay(RecapturePolicy.MAX_SILENCE_AFTER_FINAL_MS)
+                    val stillLost = latestAttentionSnapshot?.state == AttentionState.ATTENTION_LOST
+                    val finalDecision = recaptureController.finalSilenceExceeded(System.currentTimeMillis())
+                    if (stillLost && finalDecision is RecaptureDecision.CloseGracefully) {
+                        logRecaptureEvent(
+                            "RECAPTURE_SESSION_PAUSED_NO_ATTENTION",
+                            "reason=${finalDecision.reason}"
+                        )
+                        val closingText = recapturePhraseBank.phraseFor(RecapturePhraseKind.FINAL_RECAPTURE)
+                        speakAndAwait(closingText, VoiceContext.CLOSING)
+                        if (!orchestrator.state.name.startsWith("SESSION_") &&
+                            orchestrator.state != BimodalInteractionState.ERROR
+                        ) {
+                            dispatch { orchestrator.cancelSession() }
+                        }
+                    }
+                }
+            } finally {
+                recaptureJobActive = false
+            }
         }
     }
 
@@ -1588,6 +1849,9 @@ private fun BimodalSession(
         logAttemptId = -1L
         // Una sesion nueva puede volver a dar el saludo inicial de bienvenida.
         initialGreetingSpoken[0] = false
+        recaptureController.resetForSession()
+        lastRecapturePhraseSource = null
+        lastRecaptureDecisionLabel = "Idle"
         dispatch {
             orchestrator.loadActivity(activity)
             orchestrator.markActivityLoaded()
@@ -1682,6 +1946,28 @@ private fun BimodalSession(
         sevenHoldUntilMs = if (holdMs > 0L) System.currentTimeMillis() + holdMs else 0L
     }
 
+    val gptDebugConfig = GptConfig.fromBuild(gptSettings.sanitized())
+    val intelligentDebugText = intelligentDebugPanelText(
+        showAttention = attentionVisualDebugEnabled,
+        attentionSnapshot = latestAttentionSnapshot,
+        recaptureLabel = recaptureDebugLabel(
+            state = recaptureController.state.value,
+            attemptsInQuestion = recaptureController.attemptsInQuestion,
+            attemptsInSession = recaptureController.attemptsInSession,
+            lastDecision = lastRecaptureDecisionLabel,
+            phraseSource = lastRecapturePhraseSource
+        ),
+        showTts = ttsDebugInIntelligentModeEnabled,
+        ttsProviderConfigured = voiceSettings.provider,
+        ttsProviderUsedLabel = lastVoiceProviderUsed,
+        ttsVoice = ttsVoiceDebugName(voiceSettings),
+        ttsFallbackUsed = lastVoiceFallbackUsed,
+        ttsStatus = lastVoiceStatus,
+        showGpt = gptDebugInIntelligentModeEnabled,
+        gptConfig = gptDebugConfig,
+        lastGptUsageStatus = lastGptUsageStatus
+    )
+
     val activityForOrientation = context.findActivity()
     DisposableEffect(activityForOrientation) {
         val previous = activityForOrientation?.requestedOrientation
@@ -1765,7 +2051,7 @@ private fun BimodalSession(
             Text("Salir")
         }
 
-        if (attentionVisualDebugEnabled) {
+        if (intelligentDebugText.isNotBlank()) {
             Card(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -1776,7 +2062,7 @@ private fun BimodalSession(
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Text(
-                    text = attentionDebugLabel(latestAttentionSnapshot),
+                    text = intelligentDebugText,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     color = IntelligentModePrimaryText,
                     fontSize = 12.sp,
@@ -3008,6 +3294,90 @@ internal fun attentionDebugLabel(snapshot: AttentionSnapshot?): String {
     return "Atencion: $state\nRostro: $face\nMirando: $looking"
 }
 
+internal fun intelligentDebugPanelText(
+    showAttention: Boolean,
+    attentionSnapshot: AttentionSnapshot?,
+    recaptureLabel: String? = null,
+    showTts: Boolean,
+    ttsProviderConfigured: ToyVoiceProviderType,
+    ttsProviderUsedLabel: String?,
+    ttsVoice: String?,
+    ttsFallbackUsed: Boolean?,
+    ttsStatus: String,
+    showGpt: Boolean,
+    gptConfig: GptConfig,
+    lastGptUsageStatus: String
+): String = buildList {
+    if (showAttention) {
+        add(
+            listOfNotNull(
+                attentionDebugLabel(attentionSnapshot),
+                recaptureLabel
+            ).joinToString("\n")
+        )
+    }
+    if (showTts) {
+        add(
+            ttsDebugLabel(
+                configuredProvider = ttsProviderConfigured,
+                usedProviderLabel = ttsProviderUsedLabel,
+                voice = ttsVoice,
+                fallbackUsed = ttsFallbackUsed,
+                status = ttsStatus
+            )
+        )
+    }
+    if (showGpt) {
+        add(gptDebugLabel(gptConfig, lastGptUsageStatus))
+    }
+}.joinToString("\n\n")
+
+internal fun ttsDebugLabel(
+    configuredProvider: ToyVoiceProviderType,
+    usedProviderLabel: String?,
+    voice: String?,
+    fallbackUsed: Boolean?,
+    status: String
+): String {
+    val provider = usedProviderLabel ?: ttsProviderDebugName(configuredProvider)
+    val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
+    val fallback = when (fallbackUsed) {
+        true -> "Si"
+        false -> "No"
+        null -> "Sin datos"
+    }
+    return "TTS: $provider$voicePart\nFallback voz: $fallback\nUltima voz: $status"
+}
+
+internal fun gptDebugLabel(config: GptConfig, lastUsageStatus: String): String {
+    val status = when {
+        !config.enabled -> "desactivado"
+        !config.hasApiKey -> "no configurado"
+        else -> "activado"
+    }
+    return "GPT: $status\n" +
+        "Modelo: ${config.model}\n" +
+        "Configurado: ${if (config.hasApiKey) "Si" else "No"}\n" +
+        "Fallback local: ${if (config.localFallbackEnabled) "Si" else "No"}\n" +
+        "Ultimo uso: $lastUsageStatus"
+}
+
+private fun ttsVoiceDebugName(settings: ToyVoiceSettings): String? = when (settings.provider) {
+    ToyVoiceProviderType.GEMINI_TTS -> settings.geminiVoiceName ?: "Puck"
+    ToyVoiceProviderType.OPENAI_TTS -> settings.openAiVoiceName ?: "marin"
+    ToyVoiceProviderType.AZURE_NEURAL -> settings.azureVoiceName
+    ToyVoiceProviderType.LOCAL -> settings.selectedVoiceName ?: settings.localeTag
+    ToyVoiceProviderType.ELEVENLABS -> settings.neuralVoiceId
+}
+
+private fun ttsProviderDebugName(provider: ToyVoiceProviderType): String = when (provider) {
+    ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
+    ToyVoiceProviderType.OPENAI_TTS -> "OpenAI"
+    ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
+    ToyVoiceProviderType.LOCAL -> "Android local"
+    ToyVoiceProviderType.ELEVENLABS -> "Gemini"
+}
+
 private fun intelligentAttentionEventType(
     previous: AttentionState,
     new: AttentionState
@@ -3048,6 +3418,55 @@ private fun attentionPhaseFor(state: BimodalInteractionState): String = when (st
     BimodalInteractionState.SESSION_CANCELLED,
     BimodalInteractionState.ERROR -> "BETWEEN_QUESTIONS"
 }
+
+private fun recaptureFlowPhaseFor(
+    state: BimodalInteractionState,
+    toyVoiceSpeaking: Boolean,
+    sttState: SttState,
+    hasProgress: Boolean
+): FlowPhase {
+    if (toyVoiceSpeaking) return FlowPhase.SEVEN_SPEAKING
+    if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) {
+        return FlowPhase.STT_LISTENING
+    }
+    return when (state) {
+        BimodalInteractionState.IDLE,
+        BimodalInteractionState.LOADING_ACTIVITY,
+        BimodalInteractionState.READY -> FlowPhase.BEFORE_ACTIVITY
+        BimodalInteractionState.PRESENTING_QUESTION -> FlowPhase.SEVEN_SPEAKING
+        BimodalInteractionState.WAITING_FOR_RESPONSE,
+        BimodalInteractionState.LISTENING,
+        BimodalInteractionState.TRANSCRIBING -> FlowPhase.CHILD_RESPONDING
+        BimodalInteractionState.EVALUATING -> FlowPhase.EVALUATING_RESPONSE
+        BimodalInteractionState.FEEDBACK_CORRECT,
+        BimodalInteractionState.FEEDBACK_INCORRECT,
+        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE,
+        BimodalInteractionState.FEEDBACK_NO_RESPONSE,
+        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR,
+        BimodalInteractionState.TIME_EXPIRED -> FlowPhase.FEEDBACK
+        BimodalInteractionState.SESSION_COMPLETED,
+        BimodalInteractionState.SESSION_CANCELLED,
+        BimodalInteractionState.ERROR -> FlowPhase.ACTIVITY_ENDING
+        BimodalInteractionState.WAITING_FOR_FACE,
+        BimodalInteractionState.PAUSED_FACE_LOST,
+        BimodalInteractionState.FACE_DETECTED,
+        BimodalInteractionState.NEXT_QUESTION ->
+            if (hasProgress) FlowPhase.BETWEEN_QUESTIONS else FlowPhase.BEFORE_ACTIVITY
+    }
+}
+
+private fun recaptureDebugLabel(
+    state: RecaptureState,
+    attemptsInQuestion: Int,
+    attemptsInSession: Int,
+    lastDecision: String,
+    phraseSource: String?
+): String =
+    "Recaptura: $state\n" +
+        "Intentos pregunta: $attemptsInQuestion/${RecapturePolicy.MAX_RECAPTURES_PER_QUESTION}\n" +
+        "Intentos sesion: $attemptsInSession/${RecapturePolicy.MAX_RECAPTURES_PER_SESSION}\n" +
+        "Ultima decision: $lastDecision\n" +
+        "Fuente frase: ${phraseSource ?: "Ninguna"}"
 
 private fun IntelligentSevenExpression.isPrioritySevenExpression(): Boolean =
     when (this) {

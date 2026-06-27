@@ -3,7 +3,11 @@ package com.taller.app.ui
 import com.taller.app.attention.AttentionSnapshot
 import com.taller.app.attention.AttentionState
 import com.taller.app.bimodal.BimodalInteractionState
+import com.taller.app.gpt.GptConfig
+import com.taller.app.voice.ToyVoiceProviderType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IntelligentSevenExpressionResolverTest {
@@ -127,6 +131,111 @@ class IntelligentSevenExpressionResolverTest {
         )
     }
 
+    @Test
+    fun debugPanelOmitsTtsWhenSwitchIsOff() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = false,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "Gemini",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = false,
+            ttsStatus = "OK",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertFalse(label.contains("TTS:"))
+    }
+
+    @Test
+    fun debugPanelShowsTtsWhenSwitchIsOnWithoutSensitiveText() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "Gemini",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = false,
+            ttsStatus = "OK",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("TTS: Gemini / Puck"))
+        assertTrue(label.contains("Fallback voz: No"))
+        assertFalse(label.contains("Hola, explorador"))
+        assertFalse(label.contains("cache"))
+        assertFalse(label.contains("C:\\"))
+    }
+
+    @Test
+    fun debugPanelOmitsGptWhenSwitchIsOff() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = false,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = null,
+            ttsVoice = null,
+            ttsFallbackUsed = null,
+            ttsStatus = "Sin probar",
+            showGpt = false,
+            gptConfig = gptConfig(apiKey = "credential-value"),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertFalse(label.contains("GPT:"))
+    }
+
+    @Test
+    fun debugPanelShowsGptWhenSwitchIsOnWithoutApiKey() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = false,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = null,
+            ttsVoice = null,
+            ttsFallbackUsed = null,
+            ttsStatus = "Sin probar",
+            showGpt = true,
+            gptConfig = gptConfig(apiKey = "credential-value", enabled = true),
+            lastGptUsageStatus = "GPT usado"
+        )
+
+        assertTrue(label.contains("GPT: activado"))
+        assertTrue(label.contains("Modelo: gpt-5.4-mini"))
+        assertTrue(label.contains("Configurado: Si"))
+        assertTrue(label.contains("Fallback local: Si"))
+        assertFalse(label.contains("credential-value"))
+    }
+
+    @Test
+    fun debugPanelCanShowIndependentSectionsTogether() {
+        val label = intelligentDebugPanelText(
+            showAttention = true,
+            attentionSnapshot = snapshot(AttentionState.ATTENTION_STABLE),
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.LOCAL,
+            ttsProviderUsedLabel = "Android local",
+            ttsVoice = "es-PE",
+            ttsFallbackUsed = true,
+            ttsStatus = "OK",
+            showGpt = true,
+            gptConfig = gptConfig(apiKey = "", enabled = true),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("Atencion: ATTENTION_STABLE"))
+        assertTrue(label.contains("TTS: Android local / es-PE"))
+        assertTrue(label.contains("GPT: no configurado"))
+    }
+
     private fun snapshot(state: AttentionState): AttentionSnapshot {
         val faceDetected = state != AttentionState.FACE_ABSENT
         val lookingAtDevice = state == AttentionState.FACE_PRESENT ||
@@ -152,4 +261,19 @@ class IntelligentSevenExpressionResolverTest {
             consecutiveLostFrames = if (state == AttentionState.ATTENTION_LOST) 3 else 0
         )
     }
+
+    private fun gptConfig(
+        apiKey: String = "",
+        enabled: Boolean = false
+    ) = GptConfig(
+        apiKey = apiKey,
+        model = "gpt-5.4-mini",
+        fallbackModel = "gpt-5.4-nano",
+        maxOutputTokens = 220,
+        timeoutMs = 12_000L,
+        temperature = 0.4f,
+        enabled = enabled,
+        localFallbackEnabled = true,
+        structuredOutputsEnabled = true
+    )
 }

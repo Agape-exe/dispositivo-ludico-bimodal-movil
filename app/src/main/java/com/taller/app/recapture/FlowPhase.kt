@@ -1,0 +1,13 @@
+package com.taller.app.recapture
+
+enum class FlowPhase {
+    BEFORE_ACTIVITY,
+    SEVEN_SPEAKING,
+    CHILD_RESPONDING,
+    STT_LISTENING,
+    EVALUATING_RESPONSE,
+    FEEDBACK,
+    BETWEEN_QUESTIONS,
+    ACTIVITY_ENDING,
+    UNKNOWN
+}
