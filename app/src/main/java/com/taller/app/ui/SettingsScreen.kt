@@ -57,6 +57,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.taller.app.attention.AttentionDebugSettings
+import com.taller.app.attention.AttentionDebugSettingsRepository
 import com.taller.app.gpt.GptClientImpl
 import com.taller.app.gpt.GptConfig
 import com.taller.app.gpt.GptPrompt
@@ -80,6 +82,12 @@ fun SettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val gptSettingsRepository = remember { GptSettingsRepository(context.applicationContext) }
     val savedGptSettings by gptSettingsRepository.settings.collectAsState(initial = GptRuntimeSettings.defaults())
+    val attentionDebugSettingsRepository = remember {
+        AttentionDebugSettingsRepository(context.applicationContext)
+    }
+    val attentionDebugSettings by attentionDebugSettingsRepository.settings.collectAsState(
+        initial = AttentionDebugSettings()
+    )
     val gptConfig = GptConfig.fromBuild(savedGptSettings)
 
     fun isCameraGranted() = ContextCompat.checkSelfPermission(
@@ -248,6 +256,22 @@ fun SettingsScreen(
                 Text("Prueba de detección facial")
             }
 
+            AttentionDebugSettingsSection(
+                attentionVisualDebugEnabled =
+                    attentionDebugSettings.attentionVisualDebugEnabled,
+                onAttentionVisualDebugChanged = { enabled ->
+                    coroutineScope.launch {
+                        attentionDebugSettingsRepository
+                            .saveAttentionVisualDebugEnabled(enabled)
+                        Log.d(
+                            "SettingsScreen",
+                            "eventType=ATTENTION_VISUAL_DEBUG_SETTING_CHANGED " +
+                                "attentionVisualDebugEnabled=$enabled"
+                        )
+                    }
+                }
+            )
+
             Button(
                 onClick = onNavigateToSpeechTest,
                 modifier = Modifier
@@ -365,6 +389,34 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun AttentionDebugSettingsSection(
+    attentionVisualDebugEnabled: Boolean,
+    onAttentionVisualDebugChanged: (Boolean) -> Unit
+) {
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(
+        text = "Pruebas de atencion en modo inteligente",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = "Cuando esta activado, Seven cambia su expresion segun el estado " +
+            "de atencion detectado durante el modo inteligente. Util para validar " +
+            "camara, mirada y estados de atencion.",
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+        modifier = Modifier.fillMaxWidth()
+    )
+    SettingsSwitchRow(
+        label = "Mostrar atencion en modo inteligente",
+        checked = attentionVisualDebugEnabled,
+        onCheckedChange = onAttentionVisualDebugChanged
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

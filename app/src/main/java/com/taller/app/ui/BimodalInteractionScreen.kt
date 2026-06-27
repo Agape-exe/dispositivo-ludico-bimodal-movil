@@ -94,6 +94,8 @@ import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
 import com.taller.app.attention.AttentionInput
+import com.taller.app.attention.AttentionDebugSettings
+import com.taller.app.attention.AttentionDebugSettingsRepository
 import com.taller.app.attention.AttentionSnapshot
 import com.taller.app.attention.AttentionState
 import com.taller.app.attention.AttentionStateMachine
@@ -128,6 +130,7 @@ import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.text.Normalizer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -146,6 +149,11 @@ private const val BIMODAL_VOICE_TAG = "BimodalVoice"
 
 /** Etiqueta de logs de atencion del modo inteligente (solo senales tecnicas). */
 private const val BIMODAL_ATTENTION_TAG = "BimodalAttention"
+
+/** Etiqueta de logs visuales de Seven (solo estados tecnicos locales). */
+private const val SEVEN_ATTENTION_VISUAL_TAG = "SevenAttentionVisual"
+
+private const val MIN_SEVEN_EXPRESSION_DURATION_MS = 400L
 
 private val IntelligentModeBlue = Color(0xFF0095B8)
 private val IntelligentModeCardTurquoise = Color(0xFF78C5CC)
@@ -874,6 +882,7 @@ private fun BimodalSession(
 
     // Presencia facial confirmada que reporta la camara (con debounce aplicado).
     var facePresent by remember(activity) { mutableStateOf(false) }
+    var latestAttentionSnapshot by remember(activity) { mutableStateOf<AttentionSnapshot?>(null) }
 
     // Traduce un cambio real de presencia (evento de camara) en evento del
     // orquestador. Solo se invoca cuando la camara confirma una transicion, por
@@ -898,6 +907,7 @@ private fun BimodalSession(
     }
 
     fun onAttentionSnapshot(snapshot: AttentionSnapshot) {
+        latestAttentionSnapshot = snapshot
         val previous = orchestrator.attentionContext.lastAttentionState
         dispatch { orchestrator.onAttentionUpdated(snapshot) }
         if (previous == snapshot.state) return
@@ -997,6 +1007,13 @@ private fun BimodalSession(
     val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
     val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
     val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
+    val attentionDebugSettingsRepository = remember {
+        AttentionDebugSettingsRepository(context.applicationContext)
+    }
+    val attentionDebugSettings by attentionDebugSettingsRepository.settings.collectAsState(
+        initial = AttentionDebugSettings()
+    )
+    val attentionVisualDebugEnabled = attentionDebugSettings.attentionVisualDebugEnabled
     val toySpeechService = remember { ToySpeechService(context) }
     val localVoiceProvider = remember {
         LocalToyVoiceProvider(toySpeechService, ttsStateFlow) { voiceSettings }
@@ -1613,22 +1630,51 @@ private fun BimodalSession(
 
     val targetSevenExpression = state.toIntelligentSevenExpression(
         facePresent = facePresent,
-        toyVoiceSpeaking = toyVoiceSpeaking
+        toyVoiceSpeaking = toyVoiceSpeaking,
+        attentionSnapshot = latestAttentionSnapshot,
+        attentionVisualDebugEnabled = attentionVisualDebugEnabled
     )
     var sevenExpression by remember(activity) {
         mutableStateOf(IntelligentSevenExpression.READY)
     }
     var sevenHoldUntilMs by remember(activity) { mutableStateOf(0L) }
+    var sevenLastChangedAtMs by remember(activity) { mutableStateOf(0L) }
 
-    LaunchedEffect(targetSevenExpression) {
+    LaunchedEffect(targetSevenExpression, latestAttentionSnapshot?.state, state) {
+        val importantChange = targetSevenExpression.isPrioritySevenExpression() ||
+            latestAttentionSnapshot?.state == AttentionState.ATTENTION_LOST
         val remainingHoldMs = sevenHoldUntilMs - System.currentTimeMillis()
-        if (remainingHoldMs > 0L) {
+        if (remainingHoldMs > 0L && !importantChange) {
             delay(remainingHoldMs)
         }
-        sevenExpression = targetSevenExpression
+        val currentTimeMs = System.currentTimeMillis()
+        val expressionAgeMs = currentTimeMs - sevenLastChangedAtMs
+        if (!importantChange &&
+            sevenLastChangedAtMs > 0L &&
+            expressionAgeMs < MIN_SEVEN_EXPRESSION_DURATION_MS
+        ) {
+            delay(MIN_SEVEN_EXPRESSION_DURATION_MS - expressionAgeMs)
+        }
+        val previousExpression = sevenExpression
+        if (previousExpression != targetSevenExpression) {
+            sevenExpression = targetSevenExpression
+            sevenLastChangedAtMs = System.currentTimeMillis()
+            logSevenAttentionVisualChange(
+                dataLogger = dataLogger,
+                scope = scope,
+                sessionId = logSessionId,
+                previousExpression = previousExpression,
+                newExpression = targetSevenExpression,
+                attentionState = latestAttentionSnapshot?.state,
+                attentionTimestampMs = latestAttentionSnapshot?.stateChangedAtMs,
+                interactionState = state
+            )
+        }
         val holdMs = when (targetSevenExpression) {
-            IntelligentSevenExpression.HAPPY -> 3_000L
-            IntelligentSevenExpression.CONFUSED -> 2_000L
+            IntelligentSevenExpression.HAPPY ->
+                if (state == BimodalInteractionState.FEEDBACK_CORRECT) 3_000L else 0L
+            IntelligentSevenExpression.CONFUSED ->
+                if (state == BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE) 2_000L else 0L
             IntelligentSevenExpression.ENCOURAGING -> 2_500L
             IntelligentSevenExpression.CELEBRATION -> 3_000L
             else -> 0L
@@ -1717,6 +1763,27 @@ private fun BimodalSession(
                 .width(92.dp)
         ) {
             Text("Salir")
+        }
+
+        if (attentionVisualDebugEnabled) {
+            Card(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 8.dp, top = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.White.copy(alpha = 0.84f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                Text(
+                    text = attentionDebugLabel(latestAttentionSnapshot),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    color = IntelligentModePrimaryText,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Column(
@@ -2934,6 +3001,13 @@ private fun stateLabel(state: BimodalInteractionState): String = when (state) {
     BimodalInteractionState.ERROR -> "Error"
 }
 
+internal fun attentionDebugLabel(snapshot: AttentionSnapshot?): String {
+    val state = snapshot?.state ?: AttentionState.UNKNOWN
+    val face = if (snapshot?.faceDetected == true) "Si" else "No"
+    val looking = if (snapshot?.lookingAtDevice == true) "Si" else "No"
+    return "Atencion: $state\nRostro: $face\nMirando: $looking"
+}
+
 private fun intelligentAttentionEventType(
     previous: AttentionState,
     new: AttentionState
@@ -2973,6 +3047,62 @@ private fun attentionPhaseFor(state: BimodalInteractionState): String = when (st
     BimodalInteractionState.SESSION_COMPLETED,
     BimodalInteractionState.SESSION_CANCELLED,
     BimodalInteractionState.ERROR -> "BETWEEN_QUESTIONS"
+}
+
+private fun IntelligentSevenExpression.isPrioritySevenExpression(): Boolean =
+    when (this) {
+        IntelligentSevenExpression.SPEAKING,
+        IntelligentSevenExpression.LISTENING,
+        IntelligentSevenExpression.THINKING,
+        IntelligentSevenExpression.HAPPY,
+        IntelligentSevenExpression.ENCOURAGING,
+        IntelligentSevenExpression.CONFUSED,
+        IntelligentSevenExpression.CELEBRATION -> true
+        IntelligentSevenExpression.SEARCHING_FACE,
+        IntelligentSevenExpression.READY -> false
+    }
+
+private fun sevenAttentionVisualEventType(
+    expression: IntelligentSevenExpression,
+    attentionState: AttentionState?
+): String = when (attentionState) {
+    AttentionState.FACE_ABSENT -> "SEVEN_ATTENTION_VISUAL_SEARCHING"
+    AttentionState.ATTENTION_STABLE -> "SEVEN_ATTENTION_VISUAL_STABLE"
+    AttentionState.TEMPORARILY_LOST -> "SEVEN_ATTENTION_VISUAL_TEMPORARILY_LOST"
+    AttentionState.ATTENTION_LOST -> "SEVEN_ATTENTION_VISUAL_LOST"
+    else -> when (expression) {
+        IntelligentSevenExpression.SEARCHING_FACE -> "SEVEN_ATTENTION_VISUAL_SEARCHING"
+        else -> "SEVEN_ATTENTION_EXPRESSION_CHANGED"
+    }
+}
+
+private fun logSevenAttentionVisualChange(
+    dataLogger: InteractionDataLogger,
+    scope: CoroutineScope,
+    sessionId: Long,
+    previousExpression: IntelligentSevenExpression,
+    newExpression: IntelligentSevenExpression,
+    attentionState: AttentionState?,
+    attentionTimestampMs: Long?,
+    interactionState: BimodalInteractionState
+) {
+    val eventType = sevenAttentionVisualEventType(newExpression, attentionState)
+    val timestampMs = attentionTimestampMs ?: System.currentTimeMillis()
+    val message = "previousExpression=$previousExpression newExpression=$newExpression " +
+        "attentionState=${attentionState ?: AttentionState.UNKNOWN} " +
+        "timestampMs=$timestampMs mode=ADVANCED interactionState=$interactionState"
+    Log.d(SEVEN_ATTENTION_VISUAL_TAG, "event=$eventType $message")
+    if (sessionId <= 0L) return
+    scope.launch {
+        runCatching {
+            dataLogger.logTechnicalEvent(
+                sessionId = sessionId,
+                operationMode = "ADVANCED",
+                eventType = eventType,
+                message = message
+            )
+        }
+    }
 }
 
 /** Etiqueta legible para el estado de la captura de voz. */
