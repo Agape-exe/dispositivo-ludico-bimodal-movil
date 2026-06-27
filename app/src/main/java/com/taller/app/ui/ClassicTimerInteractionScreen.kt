@@ -93,6 +93,8 @@ import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
+import com.taller.app.voice.neural.GeminiTtsConfig
+import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import kotlinx.coroutines.delay
@@ -715,11 +717,16 @@ private fun ClassicSession(
             )
         }
     }
+    val geminiVoiceProvider = remember {
+        GeminiTtsVoiceProvider(context) { GeminiTtsConfig.fromBuild() }
+    }
     val sevenVoiceService = remember {
         SevenVoiceService(
+            geminiProvider = geminiVoiceProvider,
             openAiProvider = openAiVoiceProvider,
             azureProvider = azureVoiceProvider,
-            localProvider = localVoiceProvider
+            localProvider = localVoiceProvider,
+            preferredProvider = { voiceSettings.provider }
         )
     }
 
@@ -748,7 +755,7 @@ private fun ClassicSession(
         lastVoiceFallback = fallback
         Log.d(
             CLASSIC_LOG_TAG,
-            "voz: seleccionado=${providerLabel(ToyVoiceProviderType.OPENAI_TTS)} usado=$label fallback=$fallback " +
+            "voz: seleccionado=${providerLabel(voiceSettings.provider)} usado=$label fallback=$fallback " +
                 "cacheHit=${outcome?.cacheHit} cacheKey=${outcome?.cacheKey} " +
                 "synthesisLatencyMs=${outcome?.synthesisLatencyMs} " +
                 "playbackLatencyMs=${outcome?.playbackLatencyMs} totalLatencyMs=${outcome?.totalLatencyMs}"
@@ -776,7 +783,7 @@ private fun ClassicSession(
                         attemptId = logAttemptId.takeIf { it > 0L },
                         operationMode = "CLASSIC",
                         eventType = "TTS_SKIPPED_INVALID_TEXT",
-                        message = "providerRequested=OPENAI_TTS providerUsed=NONE " +
+                        message = "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
                             "textLength=${outcome.textLength} reason=${outcome.reason}",
                         latencyMs = outcome.latencyMs
                     )

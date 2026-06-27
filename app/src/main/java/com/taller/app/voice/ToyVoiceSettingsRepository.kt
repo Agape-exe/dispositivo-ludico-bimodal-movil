@@ -41,7 +41,7 @@ class ToyVoiceSettingsRepository(private val context: Context) {
             localeTag = prefs[Keys.LOCALE_TAG],
             provider = prefs[Keys.PROVIDER]?.let { name ->
                 runCatching { ToyVoiceProviderType.valueOf(name) }.getOrNull()
-            } ?: ToyVoiceProviderType.OPENAI_TTS,
+            } ?: ToyVoiceProviderType.GEMINI_TTS,
             neuralVoiceId = prefs[Keys.NEURAL_VOICE_ID],
             openAiVoiceName = prefs[Keys.OPENAI_VOICE_NAME],
             openAiInstructions = prefs[Keys.OPENAI_INSTRUCTIONS],

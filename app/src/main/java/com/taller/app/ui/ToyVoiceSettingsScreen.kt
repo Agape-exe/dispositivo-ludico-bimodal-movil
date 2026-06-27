@@ -115,7 +115,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     var speechRate by remember { mutableStateOf(0.92f) }
     var pitch by remember { mutableStateOf(1.12f) }
 
-    var providerType by remember { mutableStateOf(ToyVoiceProviderType.OPENAI_TTS) }
+    var providerType by remember { mutableStateOf(ToyVoiceProviderType.GEMINI_TTS) }
     var openAiVoiceName by remember { mutableStateOf("") }
     var openAiInstructions by remember { mutableStateOf(OpenAiTtsConfig.DEFAULT_INSTRUCTIONS) }
     var neuralVoiceId by remember { mutableStateOf("") }
@@ -167,9 +167,11 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     }
     val sevenVoiceService = remember {
         SevenVoiceService(
+            geminiProvider = geminiProvider,
             openAiProvider = openAiProvider,
             azureProvider = azureProvider,
-            localProvider = localProvider
+            localProvider = localProvider,
+            preferredProvider = { buildCurrentSettings().provider }
         )
     }
 
@@ -229,12 +231,11 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
     }
 
     fun saveSevenVoice() {
-        providerType = ToyVoiceProviderType.OPENAI_TTS
-        val s = buildCurrentSettings().copy(provider = ToyVoiceProviderType.OPENAI_TTS)
+        val s = buildCurrentSettings()
         service.applySettings(s)
         scope.launch {
             repository.save(s)
-            saveMessage = "Voz de Seven actualizada"
+            saveMessage = "Proveedor de voz guardado: ${providerLabel(s.provider)}"
         }
     }
 
@@ -242,7 +243,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         if (playbackUi != PlaybackUi.IDLE) return
         if (text.isNullOrBlank()) {
             lastOutcome = VoiceOutcome.SkippedInvalidText(
-                providerRequested = ToyVoiceProviderType.OPENAI_TTS,
+                providerRequested = providerType,
                 reason = InvalidToyVoiceTextReason.EMPTY_TEXT,
                 textLength = text?.length ?: 0,
                 latencyMs = 0L
@@ -252,7 +253,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
         scope.launch {
             playbackUi = PlaybackUi.GENERATING
             lastOutcome = null
-            val sevenSettings = buildCurrentSettings().copy(provider = ToyVoiceProviderType.OPENAI_TTS)
+            val sevenSettings = buildCurrentSettings()
             lastTestedVoice = OpenAiTtsConfig.fromBuild(
                 sevenSettings.openAiVoiceName,
                 sevenSettings.openAiInstructions
@@ -260,6 +261,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             val outcome = sevenVoiceService.speak(
                 text = text,
                 source = "configurar",
+                providerOverride = sevenSettings.provider,
                 onPlaybackStart = { playbackUi = PlaybackUi.PLAYING }
             )
             playbackUi = PlaybackUi.IDLE
@@ -355,12 +357,19 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 
         ProviderSelectionSection(
             selected = providerType,
+            saved = savedSettings.provider,
+            geminiConfigured = geminiConfigured,
             openAiConfigured = openAiConfigured,
             azureConfigured = azureConfigured,
+            localReady = localReady,
+            geminiVoiceName = effectiveGeminiConfig.voiceName,
+            openAiVoiceName = effectiveOpenAiConfig.voice,
+            saveMessage = saveMessage,
             onSelected = {
                 providerType = it
-                applyAndSave()
-            }
+                saveMessage = null
+            },
+            onSave = { saveSevenVoice() }
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -533,9 +542,16 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun ProviderSelectionSection(
     selected: ToyVoiceProviderType,
+    saved: ToyVoiceProviderType,
+    geminiConfigured: Boolean,
     openAiConfigured: Boolean,
     azureConfigured: Boolean,
-    onSelected: (ToyVoiceProviderType) -> Unit
+    localReady: Boolean,
+    geminiVoiceName: String,
+    openAiVoiceName: String,
+    saveMessage: String?,
+    onSelected: (ToyVoiceProviderType) -> Unit,
+    onSave: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -543,16 +559,59 @@ private fun ProviderSelectionSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Proveedor de voz",
+                text = "Proveedor de voz de Seven",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            Text(
+                text = "Proveedor activo actual: ${providerLabel(saved)}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Seleccionado para guardar/probar: ${providerLabel(selected)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ProviderStatusLine("Estado Gemini", geminiConfigured)
+            ProviderStatusLine("Estado OpenAI", openAiConfigured)
+            ProviderStatusLine("Estado Azure", azureConfigured)
+            Text(
+                text = "Estado Android local: ${if (localReady) "configurado" else "inicializando"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (localReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz Gemini actual: $geminiVoiceName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Voz OpenAI actual: $openAiVoiceName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             ProviderOption(
-                title = "OpenAI TTS" + if (openAiConfigured) " (principal)" else " - sin configurar",
-                description = "Voz neural natural para Seven, con respaldo hacia Azure y voz local.",
+                title = "Gemini TTS" + if (geminiConfigured) " - configurado" else " - no configurado",
+                description = "Voz principal recomendada para Seven. Si falla, usa OpenAI, Azure y Android local.",
+                isSelected = selected == ToyVoiceProviderType.GEMINI_TTS,
+                onClick = { onSelected(ToyVoiceProviderType.GEMINI_TTS) }
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            ProviderOption(
+                title = "OpenAI TTS" + if (openAiConfigured) " - configurado" else " - no configurado",
+                description = "Respaldo principal de Gemini. Si falla, usa Azure y Android local.",
                 isSelected = selected == ToyVoiceProviderType.OPENAI_TTS,
                 onClick = { onSelected(ToyVoiceProviderType.OPENAI_TTS) }
             )
@@ -560,17 +619,8 @@ private fun ProviderSelectionSection(
             Spacer(modifier = Modifier.height(4.dp))
 
             ProviderOption(
-                title = "Voz local (sin conexión)",
-                description = "Usa el motor de voz del dispositivo. Funciona siempre, sin internet.",
-                isSelected = selected == ToyVoiceProviderType.LOCAL,
-                onClick = { onSelected(ToyVoiceProviderType.LOCAL) }
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            ProviderOption(
-                title = "Azure Neural" + if (azureConfigured) " (recomendado)" else " — sin configurar",
-                description = "Microsoft Azure Cognitive Services. Voz neural en español, alta calidad.",
+                title = "Azure Speech" + if (azureConfigured) " - configurado" else " - no configurado",
+                description = "Proveedor neural de respaldo. Si falla, usa Android local.",
                 isSelected = selected == ToyVoiceProviderType.AZURE_NEURAL,
                 onClick = { onSelected(ToyVoiceProviderType.AZURE_NEURAL) }
             )
@@ -578,13 +628,40 @@ private fun ProviderSelectionSection(
             Spacer(modifier = Modifier.height(4.dp))
 
             ProviderOption(
-                title = "ElevenLabs (opcional)",
-                description = "Requiere suscripción activa con créditos disponibles.",
-                isSelected = selected == ToyVoiceProviderType.ELEVENLABS,
-                onClick = { onSelected(ToyVoiceProviderType.ELEVENLABS) }
+                title = "Android local",
+                description = "Usa directamente el motor TTS del dispositivo, sin proveedores en red.",
+                isSelected = selected == ToyVoiceProviderType.LOCAL,
+                onClick = { onSelected(ToyVoiceProviderType.LOCAL) }
             )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onSave,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guardar proveedor de voz")
+            }
+
+            if (saveMessage != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = saveMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun ProviderStatusLine(label: String, configured: Boolean) {
+    Text(
+        text = "$label: ${if (configured) "configurado" else "no configurado"}",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    )
 }
 
 @Composable
@@ -1113,9 +1190,9 @@ private fun FallbackSwitch(enabled: Boolean, onChanged: (Boolean) -> Unit) {
 
 private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
-    ToyVoiceProviderType.LOCAL -> "Voz local"
-    ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
-    ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
+    ToyVoiceProviderType.LOCAL -> "Android local"
+    ToyVoiceProviderType.AZURE_NEURAL -> "Azure Speech"
+    ToyVoiceProviderType.GEMINI_TTS -> "Gemini TTS"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
@@ -1145,8 +1222,8 @@ private fun PlaybackStatusCard(
 ) {
     val activeProviderLabel = when (providerType) {
         ToyVoiceProviderType.OPENAI_TTS -> "OpenAI TTS"
-        ToyVoiceProviderType.LOCAL -> "Voz local"
-        ToyVoiceProviderType.AZURE_NEURAL -> "Azure Neural"
+        ToyVoiceProviderType.LOCAL -> "Android local"
+        ToyVoiceProviderType.AZURE_NEURAL -> "Azure Speech"
         ToyVoiceProviderType.GEMINI_TTS -> "Gemini TTS"
         ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
     }
@@ -1187,7 +1264,12 @@ private fun PlaybackStatusCard(
             if (outcome != null && playbackUi == PlaybackUi.IDLE) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Ultima reproduccion: ${outcome.providerUsed?.let { providerLabel(it) } ?: "Ninguna"}",
+                    text = "Proveedor solicitado: ${providerLabel(outcome.providerRequested)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Proveedor usado: ${outcome.providerUsed?.let { providerLabel(it) } ?: "Ninguno"}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1260,7 +1342,7 @@ private fun TestPhrasesSection(
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Probar voz")
+                Text("Probar voz de Seven")
             }
 
             Spacer(modifier = Modifier.height(4.dp))
