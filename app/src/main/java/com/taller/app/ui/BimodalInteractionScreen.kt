@@ -1050,6 +1050,10 @@ private fun BimodalSession(
         initial = AttentionDebugSettings()
     )
     val attentionVisualDebugEnabled = attentionDebugSettings.attentionVisualDebugEnabled
+    val ttsDebugInIntelligentModeEnabled =
+        attentionDebugSettings.showTtsDebugInIntelligentMode
+    val gptDebugInIntelligentModeEnabled =
+        attentionDebugSettings.showGptDebugInIntelligentMode
     val toySpeechService = remember { ToySpeechService(context) }
     val localVoiceProvider = remember {
         LocalToyVoiceProvider(toySpeechService, ttsStateFlow) { voiceSettings }
@@ -1103,6 +1107,8 @@ private fun BimodalSession(
     // el proveedor configurado y fallback solo cuando corresponde.
     var lastVoiceProviderUsed by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackUsed by remember(activity) { mutableStateOf<Boolean?>(null) }
+    var lastVoiceStatus by remember(activity) { mutableStateOf("Sin probar") }
+    var lastGptUsageStatus by remember(activity) { mutableStateOf("sin datos") }
 
     // Registra que proveedor termino reproduciendo la frase y si hubo fallback,
     // tanto en la UI como en un log seguro (solo nombres de proveedor, nunca
@@ -1113,16 +1119,19 @@ private fun BimodalSession(
         val fallback: Boolean
         when (outcome) {
             is VoiceOutcome.Completed -> {
-                usedLabel = providerLabel(outcome.providerUsed)
+                usedLabel = ttsProviderDebugName(outcome.providerUsed)
                 fallback = outcome.fallbackUsed
+                lastVoiceStatus = "OK"
             }
             is VoiceOutcome.Failed, null -> {
                 usedLabel = "Ninguno"
                 fallback = false
+                lastVoiceStatus = "Error seguro"
             }
             is VoiceOutcome.SkippedInvalidText -> {
                 usedLabel = "Ninguno"
                 fallback = false
+                lastVoiceStatus = "Error seguro"
             }
         }
         lastVoiceProviderUsed = usedLabel
@@ -1320,6 +1329,13 @@ private fun BimodalSession(
                     attemptNumber = decision.attemptInQuestion
                 )
                 lastRecapturePhraseSource = phraseResult.source.name
+                lastGptUsageStatus = if (phraseResult.source.name == "GPT") {
+                    "GPT usado"
+                } else if (phraseResult.fallbackUsed) {
+                    "fallback local"
+                } else {
+                    "sin datos"
+                }
                 logRecaptureEvent(
                     "RECAPTURE_PHRASE_SOURCE",
                     "phraseSource=${phraseResult.source.name} fallbackUsed=${phraseResult.fallbackUsed} " +
@@ -1930,6 +1946,28 @@ private fun BimodalSession(
         sevenHoldUntilMs = if (holdMs > 0L) System.currentTimeMillis() + holdMs else 0L
     }
 
+    val gptDebugConfig = GptConfig.fromBuild(gptSettings.sanitized())
+    val intelligentDebugText = intelligentDebugPanelText(
+        showAttention = attentionVisualDebugEnabled,
+        attentionSnapshot = latestAttentionSnapshot,
+        recaptureLabel = recaptureDebugLabel(
+            state = recaptureController.state.value,
+            attemptsInQuestion = recaptureController.attemptsInQuestion,
+            attemptsInSession = recaptureController.attemptsInSession,
+            lastDecision = lastRecaptureDecisionLabel,
+            phraseSource = lastRecapturePhraseSource
+        ),
+        showTts = ttsDebugInIntelligentModeEnabled,
+        ttsProviderConfigured = voiceSettings.provider,
+        ttsProviderUsedLabel = lastVoiceProviderUsed,
+        ttsVoice = ttsVoiceDebugName(voiceSettings),
+        ttsFallbackUsed = lastVoiceFallbackUsed,
+        ttsStatus = lastVoiceStatus,
+        showGpt = gptDebugInIntelligentModeEnabled,
+        gptConfig = gptDebugConfig,
+        lastGptUsageStatus = lastGptUsageStatus
+    )
+
     val activityForOrientation = context.findActivity()
     DisposableEffect(activityForOrientation) {
         val previous = activityForOrientation?.requestedOrientation
@@ -2013,7 +2051,7 @@ private fun BimodalSession(
             Text("Salir")
         }
 
-        if (attentionVisualDebugEnabled) {
+        if (intelligentDebugText.isNotBlank()) {
             Card(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -2024,14 +2062,7 @@ private fun BimodalSession(
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Text(
-                    text = attentionDebugLabel(latestAttentionSnapshot) + "\n" +
-                        recaptureDebugLabel(
-                            state = recaptureController.state.value,
-                            attemptsInQuestion = recaptureController.attemptsInQuestion,
-                            attemptsInSession = recaptureController.attemptsInSession,
-                            lastDecision = lastRecaptureDecisionLabel,
-                            phraseSource = lastRecapturePhraseSource
-                        ),
+                    text = intelligentDebugText,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     color = IntelligentModePrimaryText,
                     fontSize = 12.sp,
@@ -3261,6 +3292,90 @@ internal fun attentionDebugLabel(snapshot: AttentionSnapshot?): String {
     val face = if (snapshot?.faceDetected == true) "Si" else "No"
     val looking = if (snapshot?.lookingAtDevice == true) "Si" else "No"
     return "Atencion: $state\nRostro: $face\nMirando: $looking"
+}
+
+internal fun intelligentDebugPanelText(
+    showAttention: Boolean,
+    attentionSnapshot: AttentionSnapshot?,
+    recaptureLabel: String? = null,
+    showTts: Boolean,
+    ttsProviderConfigured: ToyVoiceProviderType,
+    ttsProviderUsedLabel: String?,
+    ttsVoice: String?,
+    ttsFallbackUsed: Boolean?,
+    ttsStatus: String,
+    showGpt: Boolean,
+    gptConfig: GptConfig,
+    lastGptUsageStatus: String
+): String = buildList {
+    if (showAttention) {
+        add(
+            listOfNotNull(
+                attentionDebugLabel(attentionSnapshot),
+                recaptureLabel
+            ).joinToString("\n")
+        )
+    }
+    if (showTts) {
+        add(
+            ttsDebugLabel(
+                configuredProvider = ttsProviderConfigured,
+                usedProviderLabel = ttsProviderUsedLabel,
+                voice = ttsVoice,
+                fallbackUsed = ttsFallbackUsed,
+                status = ttsStatus
+            )
+        )
+    }
+    if (showGpt) {
+        add(gptDebugLabel(gptConfig, lastGptUsageStatus))
+    }
+}.joinToString("\n\n")
+
+internal fun ttsDebugLabel(
+    configuredProvider: ToyVoiceProviderType,
+    usedProviderLabel: String?,
+    voice: String?,
+    fallbackUsed: Boolean?,
+    status: String
+): String {
+    val provider = usedProviderLabel ?: ttsProviderDebugName(configuredProvider)
+    val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
+    val fallback = when (fallbackUsed) {
+        true -> "Si"
+        false -> "No"
+        null -> "Sin datos"
+    }
+    return "TTS: $provider$voicePart\nFallback voz: $fallback\nUltima voz: $status"
+}
+
+internal fun gptDebugLabel(config: GptConfig, lastUsageStatus: String): String {
+    val status = when {
+        !config.enabled -> "desactivado"
+        !config.hasApiKey -> "no configurado"
+        else -> "activado"
+    }
+    return "GPT: $status\n" +
+        "Modelo: ${config.model}\n" +
+        "Configurado: ${if (config.hasApiKey) "Si" else "No"}\n" +
+        "Fallback local: ${if (config.localFallbackEnabled) "Si" else "No"}\n" +
+        "Ultimo uso: $lastUsageStatus"
+}
+
+private fun ttsVoiceDebugName(settings: ToyVoiceSettings): String? = when (settings.provider) {
+    ToyVoiceProviderType.GEMINI_TTS -> settings.geminiVoiceName ?: "Puck"
+    ToyVoiceProviderType.OPENAI_TTS -> settings.openAiVoiceName ?: "marin"
+    ToyVoiceProviderType.AZURE_NEURAL -> settings.azureVoiceName
+    ToyVoiceProviderType.LOCAL -> settings.selectedVoiceName ?: settings.localeTag
+    ToyVoiceProviderType.ELEVENLABS -> settings.neuralVoiceId
+}
+
+private fun ttsProviderDebugName(provider: ToyVoiceProviderType): String = when (provider) {
+    ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
+    ToyVoiceProviderType.OPENAI_TTS -> "OpenAI"
+    ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
+    ToyVoiceProviderType.LOCAL -> "Android local"
+    ToyVoiceProviderType.ELEVENLABS -> "Gemini"
 }
 
 private fun intelligentAttentionEventType(
