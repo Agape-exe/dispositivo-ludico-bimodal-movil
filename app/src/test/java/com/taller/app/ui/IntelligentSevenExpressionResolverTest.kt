@@ -166,11 +166,55 @@ class IntelligentSevenExpressionResolverTest {
             lastGptUsageStatus = "sin datos"
         )
 
-        assertTrue(label.contains("TTS: Gemini / Puck"))
+        assertTrue(label.contains("TTS preferido: Gemini / Puck"))
+        assertTrue(label.contains("TTS ultimo usado: Gemini"))
         assertTrue(label.contains("Fallback voz: No"))
+        assertTrue(label.contains("Estado: OK"))
         assertFalse(label.contains("Hola, explorador"))
         assertFalse(label.contains("cache"))
         assertFalse(label.contains("C:\\"))
+    }
+
+    @Test
+    fun debugPanelTts_showsPreferredAndUsedSeparately_whenFallbackOccurred() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "OpenAI",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = true,
+            ttsStatus = "OK",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("TTS preferido: Gemini / Puck"))
+        assertTrue(label.contains("TTS ultimo usado: OpenAI"))
+        assertTrue(label.contains("Fallback voz: Si"))
+    }
+
+    @Test
+    fun debugPanelTts_showsDashForUsedWhenNothingReproduced() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = null,
+            ttsVoice = "Puck",
+            ttsFallbackUsed = null,
+            ttsStatus = "Sin probar",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("TTS preferido: Gemini / Puck"))
+        assertTrue(label.contains("TTS ultimo usado: —"))
+        assertTrue(label.contains("Fallback voz: —"))
     }
 
     @Test
@@ -232,7 +276,8 @@ class IntelligentSevenExpressionResolverTest {
         )
 
         assertTrue(label.contains("Atencion: ATTENTION_STABLE"))
-        assertTrue(label.contains("TTS: Android local / es-PE"))
+        assertTrue(label.contains("TTS preferido: Android local / es-PE"))
+        assertTrue(label.contains("TTS ultimo usado: Android local"))
         assertTrue(label.contains("GPT: no configurado"))
     }
 

@@ -44,7 +44,14 @@ class AnimalMediationBank(
 
     private val activeScenarioByKey = HashMap<LocalMediationKey, AnimalNarrativeScenario>()
 
-    fun getSessionStartPhrase(): String = pick("MISSION_START", MISSION_START)
+    fun getSessionStartPhrase(mediationKey: String? = null): String {
+        val key = LocalMediationKey.fromKey(mediationKey)
+        return if (key == LocalMediationKey.NONE) {
+            pick("GENERIC_MISSION_START", GENERIC_MISSION_START)
+        } else {
+            pick("MISSION_START", MISSION_START)
+        }
+    }
 
     /**
      * Saludo inicial de Seven al detectar por primera vez el rostro del niño en el
@@ -54,7 +61,14 @@ class AnimalMediationBank(
     fun getInitialFaceGreetingPhrase(): String =
         pick("ADVANCED_INITIAL_FACE_GREETING", ADVANCED_INITIAL_FACE_GREETING)
 
-    fun getSessionCompletedPhrase(): String = pick("MISSION_COMPLETED", MISSION_COMPLETED)
+    fun getSessionCompletedPhrase(mediationKey: String? = null): String {
+        val key = LocalMediationKey.fromKey(mediationKey)
+        return if (key == LocalMediationKey.NONE) {
+            pick("GENERIC_MISSION_COMPLETED", GENERIC_MISSION_COMPLETED)
+        } else {
+            pick("MISSION_COMPLETED", MISSION_COMPLETED)
+        }
+    }
 
     fun getNotInterpretableFeedback(): String =
         pick("GENERAL_NOT_INTERPRETABLE", GENERAL_NOT_INTERPRETABLE)
@@ -116,7 +130,7 @@ class AnimalMediationBank(
     fun getIncorrectNextFeedback(mediationKey: String?, isLastQuestion: Boolean): String {
         val key = LocalMediationKey.fromKey(mediationKey)
         val scenario = activeScenario(key)
-            ?: return if (isLastQuestion) getSessionCompletedPhrase()
+            ?: return if (isLastQuestion) getSessionCompletedPhrase(mediationKey)
             else generalFallback.message(GeneralTeacherFeedbackType.INCORRECT_NEXT).text
         return pickContextual(
             prefix = "NEXT",
@@ -124,7 +138,7 @@ class AnimalMediationBank(
             options = scenario.incorrectNextFeedback,
             isLastQuestion = isLastQuestion,
             general = {
-                if (isLastQuestion) getSessionCompletedPhrase()
+                if (isLastQuestion) getSessionCompletedPhrase(mediationKey)
                 else generalFallback.message(GeneralTeacherFeedbackType.INCORRECT_NEXT).text
             }
         )
@@ -939,6 +953,39 @@ class AnimalMediationBank(
                     "La cajita de datos quedó incompleta esta vez."
                 )
             )
+        )
+
+        // ----- Inicio de misión genérico (sin referencia a animales) ----------------
+        // Se usa cuando el tema de la sesión no corresponde a la actividad de animales
+        // (LocalMediationKey.NONE). Seven sigue siendo explorador, pero no menciona
+        // animales ni temas específicos: el contenido viene de las preguntas reales.
+
+        val GENERIC_MISSION_START: List<String> = listOf(
+            "¡Hola, explorador! Soy Seven, un alien curioso. Necesito tu ayuda para aprender cosas nuevas de la Tierra.",
+            "¡Activando misión! Seven llegó del espacio para descubrir cosas increíbles contigo.",
+            "¡Hola! Soy Seven, tu amigo del espacio. ¿Listo para empezar nuestra exploración?",
+            "Mi nave tiene una misión especial hoy. ¿Me ayudas a aprender cosas de la Tierra?",
+            "¡Seven reportándose! Hoy quiero descubrir cosas nuevas con tu ayuda.",
+            "Mi radar espacial encontró una misión. Necesito una voz terrestre que me ayude.",
+            "¡Qué emoción! Seven llegó a investigar y aprender contigo.",
+            "Mi computadora espacial dice que tú conoces cosas importantes de este planeta. ¿Me ayudas?",
+            "¡Bienvenido a la exploración de Seven! Hoy descubriremos cosas juntos.",
+            "Seven tiene una misión especial: aprender contigo sobre el mundo."
+        )
+
+        // ----- Cierre de misión genérico (sin referencia a animales) ----------------
+
+        val GENERIC_MISSION_COMPLETED: List<String> = listOf(
+            "¡Misión completada! Seven aprendió mucho gracias a tu ayuda.",
+            "¡Exploración terminada! Mi nave guardó datos nuevos de la Tierra.",
+            "Seven está muy feliz. Hoy descubrimos cosas juntos.",
+            "¡Gracias por ayudarme! La misión quedó completada.",
+            "Mi radar espacial terminó la exploración. Seven sabe más que antes.",
+            "¡Misión guardada en la memoria de Seven! Gracias por enseñarme cosas.",
+            "Hoy mi nave aprendió bastante. Seven volverá con más retos pronto.",
+            "¡Exploración finalizada! Tus respuestas ayudaron mucho a Seven.",
+            "La misión llegó a su fin. Seven se despide con una sonrisa espacial.",
+            "¡Gracias, explorador! Seven completó esta aventura."
         )
 
         val SCENARIOS: Map<LocalMediationKey, List<AnimalNarrativeScenario>> = mapOf(

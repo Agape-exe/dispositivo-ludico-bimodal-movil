@@ -1325,7 +1325,7 @@ private fun BimodalSession(
         scope.launch {
             try {
                 val phraseResult = recapturePhraseGenerator.generate(
-                    topic = activity.title.ifBlank { "Animales" },
+                    topic = activity.title.takeIf { it.isNotBlank() },
                     attemptNumber = decision.attemptInQuestion
                 )
                 lastRecapturePhraseSource = phraseResult.source.name
@@ -1527,7 +1527,7 @@ private fun BimodalSession(
         val presentationSegments = buildList {
             if (playInitialGreeting) {
                 add(animalBank.getInitialFaceGreetingPhrase())
-                add(animalBank.getSessionStartPhrase())
+                add(animalBank.getSessionStartPhrase(mediationKey))
             }
             addAll(splitIntoSpeechSegments(presentationText))
         }
@@ -1798,7 +1798,7 @@ private fun BimodalSession(
                 // cierre COMPLETO y solo entonces marca la sesion como completada.
                 // Nunca se salta directamente a SESSION_COMPLETED.
                 val closingStart = System.nanoTime()
-                val closingText = animalBank.getSessionCompletedPhrase()
+                val closingText = animalBank.getSessionCompletedPhrase(mediationKey)
                 lastMediationSource = MediationSource.LOCAL
                 lastMediationLatencyMs = (System.nanoTime() - closingStart) / 1_000_000
                 lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
@@ -1955,7 +1955,13 @@ private fun BimodalSession(
             attemptsInQuestion = recaptureController.attemptsInQuestion,
             attemptsInSession = recaptureController.attemptsInSession,
             lastDecision = lastRecaptureDecisionLabel,
-            phraseSource = lastRecapturePhraseSource
+            phraseSource = lastRecapturePhraseSource,
+            flowPhase = recaptureFlowPhaseFor(
+                state = state,
+                toyVoiceSpeaking = toyVoiceSpeaking,
+                sttState = sttState,
+                hasProgress = progress != null
+            )
         ),
         showTts = ttsDebugInIntelligentModeEnabled,
         ttsProviderConfigured = voiceSettings.provider,
@@ -3339,14 +3345,15 @@ internal fun ttsDebugLabel(
     fallbackUsed: Boolean?,
     status: String
 ): String {
-    val provider = usedProviderLabel ?: ttsProviderDebugName(configuredProvider)
+    val preferredName = ttsProviderDebugName(configuredProvider)
     val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
+    val usedName = usedProviderLabel ?: "—"
     val fallback = when (fallbackUsed) {
         true -> "Si"
         false -> "No"
-        null -> "Sin datos"
+        null -> "—"
     }
-    return "TTS: $provider$voicePart\nFallback voz: $fallback\nUltima voz: $status"
+    return "TTS preferido: $preferredName$voicePart\nTTS ultimo usado: $usedName\nFallback voz: $fallback\nEstado: $status"
 }
 
 internal fun gptDebugLabel(config: GptConfig, lastUsageStatus: String): String {
@@ -3375,7 +3382,7 @@ private fun ttsProviderDebugName(provider: ToyVoiceProviderType): String = when 
     ToyVoiceProviderType.OPENAI_TTS -> "OpenAI"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.LOCAL -> "Android local"
-    ToyVoiceProviderType.ELEVENLABS -> "Gemini"
+    ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
 private fun intelligentAttentionEventType(
@@ -3460,9 +3467,11 @@ private fun recaptureDebugLabel(
     attemptsInQuestion: Int,
     attemptsInSession: Int,
     lastDecision: String,
-    phraseSource: String?
+    phraseSource: String?,
+    flowPhase: FlowPhase? = null
 ): String =
     "Recaptura: $state\n" +
+        "Fase flujo: ${flowPhase?.name ?: "—"}\n" +
         "Intentos pregunta: $attemptsInQuestion/${RecapturePolicy.MAX_RECAPTURES_PER_QUESTION}\n" +
         "Intentos sesion: $attemptsInSession/${RecapturePolicy.MAX_RECAPTURES_PER_SESSION}\n" +
         "Ultima decision: $lastDecision\n" +

@@ -31,6 +31,8 @@ class AnimalMediationBankTest {
         val general = listOf(
             AnimalMediationBank.MISSION_START,
             AnimalMediationBank.MISSION_COMPLETED,
+            AnimalMediationBank.GENERIC_MISSION_START,
+            AnimalMediationBank.GENERIC_MISSION_COMPLETED,
             AnimalMediationBank.MICRO_DIALOGUES,
             AnimalMediationBank.GENERAL_NOT_INTERPRETABLE,
             AnimalMediationBank.GENERAL_NO_RESPONSE,
@@ -448,8 +450,8 @@ class AnimalMediationBankTest {
     fun doesNotRepeatSameGeneralPhraseConsecutively() {
         val bank = newBank()
         val producers = listOf<() -> String>(
-            bank::getSessionStartPhrase,
-            bank::getSessionCompletedPhrase,
+            { bank.getSessionStartPhrase(null) },
+            { bank.getSessionCompletedPhrase(null) },
             bank::getNotInterpretableFeedback,
             bank::getNoResponseFeedback,
             bank::getTechnicalErrorFeedback
@@ -500,6 +502,104 @@ class AnimalMediationBankTest {
                     assertFalse("Frase culpa al niño: $phrase", text.contains(marker))
                 }
             }
+        }
+    }
+
+    // ----- Frases genéricas (sesiones sin tema animal) ---------------------------
+
+    @Test
+    fun genericMissionStart_hasAtLeastTenPhrases() {
+        assertTrue(
+            "GENERIC_MISSION_START tiene ${AnimalMediationBank.GENERIC_MISSION_START.size} frases",
+            AnimalMediationBank.GENERIC_MISSION_START.size >= 10
+        )
+    }
+
+    @Test
+    fun genericMissionCompleted_hasAtLeastTenPhrases() {
+        assertTrue(
+            "GENERIC_MISSION_COMPLETED tiene ${AnimalMediationBank.GENERIC_MISSION_COMPLETED.size} frases",
+            AnimalMediationBank.GENERIC_MISSION_COMPLETED.size >= 10
+        )
+    }
+
+    @Test
+    fun sessionStart_withNoneKey_doesNotMentionAnimals() {
+        val animalMarkers = listOf("animal", "animalito", "granja", "mascota", "perro", "gato")
+        val bank = newBank()
+        repeat(30) {
+            val phrase = normalize(bank.getSessionStartPhrase(LocalMediationKey.NONE.name))
+            for (marker in animalMarkers) {
+                assertFalse(
+                    "Frase de inicio sin tema animal menciona '$marker': $phrase",
+                    phrase.contains(marker)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun sessionStart_withNullKey_doesNotMentionAnimals() {
+        val animalMarkers = listOf("animal", "animalito", "granja", "mascota", "perro", "gato")
+        val bank = newBank()
+        repeat(30) {
+            val phrase = normalize(bank.getSessionStartPhrase(null))
+            for (marker in animalMarkers) {
+                assertFalse(
+                    "Frase de inicio con clave nula menciona '$marker': $phrase",
+                    phrase.contains(marker)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun sessionStart_withAnimalKey_usesAnimalPhraseBank() {
+        val bank = newBank()
+        repeat(40) {
+            val phrase = bank.getSessionStartPhrase(LocalMediationKey.ANIMAL_DOMESTIC.name)
+            assertTrue(
+                "Frase de inicio con clave animal no proviene de MISSION_START: $phrase",
+                AnimalMediationBank.MISSION_START.contains(phrase)
+            )
+        }
+    }
+
+    @Test
+    fun sessionCompleted_withNoneKey_doesNotMentionAnimals() {
+        val animalMarkers = listOf("animal", "animalito", "granja", "mascota", "perro", "gato")
+        val bank = newBank()
+        repeat(30) {
+            val phrase = normalize(bank.getSessionCompletedPhrase(LocalMediationKey.NONE.name))
+            for (marker in animalMarkers) {
+                assertFalse(
+                    "Frase de cierre sin tema animal menciona '$marker': $phrase",
+                    phrase.contains(marker)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun sessionCompleted_withAnimalKey_usesAnimalPhraseBank() {
+        val bank = newBank()
+        repeat(40) {
+            val phrase = bank.getSessionCompletedPhrase(LocalMediationKey.ANIMAL_DOG_SOUND.name)
+            assertTrue(
+                "Frase de cierre con clave animal no proviene de MISSION_COMPLETED: $phrase",
+                AnimalMediationBank.MISSION_COMPLETED.contains(phrase)
+            )
+        }
+    }
+
+    @Test
+    fun genericMissionStart_doesNotRepeatConsecutively() {
+        val bank = newBank()
+        var previous: String? = null
+        repeat(200) {
+            val current = bank.getSessionStartPhrase(null)
+            assertTrue("Frase genérica de inicio repetida consecutiva: $current", current != previous)
+            previous = current
         }
     }
 }

@@ -72,7 +72,7 @@ class RecapturePhraseGenerator(
             maxAttempts: Int = RecapturePolicy.MAX_RECAPTURES_PER_QUESTION
         ): SevenInputContract = SevenInputContract(
             intent = "recapture_attention",
-            topic = topic?.takeIf { it.isNotBlank() } ?: "Animales",
+            topic = topic?.takeIf { it.isNotBlank() } ?: "exploración",
             questionText = "",
             localEvaluation = "not_applicable",
             attemptsRemaining = 0,
