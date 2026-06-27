@@ -5,7 +5,7 @@ data class ToyVoiceSettings(
     val speechRate: Float = 0.92f,
     val pitch: Float = 1.12f,
     val localeTag: String? = null,
-    val provider: ToyVoiceProviderType = ToyVoiceProviderType.OPENAI_TTS,
+    val provider: ToyVoiceProviderType = ToyVoiceProviderType.GEMINI_TTS,
     val neuralVoiceId: String? = null,
     val openAiVoiceName: String? = null,
     val openAiInstructions: String? = null,

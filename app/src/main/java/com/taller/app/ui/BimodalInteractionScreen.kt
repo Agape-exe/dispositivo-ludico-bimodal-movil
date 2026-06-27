@@ -114,6 +114,8 @@ import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
+import com.taller.app.voice.neural.GeminiTtsConfig
+import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import java.util.concurrent.ExecutorService
@@ -950,8 +952,8 @@ private fun BimodalSession(
     }
 
     // ----- Voz del juguete -----------------------------------------------------
-    // El juguete lee la pregunta usando la voz oficial de Seven: OpenAI TTS como
-    // proveedor principal, Azure como respaldo y voz local como ultimo fallback.
+    // El juguete lee la pregunta usando la voz oficial de Seven y la cadena de
+    // fallback configurada en SevenVoiceService.
     // Reutiliza el motor TTS local (LocalToyVoiceProvider) para no duplicar
     // instancias. Los proveedores se liberan al salir de la pantalla.
     val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
@@ -972,11 +974,16 @@ private fun BimodalSession(
             )
         }
     }
+    val geminiVoiceProvider = remember {
+        GeminiTtsVoiceProvider(context) { GeminiTtsConfig.fromBuild() }
+    }
     val sevenVoiceService = remember {
         SevenVoiceService(
+            geminiProvider = geminiVoiceProvider,
             openAiProvider = openAiVoiceProvider,
             azureProvider = azureVoiceProvider,
-            localProvider = localVoiceProvider
+            localProvider = localVoiceProvider,
+            preferredProvider = { voiceSettings.provider }
         )
     }
 
@@ -996,7 +1003,7 @@ private fun BimodalSession(
 
     // Diagnostico de voz: proveedor que realmente atendio la ultima reproduccion y
     // si hubo respaldo. Permiten verificar en pantalla que el flujo bimodal usa
-    // OpenAI TTS como proveedor principal y fallback solo cuando corresponde.
+    // el proveedor configurado y fallback solo cuando corresponde.
     var lastVoiceProviderUsed by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackUsed by remember(activity) { mutableStateOf<Boolean?>(null) }
 
@@ -1004,7 +1011,7 @@ private fun BimodalSession(
     // tanto en la UI como en un log seguro (solo nombres de proveedor, nunca
     // claves, tokens ni el texto reproducido).
     fun recordVoiceUsage(outcome: VoiceOutcome?) {
-        val selectedLabel = providerLabel(ToyVoiceProviderType.OPENAI_TTS)
+        val selectedLabel = providerLabel(voiceSettings.provider)
         val usedLabel: String
         val fallback: Boolean
         when (outcome) {
@@ -1036,7 +1043,7 @@ private fun BimodalSession(
     // termina realmente: los proveedores (Azure/ElevenLabs/local) completan su
     // `speak` solo cuando el TTS o la red senalan el fin de la reproduccion. Es el
     // unico punto de reproduccion del flujo: delega en SevenVoiceService la cadena
-    // OpenAI -> Azure -> local, mantiene el indicador "hablando" y el registro, y
+    // configurada, mantiene el indicador "hablando" y el registro, y
     // garantiza que el flujo nunca avance, reintente ni cierre antes de que la voz
     // haya terminado. Nunca lanza: si la voz falla, el error se ignora y la
     // interaccion continua (la sesion jamas se cancela por un problema de audio).
@@ -1072,7 +1079,7 @@ private fun BimodalSession(
                         attemptId = logAttemptId.takeIf { it > 0L },
                         operationMode = "ADVANCED",
                         eventType = "TTS_SKIPPED_INVALID_TEXT",
-                        message = "providerRequested=OPENAI_TTS providerUsed=NONE " +
+                        message = "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
                             "textLength=${outcome.textLength} reason=${outcome.reason}",
                         latencyMs = outcome.latencyMs
                     )
