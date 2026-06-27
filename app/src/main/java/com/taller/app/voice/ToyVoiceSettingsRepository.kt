@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.taller.app.voice.neural.GeminiTtsVoices
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -28,6 +29,8 @@ class ToyVoiceSettingsRepository(private val context: Context) {
         val NEURAL_VOICE_ID = stringPreferencesKey("neural_voice_id")
         val OPENAI_VOICE_NAME = stringPreferencesKey("openai_voice_name")
         val OPENAI_INSTRUCTIONS = stringPreferencesKey("openai_instructions")
+        val GEMINI_VOICE_NAME = stringPreferencesKey("gemini_voice_name")
+        val GEMINI_INSTRUCTIONS = stringPreferencesKey("gemini_instructions")
         val AZURE_VOICE_NAME = stringPreferencesKey("azure_voice_name")
         val FALLBACK_TO_LOCAL = booleanPreferencesKey("fallback_to_local")
         val UPDATED_AT = longPreferencesKey("updated_at")
@@ -45,6 +48,8 @@ class ToyVoiceSettingsRepository(private val context: Context) {
             neuralVoiceId = prefs[Keys.NEURAL_VOICE_ID],
             openAiVoiceName = prefs[Keys.OPENAI_VOICE_NAME],
             openAiInstructions = prefs[Keys.OPENAI_INSTRUCTIONS],
+            geminiVoiceName = prefs[Keys.GEMINI_VOICE_NAME]?.let { GeminiTtsVoices.normalizeId(it) },
+            geminiInstructions = prefs[Keys.GEMINI_INSTRUCTIONS],
             azureVoiceName = prefs[Keys.AZURE_VOICE_NAME],
             fallbackToLocal = prefs[Keys.FALLBACK_TO_LOCAL] ?: true,
             updatedAt = prefs[Keys.UPDATED_AT] ?: 0L
@@ -82,6 +87,16 @@ class ToyVoiceSettingsRepository(private val context: Context) {
                 prefs[Keys.OPENAI_INSTRUCTIONS] = settings.openAiInstructions
             } else {
                 prefs.remove(Keys.OPENAI_INSTRUCTIONS)
+            }
+            if (settings.geminiVoiceName != null) {
+                prefs[Keys.GEMINI_VOICE_NAME] = GeminiTtsVoices.normalizeId(settings.geminiVoiceName)
+            } else {
+                prefs.remove(Keys.GEMINI_VOICE_NAME)
+            }
+            if (settings.geminiInstructions != null) {
+                prefs[Keys.GEMINI_INSTRUCTIONS] = settings.geminiInstructions
+            } else {
+                prefs.remove(Keys.GEMINI_INSTRUCTIONS)
             }
             if (settings.azureVoiceName != null) {
                 prefs[Keys.AZURE_VOICE_NAME] = settings.azureVoiceName

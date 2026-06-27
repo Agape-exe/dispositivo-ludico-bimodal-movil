@@ -9,6 +9,8 @@ data class ToyVoiceSettings(
     val neuralVoiceId: String? = null,
     val openAiVoiceName: String? = null,
     val openAiInstructions: String? = null,
+    val geminiVoiceName: String? = null,
+    val geminiInstructions: String? = null,
     val azureVoiceName: String? = null,
     val fallbackToLocal: Boolean = true,
     val updatedAt: Long = 0L
