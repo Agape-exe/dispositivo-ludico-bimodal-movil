@@ -41,6 +41,7 @@ sealed interface VoicePlaybackResult {
 
 /** Categorías de error controlado que puede devolver un proveedor de voz. */
 enum class VoiceErrorType {
+    INVALID_TTS_TEXT,
     NOT_CONFIGURED,
     NO_NETWORK,
     HTTP_ERROR,

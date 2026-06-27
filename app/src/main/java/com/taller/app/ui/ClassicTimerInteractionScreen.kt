@@ -742,6 +742,7 @@ private fun ClassicSession(
         when (outcome) {
             is VoiceOutcome.Completed -> { label = providerLabel(outcome.providerUsed); fallback = outcome.fallbackUsed }
             is VoiceOutcome.Failed, null -> { label = "Ninguno"; fallback = false }
+            is VoiceOutcome.SkippedInvalidText -> { label = "Ninguno"; fallback = false }
         }
         lastVoiceProvider = label
         lastVoiceFallback = fallback
@@ -761,11 +762,25 @@ private fun ClassicSession(
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(text)
+                    sevenVoiceService.speak(text, source = "temporizador")
                 }.getOrNull()
             }
             if (outcome == null) {
                 Log.w(CLASSIC_LOG_TAG, "voz: sin resultado tras ${timeoutMs}ms, flujo continúa")
+            }
+            if (outcome is VoiceOutcome.SkippedInvalidText && logSessionId > 0L) {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = logSessionId,
+                        questionId = progress?.currentQuestionId?.toLongOrNull(),
+                        attemptId = logAttemptId.takeIf { it > 0L },
+                        operationMode = "CLASSIC",
+                        eventType = "TTS_SKIPPED_INVALID_TEXT",
+                        message = "providerRequested=OPENAI_TTS providerUsed=NONE " +
+                            "textLength=${outcome.textLength} reason=${outcome.reason}",
+                        latencyMs = outcome.latencyMs
+                    )
+                }
             }
             recordVoice(outcome)
         } finally {

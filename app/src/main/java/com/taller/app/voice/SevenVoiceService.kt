@@ -1,5 +1,7 @@
 package com.taller.app.voice
 
+import android.util.Log
+
 /**
  * Punto unico de entrada para la voz oficial de Seven.
  *
@@ -14,15 +16,26 @@ class SevenVoiceService(
 ) {
 
     suspend fun speak(
-        text: String,
+        text: String?,
+        source: String = "unknown",
         onPlaybackStart: () -> Unit = {}
     ): VoiceOutcome {
-        return ToyVoiceFallback.speakWithFallback(
+        val outcome = ToyVoiceFallback.speakWithFallback(
             text = text,
             providerRequested = ToyVoiceProviderType.OPENAI_TTS,
             providers = buildProviderChain(),
             onPlaybackStart = onPlaybackStart
         )
+        if (outcome is VoiceOutcome.SkippedInvalidText) {
+            Log.w(
+                TAG,
+                "eventType=TTS_SKIPPED_INVALID_TEXT source=$source " +
+                    "providerRequested=${outcome.providerRequested} providerUsed=NONE " +
+                    "textLength=${outcome.textLength} reason=${outcome.reason} " +
+                    "timestamp=${System.currentTimeMillis()}"
+            )
+        }
+        return outcome
     }
 
     fun stop() {
@@ -41,5 +54,9 @@ class SevenVoiceService(
         add(ToyVoiceProviderType.OPENAI_TTS to openAiProvider)
         add(ToyVoiceProviderType.AZURE_NEURAL to azureProvider)
         add(ToyVoiceProviderType.LOCAL to localProvider)
+    }
+
+    private companion object {
+        const val TAG = "SevenVoiceService"
     }
 }

@@ -22,6 +22,13 @@ class LocalToyVoiceProvider(
     override fun isConfigured(): Boolean = true
 
     override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) {
+            return VoicePlaybackResult.Error(
+                VoiceErrorType.INVALID_TTS_TEXT,
+                VoiceOutcome.SAFE_INVALID_TEXT_MESSAGE
+            )
+        }
         // Espera a que el motor termine de inicializar.
         val ready = state.first {
             it == ToySpeechState.READY || it == ToySpeechState.ERROR
@@ -35,7 +42,7 @@ class LocalToyVoiceProvider(
 
         service.applySettings(settingsProvider())
         onPlaybackStart()
-        service.speak(text)
+        service.speak(validation.normalizedText)
 
         // speak() deja el estado en SPEAKING de forma síncrona; esperamos a que
         // la reproducción termine (READY) o falle (ERROR).

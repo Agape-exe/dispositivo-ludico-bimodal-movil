@@ -77,12 +77,21 @@ class ToySpeechService(private val context: Context) {
     }
 
     fun speak(text: String) {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) {
+            Log.w(
+                TAG,
+                "eventType=TTS_SKIPPED_INVALID_TEXT providerRequested=LOCAL providerUsed=NONE " +
+                    "textLength=${text.length} reason=${validation.reason} timestamp=${System.currentTimeMillis()}"
+            )
+            return
+        }
         if (state != ToySpeechState.READY && state != ToySpeechState.SPEAKING) {
             Log.w(TAG, "speak() ignorado, estado=$state")
             return
         }
         updateState(ToySpeechState.SPEAKING)
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+        tts?.speak(validation.normalizedText, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
     }
 
     fun stop() {

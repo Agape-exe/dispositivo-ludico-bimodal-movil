@@ -45,10 +45,57 @@ class ToyVoiceFallbackTest {
         assertFalse(outcome.fallbackUsed)
     }
 
+    @Test
+    fun speakWithFallback_nullText_skipsProviders() = runBlocking {
+        val provider = CountingProvider(VoicePlaybackResult.Success())
+
+        val outcome = ToyVoiceFallback.speakWithFallback(
+            text = null,
+            providerRequested = ToyVoiceProviderType.OPENAI_TTS,
+            providers = listOf(ToyVoiceProviderType.OPENAI_TTS to provider)
+        )
+
+        assertTrue(outcome is VoiceOutcome.SkippedInvalidText)
+        assertEquals(0, provider.calls)
+        assertEquals(ToyVoiceProviderType.OPENAI_TTS, outcome.providerRequested)
+        assertEquals(null, outcome.providerUsed)
+        assertFalse(outcome.fallbackUsed)
+    }
+
+    @Test
+    fun speakWithFallback_placeholderText_skipsProviders() = runBlocking {
+        val provider = CountingProvider(VoicePlaybackResult.Success())
+
+        val outcome = ToyVoiceFallback.speakWithFallback(
+            text = "No hay texto para reproducir",
+            providerRequested = ToyVoiceProviderType.OPENAI_TTS,
+            providers = listOf(ToyVoiceProviderType.OPENAI_TTS to provider)
+        )
+
+        assertTrue(outcome is VoiceOutcome.SkippedInvalidText)
+        assertEquals(0, provider.calls)
+    }
+
     private class FakeProvider(
         private val result: VoicePlaybackResult
     ) : ToyVoiceProvider {
         override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult = result
+        override fun isConfigured(): Boolean = true
+        override fun stop() = Unit
+        override fun release() = Unit
+    }
+
+    private class CountingProvider(
+        private val result: VoicePlaybackResult
+    ) : ToyVoiceProvider {
+        var calls = 0
+            private set
+
+        override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+            calls += 1
+            return result
+        }
+
         override fun isConfigured(): Boolean = true
         override fun stop() = Unit
         override fun release() = Unit
