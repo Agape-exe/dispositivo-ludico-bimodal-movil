@@ -54,10 +54,15 @@ class GeminiTtsVoiceProvider(
         }
 
         val config = configProvider()
+        Log.d(
+            TAG,
+            "eventType=GEMINI_TTS_CONFIG configured=${config.isComplete} " +
+                "model=${config.model} voice=${config.voiceName}"
+        )
         if (!config.hasApiKey) {
             return VoicePlaybackResult.Error(
                 VoiceErrorType.NOT_CONFIGURED,
-                "Gemini TTS no esta configurado."
+                "Gemini fallo: no configurado."
             )
         }
 
@@ -91,6 +96,11 @@ class GeminiTtsVoiceProvider(
         withContext(Dispatchers.IO) {
             val body = GeminiTtsProtocol.buildRequestJson(text, config).toRequestBody(JSON_MEDIA_TYPE)
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent"
+            Log.d(
+                TAG,
+                "eventType=GEMINI_TTS_REQUEST configured=${config.isComplete} model=${config.model} " +
+                    "voice=${config.voiceName} endpoint=$url textLength=${text.length}"
+            )
             val request = Request.Builder()
                 .url(url)
                 .addHeader("x-goog-api-key", config.apiKey)
@@ -111,14 +121,23 @@ class GeminiTtsVoiceProvider(
         val startedAt = System.currentTimeMillis()
         try {
             client.newCall(request).execute().use { response ->
+                Log.d(TAG, "eventType=GEMINI_TTS_HTTP code=${response.code}")
                 if (!response.isSuccessful) {
+                    val responseBody = response.body?.string().orEmpty()
+                    val safeDetail = GeminiTtsProtocol.safeErrorMessage(responseBody)
+                    Log.w(
+                        TAG,
+                        "eventType=GEMINI_TTS_HTTP_ERROR code=${response.code} " +
+                            "message=${safeDetail ?: safeHttpMessage(response.code)}"
+                    )
                     if (retryServerError && response.code >= 500) {
+                        Log.w(TAG, "eventType=GEMINI_TTS_RETRY code=${response.code}")
                         return executeAudioRequest(request, retryServerError = false)
                     }
                     return AudioResult.Failure(
                         VoicePlaybackResult.Error(
                             VoiceErrorType.HTTP_ERROR,
-                            safeHttpMessage(response.code)
+                            safeHttpMessage(response.code, safeDetail)
                         )
                     )
                 }
@@ -126,45 +145,71 @@ class GeminiTtsVoiceProvider(
                 val payload = try {
                     GeminiTtsProtocol.parseAudio(responseBody)
                 } catch (e: GeminiTtsParseException) {
+                    Log.w(
+                        TAG,
+                        "eventType=GEMINI_TTS_PARSE_ERROR hasCandidates=${e.diagnostics.hasCandidates} " +
+                            "hasInlineData=${e.diagnostics.hasInlineData} mimeType=${e.diagnostics.mimeType} " +
+                            "audioBytes=${e.diagnostics.audioBytes} base64DecodeFailed=${e.diagnostics.base64DecodeFailed} " +
+                            "message=${e.safeMessage}"
+                    )
                     return AudioResult.Failure(
-                        VoicePlaybackResult.Error(VoiceErrorType.INVALID_AUDIO, e.message ?: "Audio Gemini invalido.")
+                        VoicePlaybackResult.Error(VoiceErrorType.INVALID_AUDIO, e.safeMessage)
                     )
                 }
+                Log.d(
+                    TAG,
+                    "eventType=GEMINI_TTS_AUDIO mimeType=${payload.mimeType} " +
+                        "decodedBytes=${payload.bytes.size} wrapAsWav=${GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)}"
+                )
                 val bytes = if (GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)) {
                     GeminiWavWriter.wrapPcm16Mono24Khz(payload.bytes)
                 } else {
                     payload.bytes
                 }
                 val suffix = if (GeminiTtsProtocol.shouldWrapAsWav(payload.mimeType)) ".wav" else audioSuffix(payload.mimeType)
-                val file = File.createTempFile("toy_gemini_", suffix, context.cacheDir)
-                file.writeBytes(bytes)
+                val file = try {
+                    File.createTempFile("toy_gemini_", suffix, context.cacheDir).also { tempFile ->
+                        tempFile.writeBytes(bytes)
+                    }
+                } catch (e: IOException) {
+                    Log.w(TAG, "eventType=GEMINI_TTS_FILE_ERROR message=temporary_audio_write_failed")
+                    return AudioResult.Failure(
+                        VoicePlaybackResult.Error(
+                            VoiceErrorType.INVALID_AUDIO,
+                            "Gemini fallo: no se pudo preparar el audio."
+                        )
+                    )
+                }
+                Log.d(TAG, "eventType=GEMINI_TTS_FILE_READY suffix=$suffix fileBytes=${file.length()}")
                 return AudioResult.Ok(
                     file = file,
                     synthesisLatencyMs = System.currentTimeMillis() - startedAt
                 )
             }
         } catch (e: SocketTimeoutException) {
-            Log.w(TAG, "Timeout al contactar Gemini TTS")
+            Log.w(TAG, "eventType=GEMINI_TTS_NETWORK_ERROR type=timeout")
             return AudioResult.Failure(
-                VoicePlaybackResult.Error(VoiceErrorType.TIMEOUT, "Gemini TTS tardo demasiado en responder.")
+                VoicePlaybackResult.Error(VoiceErrorType.TIMEOUT, "Gemini fallo: tiempo de espera agotado.")
             )
         } catch (e: IOException) {
-            Log.w(TAG, "Error de red con Gemini TTS")
+            Log.w(TAG, "eventType=GEMINI_TTS_NETWORK_ERROR type=io")
             return AudioResult.Failure(
-                VoicePlaybackResult.Error(VoiceErrorType.NO_NETWORK, "No hay conexion con Gemini TTS.")
+                VoicePlaybackResult.Error(VoiceErrorType.NO_NETWORK, "Gemini fallo: sin conexion disponible.")
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Error inesperado con Gemini TTS")
+            Log.w(TAG, "eventType=GEMINI_TTS_UNKNOWN_ERROR")
             return AudioResult.Failure(
-                VoicePlaybackResult.Error(VoiceErrorType.UNKNOWN, "Ocurrio un error inesperado con Gemini TTS.")
+                VoicePlaybackResult.Error(VoiceErrorType.UNKNOWN, "Gemini fallo: error inesperado.")
             )
         }
     }
 
-    private fun safeHttpMessage(code: Int): String = when (code) {
-        400, 401, 403 -> "Gemini TTS no pudo autorizar o procesar la solicitud."
-        429 -> "Gemini TTS alcanzo un limite de cuota."
-        else -> "Gemini TTS respondio con error (codigo $code)."
+    private fun safeHttpMessage(code: Int, detail: String? = null): String = when (code) {
+        400, 401, 403 -> "Gemini fallo: error HTTP $code."
+        429 -> "Gemini fallo: limite de cuota."
+        else -> "Gemini fallo: error HTTP $code."
+    }.let { base ->
+        if (detail.isNullOrBlank()) base else "$base ${detail.take(MAX_SAFE_HTTP_DETAIL_LENGTH)}"
     }
 
     private fun audioSuffix(mimeType: String): String {
@@ -199,18 +244,20 @@ class GeminiTtsVoiceProvider(
             if (continuation.isActive) continuation.resume(VoicePlaybackResult.Success())
         }
         player.setOnErrorListener { _, what, _ ->
+            Log.w(TAG, "eventType=GEMINI_TTS_PLAYBACK_ERROR code=$what")
             cleanup()
             if (continuation.isActive) {
                 continuation.resume(
                     VoicePlaybackResult.Error(
                         VoiceErrorType.PLAYBACK_FAILED,
-                        "No se pudo reproducir el audio de Gemini TTS (codigo $what)."
+                        "Gemini fallo: reproduccion no disponible."
                     )
                 )
             }
             true
         }
         player.setOnPreparedListener {
+            Log.d(TAG, "eventType=GEMINI_TTS_PLAYBACK_START")
             onPlaybackStart()
             player.start()
         }
@@ -221,12 +268,13 @@ class GeminiTtsVoiceProvider(
             player.setDataSource(file.absolutePath)
             player.prepareAsync()
         } catch (e: Exception) {
+            Log.w(TAG, "eventType=GEMINI_TTS_PLAYBACK_PREPARE_ERROR")
             cleanup()
             if (continuation.isActive) {
                 continuation.resume(
                     VoicePlaybackResult.Error(
                         VoiceErrorType.INVALID_AUDIO,
-                        "El audio recibido de Gemini TTS no es valido."
+                        "Gemini fallo: audio invalido."
                     )
                 )
             }
@@ -254,6 +302,7 @@ class GeminiTtsVoiceProvider(
     companion object {
         private const val TAG = "GeminiTtsVoice"
         private const val REQUEST_TIMEOUT_SECONDS = 30L
+        private const val MAX_SAFE_HTTP_DETAIL_LENGTH = 120
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }

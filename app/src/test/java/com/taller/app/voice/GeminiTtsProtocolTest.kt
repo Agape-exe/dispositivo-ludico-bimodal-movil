@@ -3,6 +3,7 @@ package com.taller.app.voice
 import com.taller.app.voice.neural.GeminiTtsConfig
 import com.taller.app.voice.neural.GeminiTtsParseException
 import com.taller.app.voice.neural.GeminiTtsProtocol
+import com.taller.app.voice.neural.GeminiWavWriter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -76,6 +77,31 @@ class GeminiTtsProtocolTest {
 
         assertEquals("audio/pcm", payload.mimeType)
         assertTrue(payload.bytes.contentEquals(bytes))
+    }
+
+    @Test
+    fun response_withSnakeCaseInlineData_parsesPayload() {
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val encoded = Base64.getMimeEncoder(4, "\n".toByteArray()).encodeToString(bytes)
+
+        val payload = GeminiTtsProtocol.parseAudio(
+            """{"candidates":[{"content":{"parts":[{"inline_data":{"mime_type":"audio/L16;codec=pcm;rate=24000","data":"$encoded"}}]}}]}"""
+        )
+
+        assertEquals("audio/L16;codec=pcm;rate=24000", payload.mimeType)
+        assertTrue(payload.bytes.contentEquals(bytes))
+    }
+
+    @Test
+    fun pcmAudio_isWrappedAsWav() {
+        val wav = GeminiWavWriter.wrapPcm16Mono24Khz(byteArrayOf(1, 0, 2, 0))
+
+        assertEquals("RIFF", wav.copyOfRange(0, 4).toString(Charsets.US_ASCII))
+        assertEquals("WAVE", wav.copyOfRange(8, 12).toString(Charsets.US_ASCII))
+        assertEquals("fmt ", wav.copyOfRange(12, 16).toString(Charsets.US_ASCII))
+        assertEquals("data", wav.copyOfRange(36, 40).toString(Charsets.US_ASCII))
+        assertEquals(48, wav.size)
+        assertTrue(GeminiTtsProtocol.shouldWrapAsWav("audio/L16;codec=pcm;rate=24000"))
     }
 
     private fun defaultConfig(): GeminiTtsConfig = GeminiTtsConfig(

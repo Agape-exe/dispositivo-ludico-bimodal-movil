@@ -301,9 +301,10 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
                 is VoiceOutcome.Completed -> if (outcome.providerUsed == ToyVoiceProviderType.GEMINI_TTS) {
                     "Gemini TTS reproducido correctamente."
                 } else {
-                    "Gemini TTS fallo; se uso ${providerLabel(outcome.providerUsed)} como respaldo."
+                    val reason = safeGeminiStatusMessage(outcome.errorMessage)
+                    "$reason Se uso ${providerLabel(outcome.providerUsed)} como respaldo."
                 }
-                is VoiceOutcome.Failed -> "No se pudo reproducir Gemini TTS."
+                is VoiceOutcome.Failed -> safeGeminiStatusMessage(outcome.errorMessage)
                 is VoiceOutcome.SkippedInvalidText -> VoiceOutcome.SAFE_INVALID_TEXT_MESSAGE
             }
             cacheStats = voiceCache.stats()
@@ -1124,6 +1125,9 @@ private fun geminiPlaybackLabel(outcome: VoiceOutcome?): String = when (outcome)
     is VoiceOutcome.SkippedInvalidText -> "fallida"
     null -> "sin prueba"
 }
+
+private fun safeGeminiStatusMessage(message: String?): String =
+    message?.takeIf { it.isNotBlank() } ?: "Gemini fallo: causa no disponible."
 
 private fun formatCacheBytes(bytes: Long): String {
     if (bytes < 1024L) return "$bytes B"

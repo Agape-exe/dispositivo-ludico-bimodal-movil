@@ -28,29 +28,61 @@ object GeminiTtsProtocol {
     }
 
     fun parseAudio(responseBody: String): AudioPayload {
-        if (!responseBody.contains("\"candidates\"")) {
-            throw GeminiTtsParseException("Gemini no devolvio candidatos de audio.")
+        val hasCandidates = hasJsonField(responseBody, "candidates")
+        if (!hasCandidates) {
+            throw GeminiTtsParseException(
+                safeMessage = "Gemini fallo: respuesta sin candidatos.",
+                diagnostics = ParseDiagnostics(hasCandidates = false)
+            )
         }
-        if (!responseBody.contains("\"inlineData\"")) {
-            throw GeminiTtsParseException("Gemini no devolvio inlineData de audio.")
+        val hasInlineData = hasJsonField(responseBody, "inlineData") || hasJsonField(responseBody, "inline_data")
+        if (!hasInlineData) {
+            throw GeminiTtsParseException(
+                safeMessage = "Gemini fallo: respuesta sin audio.",
+                diagnostics = ParseDiagnostics(hasCandidates = true, hasInlineData = false)
+            )
         }
-        for (match in INLINE_DATA_REGEX.findAll(responseBody)) {
+        for (match in inlineDataRegex.findAll(responseBody)) {
             val inlineData = match.value
             val data = stringField(inlineData, "data")?.takeIf { it.isNotBlank() }
-                ?: throw GeminiTtsParseException("Gemini devolvio audio vacio.")
-            val mimeType = stringField(inlineData, "mimeType").orEmpty().ifBlank { "audio/pcm" }
+                ?: throw GeminiTtsParseException(
+                    safeMessage = "Gemini fallo: respuesta sin audio.",
+                    diagnostics = ParseDiagnostics(hasCandidates = true, hasInlineData = true)
+                )
+            val mimeType = stringField(inlineData, "mimeType")
+                ?: stringField(inlineData, "mime_type")
+                ?: "audio/pcm"
             val bytes = try {
-                Base64.getDecoder().decode(data)
+                Base64.getMimeDecoder().decode(data)
             } catch (_: IllegalArgumentException) {
-                throw GeminiTtsParseException("Gemini devolvio audio invalido.")
+                throw GeminiTtsParseException(
+                    safeMessage = "Gemini fallo: audio invalido.",
+                    diagnostics = ParseDiagnostics(
+                        hasCandidates = true,
+                        hasInlineData = true,
+                        mimeType = mimeType,
+                        base64DecodeFailed = true
+                    )
+                )
             }
             if (bytes.isEmpty()) {
-                throw GeminiTtsParseException("Gemini devolvio audio vacio.")
+                throw GeminiTtsParseException(
+                    safeMessage = "Gemini fallo: respuesta sin audio.",
+                    diagnostics = ParseDiagnostics(
+                        hasCandidates = true,
+                        hasInlineData = true,
+                        mimeType = mimeType,
+                        audioBytes = 0
+                    )
+                )
             }
             return AudioPayload(bytes = bytes, mimeType = mimeType)
         }
 
-        throw GeminiTtsParseException("Gemini no devolvio inlineData de audio.")
+        throw GeminiTtsParseException(
+            safeMessage = "Gemini fallo: respuesta sin audio.",
+            diagnostics = ParseDiagnostics(hasCandidates = true, hasInlineData = false)
+        )
     }
 
     fun shouldWrapAsWav(mimeType: String): Boolean {
@@ -61,6 +93,14 @@ object GeminiTtsProtocol {
     data class AudioPayload(
         val bytes: ByteArray,
         val mimeType: String
+    )
+
+    data class ParseDiagnostics(
+        val hasCandidates: Boolean,
+        val hasInlineData: Boolean = false,
+        val mimeType: String? = null,
+        val audioBytes: Int? = null,
+        val base64DecodeFailed: Boolean = false
     )
 
     private fun jsonString(value: String): String {
@@ -90,10 +130,20 @@ object GeminiTtsProtocol {
             .replace("\\t", "\t")
     }
 
-    private val INLINE_DATA_REGEX = Regex(
-        pattern = """"inlineData"\s*:\s*\{[^{}]*\}""",
+    fun safeErrorMessage(responseBody: String): String? =
+        stringField(responseBody, "message")?.takeIf { it.isNotBlank() }
+            ?: stringField(responseBody, "status")?.takeIf { it.isNotBlank() }
+
+    private fun hasJsonField(json: String, fieldName: String): Boolean =
+        Regex(""""${Regex.escape(fieldName)}"\s*:""").containsMatchIn(json)
+
+    private val inlineDataRegex = Regex(
+        pattern = """"(?:inlineData|inline_data)"\s*:\s*\{[^{}]*\}""",
         option = RegexOption.DOT_MATCHES_ALL
     )
 }
 
-class GeminiTtsParseException(message: String) : Exception(message)
+class GeminiTtsParseException(
+    val safeMessage: String,
+    val diagnostics: GeminiTtsProtocol.ParseDiagnostics
+) : Exception(safeMessage)
