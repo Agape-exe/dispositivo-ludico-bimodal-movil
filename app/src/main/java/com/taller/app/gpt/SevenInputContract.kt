@@ -18,7 +18,10 @@ data class SevenInputContract(
     val language: String,
     val tone: String,
     val contextTag: String,
-    val answerTokens: List<String> = emptyList()
+    val answerTokens: List<String> = emptyList(),
+    val recaptureAttemptNumber: Int? = null,
+    val recaptureMaxAttempts: Int? = null,
+    val recaptureKind: String? = null
 ) {
     fun toJsonString(): String = JSONObject()
         .put("intent", intent)
@@ -36,5 +39,10 @@ data class SevenInputContract(
         .put("tone", tone)
         .put("contextTag", contextTag)
         .put("answerTokens", JSONArray(answerTokens))
+        .apply {
+            recaptureAttemptNumber?.let { put("recaptureAttemptNumber", it) }
+            recaptureMaxAttempts?.let { put("recaptureMaxAttempts", it) }
+            recaptureKind?.let { put("recaptureKind", it) }
+        }
         .toString()
 }
