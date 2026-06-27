@@ -14,6 +14,10 @@ object AttentionRepository {
     val snapshot: StateFlow<AttentionSnapshot> = _snapshot.asStateFlow()
 
     @Synchronized
+    fun onEvidence(evidence: AttentionEvidence): AttentionSnapshot =
+        update(AttentionInput.FaceObserved(evidence))
+
+    @Synchronized
     fun onFaceDetected(timestampMs: Long = System.currentTimeMillis()): AttentionSnapshot =
         update(AttentionInput.FaceDetected(timestampMs))
 
@@ -48,15 +52,22 @@ object AttentionRepository {
                     "ATTENTION_FACE_PRESENT"
                 }
             }
-            AttentionState.TEMPORARILY_LOST -> "ATTENTION_TEMPORARILY_LOST"
+            AttentionState.ATTENTION_STABLE -> "ATTENTION_LOOKING_STABLE"
+            AttentionState.TEMPORARILY_LOST -> "ATTENTION_LOOK_AWAY_TEMPORARY"
             AttentionState.ATTENTION_LOST -> "ATTENTION_LOST"
+            AttentionState.FACE_ABSENT -> "ATTENTION_FACE_ABSENT"
             else -> "ATTENTION_STATE_CHANGED"
         }
         Log.d(
             TAG,
             "event=$event previousState=${previous.state} newState=${next.state} " +
-                "timestampMs=$timestampMs stableDurationMs=${next.stableDurationMs} " +
-                "lostDurationMs=${next.lostDurationMs}"
+                "timestampMs=$timestampMs faceDetected=${next.faceDetected} " +
+                "lookingAtDevice=${next.lookingAtDevice} " +
+                "stableDurationMs=${next.stableDurationMs} " +
+                "lookAwayDurationMs=${next.lookAwayDurationMs} " +
+                "lostDurationMs=${next.lostDurationMs} " +
+                "consecutiveStableFrames=${next.consecutiveStableFrames} " +
+                "consecutiveLostFrames=${next.consecutiveLostFrames}"
         )
     }
 }
