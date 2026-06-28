@@ -31,4 +31,34 @@ interface QuestionDao {
 
     @Query("DELETE FROM questions WHERE activityId = :activityId")
     suspend fun deleteByActivityId(activityId: Long)
+
+    @Query(
+        "UPDATE questions SET " +
+            "childFriendlyQuestionText = :childFriendlyQuestionText, " +
+            "hintLevel1 = :hintLevel1, " +
+            "hintLevel2 = :hintLevel2, " +
+            "hintLevel3 = :hintLevel3, " +
+            "positiveFeedbackText = :positiveFeedbackText, " +
+            "supportiveFeedbackText = :supportiveFeedbackText, " +
+            "retryPromptText = :retryPromptText, " +
+            "answerReferenceWarning = :answerReferenceWarning, " +
+            "suggestedReferenceAnswer = :suggestedReferenceAnswer, " +
+            "scriptReviewed = :scriptReviewed, " +
+            "scriptUpdatedAt = :scriptUpdatedAt " +
+            "WHERE id = :id"
+    )
+    suspend fun updateScript(
+        id: Long,
+        childFriendlyQuestionText: String?,
+        hintLevel1: String?,
+        hintLevel2: String?,
+        hintLevel3: String?,
+        positiveFeedbackText: String?,
+        supportiveFeedbackText: String?,
+        retryPromptText: String?,
+        answerReferenceWarning: String?,
+        suggestedReferenceAnswer: String?,
+        scriptReviewed: Boolean,
+        scriptUpdatedAt: Long
+    )
 }

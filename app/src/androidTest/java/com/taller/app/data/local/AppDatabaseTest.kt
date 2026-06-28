@@ -490,6 +490,72 @@ class AppDatabaseTest {
     }
 
     @Test
+    fun updateScriptPersistsSessionAndQuestionFields() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Animales domésticos",
+                topic = "Animales",
+                operationMode = "ADVANCED",
+                maxAttempts = 3,
+                maxTimeSeconds = 60,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+        val questionId = questionDao.insert(
+            QuestionEntity(
+                activityId = activityId,
+                questionText = "Menciona un animal doméstico",
+                expectedAnswer = "perro",
+                keywords = "perro,gato",
+                orderIndex = 1,
+                maxAttempts = 3,
+                maxTimeSeconds = 30,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+
+        activityDao.updateScript(
+            id = activityId,
+            introText = "Hola, soy Seven",
+            closingText = "Gracias por explorar",
+            toneNotes = "cálido",
+            pedagogicalWarnings = null,
+            scriptStatus = "REVIEWED",
+            scriptUpdatedAt = now + 100
+        )
+        questionDao.updateScript(
+            id = questionId,
+            childFriendlyQuestionText = "Dime un animalito que viva con las personas",
+            hintLevel1 = "Algunos viven en casa",
+            hintLevel2 = "Tiene cuatro patas",
+            hintLevel3 = "Le gusta jugar",
+            positiveFeedbackText = "Muy bien",
+            supportiveFeedbackText = "Casi, sigamos pensando",
+            retryPromptText = "Probemos otra vez",
+            answerReferenceWarning = "La pregunta admite varias respuestas",
+            suggestedReferenceAnswer = "perro, gato, conejo",
+            scriptReviewed = true,
+            scriptUpdatedAt = now + 100
+        )
+
+        val activity = activityDao.getById(activityId)
+        assertNotNull(activity)
+        assertEquals("Hola, soy Seven", activity!!.generatedIntroText)
+        assertEquals("REVIEWED", activity.scriptStatus)
+
+        val question = questionDao.getByActivityIdOnce(activityId).first()
+        assertEquals("Dime un animalito que viva con las personas", question.childFriendlyQuestionText)
+        assertEquals("perro, gato, conejo", question.suggestedReferenceAnswer)
+        assertEquals(true, question.scriptReviewed)
+        // No se altera la pregunta ni la referencia original.
+        assertEquals("Menciona un animal doméstico", question.questionText)
+        assertEquals("perro", question.expectedAnswer)
+    }
+
+    @Test
     fun technicalEventWithoutQuestionIsAllowed() = runBlocking {
         val now = System.currentTimeMillis()
         val activityId = activityDao.insert(

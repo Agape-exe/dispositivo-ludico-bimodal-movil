@@ -17,5 +17,12 @@ data class ActivityEntity(
     val maxTimeSeconds: Int,
     val isActive: Boolean = true,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    // GEN01: guion de Seven a nivel de sesion, editable por la docente.
+    val generatedIntroText: String? = null,
+    val generatedClosingText: String? = null,
+    val generatedToneNotes: String? = null,
+    val generatedPedagogicalWarnings: String? = null,
+    val scriptStatus: String = "NOT_GENERATED",
+    val scriptUpdatedAt: Long? = null
 )

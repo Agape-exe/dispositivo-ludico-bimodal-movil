@@ -369,7 +369,19 @@ private fun QuestionFormView(
                             maxAttempts = existing?.maxAttempts ?: 3,
                             createdAt = existing?.createdAt ?: now,
                             updatedAt = now,
-                            mediationKey = existing?.mediationKey
+                            mediationKey = existing?.mediationKey,
+                            // Conserva el guion de Seven ya generado al editar la pregunta.
+                            childFriendlyQuestionText = existing?.childFriendlyQuestionText,
+                            hintLevel1 = existing?.hintLevel1,
+                            hintLevel2 = existing?.hintLevel2,
+                            hintLevel3 = existing?.hintLevel3,
+                            positiveFeedbackText = existing?.positiveFeedbackText,
+                            supportiveFeedbackText = existing?.supportiveFeedbackText,
+                            retryPromptText = existing?.retryPromptText,
+                            answerReferenceWarning = existing?.answerReferenceWarning,
+                            suggestedReferenceAnswer = existing?.suggestedReferenceAnswer,
+                            scriptReviewed = existing?.scriptReviewed ?: false,
+                            scriptUpdatedAt = existing?.scriptUpdatedAt
                         )
                     )
                 }

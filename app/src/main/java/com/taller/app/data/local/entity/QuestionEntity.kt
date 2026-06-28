@@ -28,5 +28,17 @@ data class QuestionEntity(
     val maxTimeSeconds: Int,
     val createdAt: Long,
     val updatedAt: Long,
-    val mediationKey: String? = null
+    val mediationKey: String? = null,
+    // GEN01: guion de Seven a nivel de pregunta, editable por la docente.
+    val childFriendlyQuestionText: String? = null,
+    val hintLevel1: String? = null,
+    val hintLevel2: String? = null,
+    val hintLevel3: String? = null,
+    val positiveFeedbackText: String? = null,
+    val supportiveFeedbackText: String? = null,
+    val retryPromptText: String? = null,
+    val answerReferenceWarning: String? = null,
+    val suggestedReferenceAnswer: String? = null,
+    val scriptReviewed: Boolean = false,
+    val scriptUpdatedAt: Long? = null
 )
