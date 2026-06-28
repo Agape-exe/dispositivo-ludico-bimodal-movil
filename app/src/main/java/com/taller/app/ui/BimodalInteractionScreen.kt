@@ -27,9 +27,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -133,6 +135,10 @@ import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceErrorType
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoiceMode
+import com.taller.app.voice.VoicePlaybackDebugInfo
+import com.taller.app.voice.VoicePlaybackDebugMapper
+import com.taller.app.voice.VoicePlaybackMode
+import com.taller.app.voice.VoicePlaybackSource
 import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
@@ -1126,6 +1132,10 @@ private fun BimodalSession(
     var lastVoiceContextLabel by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackReason by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
+    // Diagnostico de cache de voz (TTSV01-FIX01): origen real de la ultima voz
+    // (cache vs sintesis en vivo), modo de reproduccion, latencias y motivo. Solo
+    // vive en memoria; nunca guarda el texto hablado, claves ni payloads.
+    var lastVoiceDebug by remember(activity) { mutableStateOf(VoicePlaybackDebugInfo.none()) }
     // Historial corto en memoria (maximo 5), solo para depurar el cambio de proveedor
     // entre frases. No persiste en Room, no se exporta y nunca guarda el texto hablado.
     var voiceHistory by remember(activity) { mutableStateOf<List<String>>(emptyList()) }
@@ -1134,7 +1144,10 @@ private fun BimodalSession(
     // Registra que proveedor termino reproduciendo la frase, si hubo fallback, el
     // contexto, el motivo seguro y la latencia, tanto en la UI como en un log seguro
     // (solo nombres de proveedor y codigos, nunca claves, tokens ni el texto hablado).
-    fun recordVoiceUsage(outcome: VoiceOutcome?) {
+    fun recordVoiceUsage(
+        outcome: VoiceOutcome?,
+        playbackMode: VoicePlaybackMode = VoicePlaybackMode.CACHE_OR_SYNTHESIZE
+    ) {
         val selectedLabel = providerLabel(voiceSettings.provider)
         val usedLabel: String
         val fallback: Boolean
@@ -1173,6 +1186,10 @@ private fun BimodalSession(
         lastVoiceContextLabel = contextLabel
         lastVoiceFallbackReason = reason
         lastVoiceLatencyMs = latency
+        lastVoiceDebug = VoicePlaybackDebugMapper.fromOutcome(
+            outcome = outcome,
+            playbackMode = playbackMode
+        )
 
         val historyEntry = buildString {
             append(contextLabel)
@@ -1257,7 +1274,10 @@ private fun BimodalSession(
                     )
                 }
             }
-            recordVoiceUsage(outcome)
+            // El flujo bimodal reproduce con speak(): reutiliza cache y, si falta,
+            // puede sintetizar en vivo (CACHE_OR_SYNTHESIZE). El panel tecnico lo
+            // refleja para distinguir una reproduccion de cache de una sintesis real.
+            recordVoiceUsage(outcome, VoicePlaybackMode.CACHE_OR_SYNTHESIZE)
         } finally {
             sevenVoiceService.stop()
             toyVoiceSpeaking = false
@@ -2031,6 +2051,7 @@ private fun BimodalSession(
         ttsLatencyMs = lastVoiceLatencyMs,
         ttsHistory = voiceHistory,
         geminiCooldownRemainingMs = GeminiRateLimitGate.shared.remainingMs(),
+        voiceDebug = lastVoiceDebug,
         showGpt = gptDebugInIntelligentModeEnabled,
         gptConfig = gptDebugConfig,
         lastGptUsageStatus = lastGptUsageStatus
@@ -2120,10 +2141,15 @@ private fun BimodalSession(
         }
 
         if (intelligentDebugText.isNotBlank()) {
+            // Panel tecnico flotante: ancho y alto acotados para no tapar el boton
+            // Salir ni la cara de Seven; con scroll vertical cuando el contenido
+            // excede la pantalla (util en horizontal con muchas metricas).
             Card(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 8.dp, top = 8.dp),
+                    .padding(start = 8.dp, top = 8.dp)
+                    .widthIn(max = 250.dp)
+                    .heightIn(max = 260.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = Color.White.copy(alpha = 0.84f)
                 ),
@@ -2131,7 +2157,9 @@ private fun BimodalSession(
             ) {
                 Text(
                     text = intelligentDebugText,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     color = IntelligentModePrimaryText,
                     fontSize = 12.sp,
                     lineHeight = 15.sp,
@@ -3377,6 +3405,7 @@ internal fun intelligentDebugPanelText(
     ttsLatencyMs: Long? = null,
     ttsHistory: List<String> = emptyList(),
     geminiCooldownRemainingMs: Long? = null,
+    voiceDebug: VoicePlaybackDebugInfo? = null,
     showGpt: Boolean,
     gptConfig: GptConfig,
     lastGptUsageStatus: String
@@ -3401,7 +3430,8 @@ internal fun intelligentDebugPanelText(
                 fallbackReason = ttsFallbackReason,
                 latencyMs = ttsLatencyMs,
                 history = ttsHistory,
-                geminiCooldownRemainingMs = geminiCooldownRemainingMs
+                geminiCooldownRemainingMs = geminiCooldownRemainingMs,
+                voiceDebug = voiceDebug
             )
         )
     }
@@ -3420,7 +3450,8 @@ internal fun ttsDebugLabel(
     fallbackReason: String? = null,
     latencyMs: Long? = null,
     history: List<String> = emptyList(),
-    geminiCooldownRemainingMs: Long? = null
+    geminiCooldownRemainingMs: Long? = null,
+    voiceDebug: VoicePlaybackDebugInfo? = null
 ): String {
     val preferredName = ttsProviderDebugName(configuredProvider)
     val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
@@ -3436,14 +3467,34 @@ internal fun ttsDebugLabel(
         ?: "no activo"
     val lines = mutableListOf(
         "TTS preferido: $preferredName$voicePart",
-        "TTS ultimo usado: $usedName",
-        "Contexto: ${contextLabel ?: "—"}",
-        "Fallback voz: $fallback",
-        "Motivo fallback: ${fallbackReason ?: "NONE"}",
-        "Gemini cooldown: $cooldownLabel",
-        "Latencia: ${latencyMs?.let { "$it ms" } ?: "—"}",
-        "Estado: $status"
+        "TTS ultimo usado: $usedName"
     )
+    // Diagnostico de cache: origen real de la ultima voz y latencias (TTSV01-FIX01).
+    voiceDebug?.takeIf { it.source != VoicePlaybackSource.NONE }?.let { debug ->
+        lines.add("Origen voz: ${debug.source.name}")
+        lines.add("Modo repro: ${debug.playbackMode.name}")
+        lines.add("Proveedor: ${debug.provider ?: "Ninguno"}")
+        lines.add("Linea: ${debug.lineType ?: "UNKNOWN"}")
+        lines.add(
+            "Cache: " + when (debug.cacheHit) {
+                true -> "hit"
+                false -> "miss/synth"
+                null -> "—"
+            }
+        )
+        lines.add("Cache lookup: ${debug.cacheLookupMs?.let { "$it ms" } ?: "—"}")
+        lines.add("Inicio audio: ${debug.playbackStartMs?.let { "$it ms" } ?: "—"}")
+        lines.add("Total voz: ${debug.totalVoiceMs?.let { "$it ms" } ?: "—"}")
+        lines.add("Delay artificial: ${debug.artificialDelayMs?.let { "$it ms" } ?: "—"}")
+        debug.textHashShort?.let { lines.add("Hash pieza: $it") }
+        debug.sanitizedError?.let { lines.add("Error: $it") }
+    }
+    lines.add("Contexto: ${contextLabel ?: "—"}")
+    lines.add("Fallback voz: $fallback")
+    lines.add("Motivo fallback: ${fallbackReason ?: "NONE"}")
+    lines.add("Gemini cooldown: $cooldownLabel")
+    lines.add("Latencia: ${latencyMs?.let { "$it ms" } ?: "—"}")
+    lines.add("Estado: $status")
     if (history.isNotEmpty()) {
         lines.add("Ultimas voces:")
         history.forEachIndexed { index, entry -> lines.add("${index + 1}. $entry") }
