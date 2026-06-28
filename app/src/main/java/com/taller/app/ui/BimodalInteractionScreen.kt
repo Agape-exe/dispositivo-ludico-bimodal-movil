@@ -1771,7 +1771,7 @@ private fun BimodalSession(
                 GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT ->
                     animalBank.getTechnicalErrorFeedback()
                 GeneralTeacherFeedbackType.SESSION_COMPLETED ->
-                    animalBank.getSessionCompletedPhrase()
+                    animalBank.getSessionCompletedPhrase(mediationKey)
                 GeneralTeacherFeedbackType.SESSION_START,
                 GeneralTeacherFeedbackType.QUESTION_INTRO ->
                     feedbackGenerator.message(category).text
