@@ -1233,9 +1233,27 @@ private fun BimodalSession(
     suspend fun speakAndAwait(
         text: String,
         voiceContext: VoiceContext = VoiceContext.UNKNOWN,
+        preparedText: String? = null,
         onPlaybackStart: () -> Unit = {}
     ) {
-        lastSpokenPhrase = text
+        // TTSV01-FIX02: en sesiones con la voz preparada (READY) Seven reproduce SOLO
+        // desde cache, sin sintesis de red. Si existe un texto preparado del guion
+        // (preparedText) se reproduce ese, que es el que quedo cacheado; si no, se
+        // intenta el texto dinamico desde cache (puede no existir aun: no se sintetiza
+        // por red, queda como CACHE_MISS visible en metricas). Sin voz preparada se
+        // mantiene la ruta clasica speak() (cache o sintesis).
+        val preparedVoice = activity.voicePrepReady
+        val effectiveText = if (preparedVoice) {
+            preparedText?.takeIf { it.isNotBlank() } ?: text
+        } else {
+            text
+        }
+        val playbackMode = if (preparedVoice) {
+            VoicePlaybackMode.CACHE_ONLY
+        } else {
+            VoicePlaybackMode.CACHE_OR_SYNTHESIZE
+        }
+        lastSpokenPhrase = effectiveText
         toyVoiceSpeaking = true
         try {
             // Tope de seguridad: si el proveedor de voz se cuelga (red caida, callback
@@ -1243,16 +1261,26 @@ private fun BimodalSession(
             // devuelve null en lugar de bloquear el flujo para siempre. El bloque
             // finally detiene el audio residual de forma ordenada. La interaccion
             // jamas se detiene por un problema de audio.
-            val timeoutMs = speechTimeoutMsFor(text)
+            val timeoutMs = speechTimeoutMsFor(effectiveText)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(
-                        text = text,
-                        source = "inteligente",
-                        mode = VoiceMode.INTELLIGENT,
-                        voiceContext = voiceContext,
-                        onPlaybackStart = onPlaybackStart
-                    )
+                    if (preparedVoice) {
+                        sevenVoiceService.speakFromCacheOnly(
+                            text = effectiveText,
+                            source = "inteligente",
+                            mode = VoiceMode.INTELLIGENT,
+                            voiceContext = voiceContext,
+                            onPlaybackStart = onPlaybackStart
+                        )
+                    } else {
+                        sevenVoiceService.speak(
+                            text = effectiveText,
+                            source = "inteligente",
+                            mode = VoiceMode.INTELLIGENT,
+                            voiceContext = voiceContext,
+                            onPlaybackStart = onPlaybackStart
+                        )
+                    }
                 }.getOrNull()
             }
             if (outcome == null) {
@@ -1274,10 +1302,7 @@ private fun BimodalSession(
                     )
                 }
             }
-            // El flujo bimodal reproduce con speak(): reutiliza cache y, si falta,
-            // puede sintetizar en vivo (CACHE_OR_SYNTHESIZE). El panel tecnico lo
-            // refleja para distinguir una reproduccion de cache de una sintesis real.
-            recordVoiceUsage(outcome, VoicePlaybackMode.CACHE_OR_SYNTHESIZE)
+            recordVoiceUsage(outcome, playbackMode)
         } finally {
             sevenVoiceService.stop()
             toyVoiceSpeaking = false
@@ -1601,16 +1626,37 @@ private fun BimodalSession(
         // toda la introduccion antes de poder reaccionar. SUSPENDE en cada segmento hasta
         // que su audio termina, de modo que la voz nunca se solapa con la captura.
         val versionAtStart = faceLostJobVersion
-        val presentationSegments = buildList {
-            if (playInitialGreeting) {
-                add(animalBank.getInitialFaceGreetingPhrase())
-                add(animalBank.getSessionStartPhrase(mediationKey))
+        // TTSV01-FIX02: con la voz preparada (READY) se reproduce el guion cacheado
+        // (intro de sesion + pregunta amigable) en lugar de la narrativa dinamica del
+        // banco, para que salga desde cache sin sintesis de red. La pregunta original
+        // se conserva intacta en logs/metricas (currentQuestion.questionText).
+        val preparedVoice = activity.voicePrepReady
+        val hasPreparedIntro = preparedVoice && playInitialGreeting &&
+            !activity.generatedIntroText.isNullOrBlank()
+        val greetingSegmentCount = when {
+            preparedVoice -> if (hasPreparedIntro) 1 else 0
+            playInitialGreeting -> 2
+            else -> 0
+        }
+        val presentationSegments = if (preparedVoice) {
+            val preparedQuestion = currentQuestion?.childFriendlyQuestionText
+                ?.takeIf { it.isNotBlank() } ?: questionText
+            buildList {
+                if (hasPreparedIntro) add(activity.generatedIntroText!!.trim())
+                add(preparedQuestion)
             }
-            addAll(splitIntoSpeechSegments(presentationText))
+        } else {
+            buildList {
+                if (playInitialGreeting) {
+                    add(animalBank.getInitialFaceGreetingPhrase())
+                    add(animalBank.getSessionStartPhrase(mediationKey))
+                }
+                addAll(splitIntoSpeechSegments(presentationText))
+            }
         }
         Log.d(
             BIMODAL_VOICE_TAG,
-            "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos)"
+            "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos) preparada=$preparedVoice"
         )
         var interruptedByFaceLost = false
         for ((index, segment) in presentationSegments.withIndex()) {
@@ -1618,7 +1664,7 @@ private fun BimodalSession(
                 interruptedByFaceLost = true
                 break
             }
-            val segmentContext = if (playInitialGreeting && index < 2) {
+            val segmentContext = if (index < greetingSegmentCount) {
                 VoiceContext.GREETING
             } else {
                 VoiceContext.QUESTION
@@ -1861,8 +1907,12 @@ private fun BimodalSession(
             // texto finalmente reproducido por el banco local.
             lastFeedbackMessage = GeneralTeacherFeedbackMessage(category, spokenText)
             Log.d(BIMODAL_VOICE_TAG, "feedback: categoria=$category mediacion=local")
+            // TTSV01-FIX02: con la voz preparada se reproduce el feedback del guion
+            // (positivo/apoyo/reintento o cierre) que quedo cacheado; el texto del
+            // banco sirve de respaldo solo cuando no hay voz preparada.
+            val preparedFeedbackText = preparedFeedbackTextFor(category, currentQuestion, activity)
             // Reproduce el feedback completo: SUSPENDE hasta que el audio termina.
-            speakAndAwait(spokenText, voiceContextForFeedback(category))
+            speakAndAwait(spokenText, voiceContextForFeedback(category), preparedText = preparedFeedbackText)
         }
 
         // 3) Solo despues de que la retroalimentacion termino por completo, decide el
@@ -1881,7 +1931,13 @@ private fun BimodalSession(
                 lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
                 lastMediationFallbackReason = null
                 Log.d(BIMODAL_VOICE_TAG, "cierre: mediacion=local")
-                speakAndAwait(closingText, VoiceContext.CLOSING)
+                // TTSV01-FIX02: el cierre usa el texto preparado del guion
+                // (generatedClosingText) para reproducirse desde cache sin red.
+                speakAndAwait(
+                    closingText,
+                    VoiceContext.CLOSING,
+                    preparedText = activity.generatedClosingText
+                )
                 dispatch { orchestrator.moveToNextQuestion() }
             }
             BimodalAutoAction.NONE -> Unit
@@ -3745,6 +3801,36 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
+
+/**
+ * TTSV01-FIX02: texto preparado del guion para reproducir una categoria de
+ * retroalimentacion desde cache. Devuelve el campo persistido correspondiente
+ * (feedback positivo, de apoyo, reintento, intro o cierre) o null si la categoria
+ * no tiene un texto preparado equivalente (p. ej. introducciones genericas, que
+ * quedan a cargo del banco dinamico). Es codigo puro para poder probarse.
+ */
+internal fun preparedFeedbackTextFor(
+    category: GeneralTeacherFeedbackType,
+    question: LearningQuestion?,
+    activity: LearningActivity
+): String? = when (category) {
+    GeneralTeacherFeedbackType.CORRECT -> question?.positiveFeedbackText
+    GeneralTeacherFeedbackType.INCORRECT_RETRY,
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY,
+    GeneralTeacherFeedbackType.NO_RESPONSE_RETRY,
+    GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY,
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY ->
+        question?.retryPromptText ?: question?.supportiveFeedbackText
+    GeneralTeacherFeedbackType.INCORRECT_NEXT,
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT,
+    GeneralTeacherFeedbackType.NO_RESPONSE_NEXT,
+    GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT,
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT ->
+        question?.supportiveFeedbackText
+    GeneralTeacherFeedbackType.SESSION_COMPLETED -> activity.generatedClosingText
+    GeneralTeacherFeedbackType.SESSION_START -> activity.generatedIntroText
+    GeneralTeacherFeedbackType.QUESTION_INTRO -> null
+}?.takeIf { it.isNotBlank() }
 
 private fun voiceContextForFeedback(type: GeneralTeacherFeedbackType): VoiceContext = when (type) {
     GeneralTeacherFeedbackType.CORRECT -> VoiceContext.FEEDBACK_CORRECT

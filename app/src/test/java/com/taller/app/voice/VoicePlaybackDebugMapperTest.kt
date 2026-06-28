@@ -69,6 +69,17 @@ class VoicePlaybackDebugMapperTest {
     }
 
     @Test
+    fun preparedLineInCacheOnlyHitReportsCacheHitAndCacheOnly() {
+        val info = VoicePlaybackDebugMapper.fromOutcome(
+            outcome = completed(ToyVoiceProviderType.GEMINI_TTS, cacheHit = true, voiceContext = VoiceContext.CLOSING),
+            playbackMode = VoicePlaybackMode.CACHE_ONLY
+        )
+        assertEquals(VoicePlaybackSource.CACHE_HIT, info.source)
+        assertEquals(VoicePlaybackMode.CACHE_ONLY, info.playbackMode)
+        assertEquals("CLOSING", info.lineType)
+    }
+
+    @Test
     fun cacheMissSynthesisMapsToNetworkSynthesis() {
         val info = VoicePlaybackDebugMapper.fromOutcome(
             outcome = completed(ToyVoiceProviderType.GEMINI_TTS, cacheHit = false),

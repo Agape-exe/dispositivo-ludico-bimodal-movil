@@ -22,7 +22,10 @@ fun ActivityEntity.toDomain(questions: List<LearningQuestion> = emptyList()): Le
         id = id.toString(),
         title = name,
         mode = runCatching { OperationMode.valueOf(operationMode) }.getOrDefault(OperationMode.CLASSIC),
-        questions = questions
+        questions = questions,
+        generatedIntroText = generatedIntroText,
+        generatedClosingText = generatedClosingText,
+        voicePrepReady = voicePrepStatus == "READY"
     )
 
 fun LearningQuestion.toEntity(activityId: Long, orderIndex: Int): QuestionEntity = QuestionEntity(
@@ -46,5 +49,9 @@ fun QuestionEntity.toDomain(): LearningQuestion = LearningQuestion(
     keywords = keywords.split(",").map { it.trim() }.filter { it.isNotEmpty() },
     maxTimeSeconds = maxTimeSeconds,
     maxAttempts = maxAttempts,
-    mediationKey = mediationKey
+    mediationKey = mediationKey,
+    childFriendlyQuestionText = childFriendlyQuestionText,
+    positiveFeedbackText = positiveFeedbackText,
+    supportiveFeedbackText = supportiveFeedbackText,
+    retryPromptText = retryPromptText
 )
