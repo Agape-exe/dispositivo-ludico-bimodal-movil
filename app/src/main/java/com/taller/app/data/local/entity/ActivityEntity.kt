@@ -24,5 +24,13 @@ data class ActivityEntity(
     val generatedToneNotes: String? = null,
     val generatedPedagogicalWarnings: String? = null,
     val scriptStatus: String = "NOT_GENERATED",
-    val scriptUpdatedAt: Long? = null
+    val scriptUpdatedAt: Long? = null,
+    // TTSV01: estado de la voz pre-generada y cacheada de la sesion.
+    val voicePrepStatus: String = "NOT_PREPARED",
+    val voicePrepUpdatedAt: Long? = null,
+    val voicePrepProvider: String? = null,
+    val voicePrepVoice: String? = null,
+    val voicePrepReadyCount: Int = 0,
+    val voicePrepTotalCount: Int = 0,
+    val voicePrepLastError: String? = null
 )

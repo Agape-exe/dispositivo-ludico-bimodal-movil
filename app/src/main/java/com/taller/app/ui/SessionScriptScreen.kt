@@ -21,7 +21,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +50,19 @@ import com.taller.app.gpt.script.SessionScriptGenerator
 import com.taller.app.gpt.script.SessionScriptInput
 import com.taller.app.gpt.script.SessionScriptInputFactory
 import com.taller.app.gpt.script.SessionScriptValidator
+import com.taller.app.voice.SevenVoiceServiceFactory
+import com.taller.app.voice.ToySpeechService
+import com.taller.app.voice.ToySpeechState
+import com.taller.app.voice.ToyVoiceSettings
+import com.taller.app.voice.ToyVoiceSettingsRepository
+import com.taller.app.voice.neural.GeminiTtsConfig
+import com.taller.app.voice.prep.SessionVoiceLines
+import com.taller.app.voice.prep.SessionVoicePreparer
+import com.taller.app.voice.prep.SessionVoiceSourceFactory
+import com.taller.app.voice.prep.VoicePrepProgress
+import com.taller.app.voice.prep.VoicePrepStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -78,6 +92,28 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
     val gptSettingsRepository = remember { GptSettingsRepository(context.applicationContext) }
     val scope = rememberCoroutineScope()
 
+    // Voz de Seven para la preparacion previa (TTSV01). Se reutiliza el motor local
+    // y la cadena de proveedores estandar; se libera al salir de la pantalla.
+    val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
+    val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
+    val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
+    val toySpeechService = remember { ToySpeechService(context) }
+    val sevenVoiceService = remember {
+        SevenVoiceServiceFactory.create(
+            context = context,
+            ttsStateFlow = ttsStateFlow,
+            toySpeechService = toySpeechService,
+            settingsProvider = { voiceSettings }
+        )
+    }
+    DisposableEffect(Unit) {
+        toySpeechService.initialize { newState -> ttsStateFlow.value = newState }
+        onDispose {
+            toySpeechService.shutdown()
+            sevenVoiceService.release()
+        }
+    }
+
     var activity by remember { mutableStateOf<ActivityEntity?>(null) }
     var questions by remember { mutableStateOf<List<QuestionEntity>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -93,6 +129,12 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
     var working by remember { mutableStateOf(false) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var issues by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Estado de la preparacion de voz (TTSV01).
+    var voicePrepStatus by remember { mutableStateOf(VoicePrepStatus.NOT_PREPARED) }
+    var voicePrepWorking by remember { mutableStateOf(false) }
+    var voicePrepProgress by remember { mutableStateOf<VoicePrepProgress?>(null) }
+    var voicePrepMessage by remember { mutableStateOf<String?>(null) }
 
     fun loadDraftsFrom(qs: List<QuestionEntity>) {
         drafts.clear()
@@ -168,6 +210,75 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
         return SessionScriptInputFactory.from(act, questions)
     }
 
+    // TTSV01: pre-genera y cachea la voz de la sesion. Exige guion revisado, evita
+    // duplicados (la cache reutiliza audios existentes) y persiste el estado.
+    fun prepareVoice() {
+        if (voicePrepWorking) return
+        voicePrepMessage = null
+        scope.launch {
+            val act = activityDao.getById(activityId)
+            val qs = questionDao.getByActivityIdOnce(activityId)
+            if (act == null) {
+                voicePrepMessage = "La sesión no existe o fue desactivada."
+                return@launch
+            }
+            val reviewed = ScriptStatus.fromStorage(act.scriptStatus) == ScriptStatus.REVIEWED &&
+                qs.isNotEmpty() && qs.all { it.scriptReviewed }
+            if (!reviewed) {
+                voicePrepMessage = "Primero revisa y aprueba el guion de Seven."
+                return@launch
+            }
+            val lines = SessionVoiceLines.collect(SessionVoiceSourceFactory.from(act, qs))
+            if (lines.isEmpty()) {
+                voicePrepMessage = "No hay frases para preparar en esta sesión."
+                return@launch
+            }
+
+            voicePrepWorking = true
+            voicePrepStatus = VoicePrepStatus.PREPARING
+            voicePrepProgress = VoicePrepProgress(total = lines.size, ready = 0, failed = 0)
+            val now = System.currentTimeMillis()
+            val voiceName = GeminiTtsConfig.fromBuild(voiceSettings.geminiVoiceName).voiceName
+            activityDao.updateVoicePrep(
+                id = activityId,
+                status = VoicePrepStatus.PREPARING.storageValue,
+                updatedAt = now,
+                provider = null,
+                voice = voiceName,
+                readyCount = 0,
+                totalCount = lines.size,
+                lastError = null
+            )
+
+            val preparer = SessionVoicePreparer(sevenVoiceService.asLineSynthesizer())
+            val outcome = preparer.prepare(lines) { progress ->
+                voicePrepProgress = progress
+            }
+
+            voicePrepStatus = outcome.status
+            voicePrepWorking = false
+            voicePrepMessage = when (outcome.status) {
+                VoicePrepStatus.READY ->
+                    "Voz de Seven lista. Ya puedes usar esta sesión."
+                VoicePrepStatus.PARTIAL ->
+                    "Faltan ${outcome.missingCount} audios por preparar. Vuelve a intentar para completarlos."
+                else ->
+                    outcome.lastError?.let { "No se pudo preparar la voz. $it" }
+                        ?: "No se pudo preparar la voz. Revisa la conexión e inténtalo otra vez."
+            }
+            activityDao.updateVoicePrep(
+                id = activityId,
+                status = outcome.status.storageValue,
+                updatedAt = System.currentTimeMillis(),
+                provider = outcome.providerUsed?.name,
+                voice = voiceName,
+                readyCount = outcome.readyCount,
+                totalCount = outcome.totalCount,
+                lastError = outcome.lastError?.take(200)
+            )
+        }
+    }
+
     LaunchedEffect(activityId) {
         val found = activityDao.getById(activityId)
         if (found == null) {
@@ -177,6 +288,14 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
         }
         activity = found
         status = ScriptStatus.fromStorage(found.scriptStatus)
+        voicePrepStatus = VoicePrepStatus.fromStorage(found.voicePrepStatus)
+        if (found.voicePrepTotalCount > 0) {
+            voicePrepProgress = VoicePrepProgress(
+                total = found.voicePrepTotalCount,
+                ready = found.voicePrepReadyCount,
+                failed = (found.voicePrepTotalCount - found.voicePrepReadyCount).coerceAtLeast(0)
+            )
+        }
         intro = found.generatedIntroText.orEmpty()
         closing = found.generatedClosingText.orEmpty()
         toneNotes = found.generatedToneNotes.orEmpty()
@@ -331,6 +450,17 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
                     )
                 }
 
+                if (questions.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    VoicePreparationSection(
+                        status = voicePrepStatus,
+                        working = voicePrepWorking,
+                        progress = voicePrepProgress,
+                        message = voicePrepMessage,
+                        onPrepare = { prepareVoice() }
+                    )
+                }
+
                 BottomBackButton(
                     onClick = onBack,
                     modifier = Modifier
@@ -452,6 +582,85 @@ private fun IssuesCard(issues: List<String>) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun VoicePreparationSection(
+    status: VoicePrepStatus,
+    working: Boolean,
+    progress: VoicePrepProgress?,
+    message: String?,
+    onPrepare: () -> Unit
+) {
+    Text(
+        text = "Voz de Seven",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = TeacherPrimaryPurple
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+        text = "Prepara y guarda la voz de Seven para esta sesión. Durante la sesión " +
+            "con los niños se reproduce desde la memoria del dispositivo, sin conexión.",
+        style = MaterialTheme.typography.bodySmall,
+        color = TeacherSecondaryTextColor
+    )
+    Spacer(modifier = Modifier.height(12.dp))
+
+    val (label, color) = when (status) {
+        VoicePrepStatus.NOT_PREPARED -> "Voz sin preparar" to TeacherSecondaryTextColor
+        VoicePrepStatus.PREPARING -> "Preparando voz…" to TeacherPrimaryPurple
+        VoicePrepStatus.READY -> "Voz lista" to TeacherDarkPurple
+        VoicePrepStatus.PARTIAL -> "Voz incompleta" to TeacherPrimaryPurple
+        VoicePrepStatus.FAILED -> "No se pudo preparar la voz" to MaterialTheme.colorScheme.error
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = TeacherCardLavender),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Estado: $label",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = color
+            )
+            if (progress != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Audios listos: ${progress.ready} de ${progress.total} · " +
+                        "Pendientes: ${progress.pending}" +
+                        if (progress.failed > 0) " · Con problema: ${progress.failed}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TeacherSecondaryTextColor
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    val buttonLabel = when {
+        working -> {
+            val count = progress?.let { " (${it.ready + it.failed}/${it.total})" } ?: ""
+            "Preparando voz…$count"
+        }
+        status == VoicePrepStatus.READY -> "Volver a preparar voz de Seven"
+        status == VoicePrepStatus.PARTIAL || status == VoicePrepStatus.FAILED ->
+            "Reintentar preparación de voz"
+        else -> "Preparar voz de Seven"
+    }
+    PastelActionButton(
+        text = buttonLabel,
+        onClick = { if (!working) onPrepare() },
+        modifier = Modifier.fillMaxWidth()
+    )
+
+    message?.let {
+        Spacer(modifier = Modifier.height(12.dp))
+        InfoCard(it)
     }
 }
 

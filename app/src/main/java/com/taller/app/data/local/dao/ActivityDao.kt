@@ -48,4 +48,26 @@ interface ActivityDao {
         scriptStatus: String,
         scriptUpdatedAt: Long
     )
+
+    @Query(
+        "UPDATE activities SET " +
+            "voicePrepStatus = :status, " +
+            "voicePrepUpdatedAt = :updatedAt, " +
+            "voicePrepProvider = :provider, " +
+            "voicePrepVoice = :voice, " +
+            "voicePrepReadyCount = :readyCount, " +
+            "voicePrepTotalCount = :totalCount, " +
+            "voicePrepLastError = :lastError " +
+            "WHERE id = :id"
+    )
+    suspend fun updateVoicePrep(
+        id: Long,
+        status: String,
+        updatedAt: Long,
+        provider: String?,
+        voice: String?,
+        readyCount: Int,
+        totalCount: Int,
+        lastError: String?
+    )
 }
