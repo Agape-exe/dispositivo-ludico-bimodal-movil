@@ -16,10 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -28,8 +25,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,9 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.taller.app.data.local.AppDatabase
@@ -289,23 +282,14 @@ private fun ActivityFormView(
     var description by remember(key) { mutableStateOf(existing?.description ?: "") }
     var ageLevel by remember(key) { mutableStateOf(existing?.ageLevel ?: "") }
     var classContextNotes by remember(key) { mutableStateOf(existing?.classContextNotes ?: "") }
-    var operationMode by remember(key) { mutableStateOf(existing?.operationMode ?: "") }
-    var maxTimeSeconds by remember(key) { mutableStateOf(existing?.maxTimeSeconds?.toString() ?: "60") }
-    var maxAttempts by remember(key) { mutableStateOf(existing?.maxAttempts?.toString() ?: "3") }
 
     var nameError by remember(key) { mutableStateOf(false) }
     var topicError by remember(key) { mutableStateOf(false) }
-    var modeError by remember(key) { mutableStateOf(false) }
-    var timeError by remember(key) { mutableStateOf(false) }
-    var attemptsError by remember(key) { mutableStateOf(false) }
 
     fun validate(): Boolean {
         nameError = name.isBlank()
         topicError = topic.isBlank()
-        modeError = operationMode.isEmpty()
-        timeError = maxTimeSeconds.toIntOrNull()?.let { it <= 0 } ?: true
-        attemptsError = maxAttempts.toIntOrNull()?.let { it <= 0 } ?: true
-        return !nameError && !topicError && !modeError && !timeError && !attemptsError
+        return !nameError && !topicError
     }
 
     TeacherPanelContainer(
@@ -374,72 +358,6 @@ private fun ActivityFormView(
             singleLine = false,
             minLines = 3
         )
-        Spacer(modifier = Modifier.height(26.dp))
-
-        Text(
-            text = "Configuración de la sesión",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = TeacherPrimaryPurple
-        )
-        Spacer(modifier = Modifier.height(14.dp))
-        Text(
-            text = "Modo de operación *",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (modeError) MaterialTheme.colorScheme.error else TeacherPrimaryPurple
-        )
-        Column(modifier = Modifier.selectableGroup()) {
-            listOf("CLASSIC" to "Clásico (temporizador)", "ADVANCED" to "Inteligente (cámara + voz)").forEach { (value, label) ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .selectable(
-                            selected = operationMode == value,
-                            onClick = {
-                                operationMode = value
-                                modeError = false
-                            },
-                            role = Role.RadioButton
-                        )
-                        .padding(vertical = 3.dp)
-                ) {
-                    RadioButton(
-                        selected = operationMode == value,
-                        onClick = null,
-                        colors = RadioButtonDefaults.colors(selectedColor = TeacherPrimaryPurple)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(label, color = TeacherTextColor)
-                }
-            }
-        }
-        if (modeError) {
-            Text(
-                text = "Selecciona un modo de operación",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
-            value = maxTimeSeconds,
-            onValueChange = { maxTimeSeconds = it; timeError = false },
-            label = "Tiempo máximo por pregunta (s) *",
-            isError = timeError,
-            supportingText = if (timeError) "Debe ser un número mayor que 0" else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
-            value = maxAttempts,
-            onValueChange = { maxAttempts = it; attemptsError = false },
-            label = "Número máximo de intentos *",
-            isError = attemptsError,
-            supportingText = if (attemptsError) "Debe ser un número mayor que 0" else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-        )
         Spacer(modifier = Modifier.height(28.dp))
 
         PastelActionButton(
@@ -456,9 +374,9 @@ private fun ActivityFormView(
                             objective = objective.trim().ifEmpty { null },
                             ageLevel = ageLevel.trim().ifEmpty { null },
                             classContextNotes = classContextNotes.trim().ifEmpty { null },
-                            operationMode = operationMode,
-                            maxTimeSeconds = maxTimeSeconds.toInt(),
-                            maxAttempts = maxAttempts.toInt(),
+                            operationMode = existing?.operationMode ?: "",
+                            maxTimeSeconds = existing?.maxTimeSeconds ?: 60,
+                            maxAttempts = existing?.maxAttempts ?: 3,
                             isActive = existing?.isActive ?: true,
                             createdAt = existing?.createdAt ?: now,
                             updatedAt = now
