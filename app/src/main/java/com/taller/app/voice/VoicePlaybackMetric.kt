@@ -28,6 +28,7 @@ enum class VoiceContext {
     FEEDBACK_INCORRECT,
     FEEDBACK_RETRY,
     NOT_INTERPRETABLE,
+    RECAPTURE,
     CLOSING,
     COUNTDOWN,
     UNKNOWN

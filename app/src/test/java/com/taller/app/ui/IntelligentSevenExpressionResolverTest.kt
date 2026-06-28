@@ -5,6 +5,8 @@ import com.taller.app.attention.AttentionState
 import com.taller.app.bimodal.BimodalInteractionState
 import com.taller.app.gpt.GptConfig
 import com.taller.app.voice.ToyVoiceProviderType
+import com.taller.app.voice.VoiceContext
+import com.taller.app.voice.VoiceErrorType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -279,6 +281,147 @@ class IntelligentSevenExpressionResolverTest {
         assertTrue(label.contains("TTS preferido: Android local / es-PE"))
         assertTrue(label.contains("TTS ultimo usado: Android local"))
         assertTrue(label.contains("GPT: no configurado"))
+    }
+
+    // ----- AUD01.1: contexto, motivo y estado del debug TTS ----------------------
+
+    @Test
+    fun ttsContextLabel_mapsEachVoiceContextToSafeShortLabel() {
+        assertEquals("INTRO", ttsContextLabel(VoiceContext.GREETING))
+        assertEquals("QUESTION", ttsContextLabel(VoiceContext.QUESTION))
+        assertEquals("FEEDBACK", ttsContextLabel(VoiceContext.FEEDBACK_CORRECT))
+        assertEquals("FEEDBACK", ttsContextLabel(VoiceContext.FEEDBACK_INCORRECT))
+        assertEquals("FEEDBACK", ttsContextLabel(VoiceContext.FEEDBACK_RETRY))
+        assertEquals("FEEDBACK", ttsContextLabel(VoiceContext.NOT_INTERPRETABLE))
+        assertEquals("RECAPTURE", ttsContextLabel(VoiceContext.RECAPTURE))
+        assertEquals("CLOSING", ttsContextLabel(VoiceContext.CLOSING))
+        assertEquals("UNKNOWN", ttsContextLabel(VoiceContext.UNKNOWN))
+        assertEquals("UNKNOWN", ttsContextLabel(null))
+    }
+
+    @Test
+    fun ttsFallbackReason_isNoneWhenPreferredProviderUsedWithoutError() {
+        assertEquals("NONE", ttsFallbackReasonLabel(providerUsedIsPreferred = true, errorType = null))
+    }
+
+    @Test
+    fun ttsFallbackReason_mapsGeminiErrorsToSafeCodes() {
+        assertEquals(
+            "GEMINI_TIMEOUT",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.TIMEOUT)
+        )
+        assertEquals(
+            "GEMINI_HTTP_ERROR",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.HTTP_429)
+        )
+        assertEquals(
+            "GEMINI_HTTP_ERROR",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.HTTP_ERROR)
+        )
+        assertEquals(
+            "GEMINI_EMPTY_AUDIO",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.RESPONSE_WITHOUT_AUDIO)
+        )
+        assertEquals(
+            "GEMINI_INVALID_AUDIO",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.INVALID_AUDIO)
+        )
+        assertEquals(
+            "TEXT_VALIDATION_FAILED",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.INVALID_TTS_TEXT)
+        )
+        assertEquals(
+            "PROVIDER_NOT_CONFIGURED",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.NOT_CONFIGURED)
+        )
+        assertEquals(
+            "UNKNOWN",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.UNKNOWN)
+        )
+    }
+
+    @Test
+    fun debugPanelTts_showsContextReasonAndLatencyOnFallback() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "OpenAI",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = true,
+            ttsStatus = "FALLBACK_USED",
+            ttsContextLabel = "QUESTION",
+            ttsFallbackReason = "GEMINI_HTTP_ERROR",
+            ttsLatencyMs = 2400L,
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("TTS preferido: Gemini / Puck"))
+        assertTrue(label.contains("TTS ultimo usado: OpenAI"))
+        assertTrue(label.contains("Contexto: QUESTION"))
+        assertTrue(label.contains("Fallback voz: Si"))
+        assertTrue(label.contains("Motivo fallback: GEMINI_HTTP_ERROR"))
+        assertTrue(label.contains("Latencia: 2400 ms"))
+        assertTrue(label.contains("Estado: FALLBACK_USED"))
+    }
+
+    @Test
+    fun debugPanelTts_showsShortHistoryWithoutSpokenTextOrApiKey() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "Gemini",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = false,
+            ttsStatus = "OK",
+            ttsContextLabel = "FEEDBACK",
+            ttsFallbackReason = "NONE",
+            ttsLatencyMs = 900L,
+            ttsHistory = listOf(
+                "INTRO → Gemini / OK / 820 ms",
+                "QUESTION → OpenAI / FALLBACK_USED / GEMINI_HTTP_ERROR / 2400 ms",
+                "FEEDBACK → Gemini / OK / 900 ms"
+            ),
+            showGpt = false,
+            gptConfig = gptConfig(apiKey = "credential-value"),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("Ultimas voces:"))
+        assertTrue(label.contains("1. INTRO → Gemini / OK / 820 ms"))
+        assertTrue(label.contains("2. QUESTION → OpenAI / FALLBACK_USED / GEMINI_HTTP_ERROR / 2400 ms"))
+        assertTrue(label.contains("3. FEEDBACK → Gemini / OK / 900 ms"))
+        // Privacidad: el historial nunca contiene el texto hablado ni la API key.
+        assertFalse(label.contains("Hola"))
+        assertFalse(label.contains("credential-value"))
+    }
+
+    @Test
+    fun debugPanelTts_defaultsAreSafeWhenNoVoiceYet() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = null,
+            ttsVoice = "Puck",
+            ttsFallbackUsed = null,
+            ttsStatus = "Sin probar",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("TTS ultimo usado: —"))
+        assertTrue(label.contains("Contexto: —"))
+        assertTrue(label.contains("Motivo fallback: NONE"))
+        assertTrue(label.contains("Latencia: —"))
+        assertFalse(label.contains("Ultimas voces:"))
     }
 
     private fun snapshot(state: AttentionState): AttentionSnapshot {
