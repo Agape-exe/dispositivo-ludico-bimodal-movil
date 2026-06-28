@@ -180,7 +180,7 @@ private fun QuestionListView(
     TeacherPanelContainer(modifier = Modifier.navigationBarsPadding()) {
         Spacer(modifier = Modifier.height(38.dp))
         SectionTitle(
-            text = "Preguntas",
+            text = "Preguntas de la sesión",
             centered = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -264,7 +264,7 @@ private fun TeacherQuestionCard(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Respuesta esperada:",
+                text = "Respuesta de referencia:",
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = TeacherPrimaryPurple
@@ -375,20 +375,24 @@ private fun QuestionFormView(
         PastelTextField(
             value = expectedAnswer,
             onValueChange = { expectedAnswer = it; expectedAnswerError = false },
-            label = "Respuesta esperada principal *",
+            label = "Respuesta de referencia *",
             isError = expectedAnswerError,
-            supportingText = if (expectedAnswerError) "La respuesta esperada es obligatoria" else null
+            supportingText = if (expectedAnswerError) {
+                "La respuesta de referencia es obligatoria"
+            } else {
+                "Respuesta óptima sugerida. Seven puede aceptar equivalentes."
+            }
         )
         Spacer(modifier = Modifier.height(12.dp))
         PastelTextField(
             value = keywords,
             onValueChange = { keywords = it; keywordsError = false },
-            label = "Palabras clave *",
+            label = "Palabras o frases adicionales *",
             isError = keywordsError,
             supportingText = if (keywordsError) {
-                "Ingresa al menos una palabra clave"
+                "Ingresa al menos una palabra o frase adicional"
             } else {
-                "Separa las respuestas válidas con comas."
+                "Otras formas válidas de responder. Sepáralas con comas."
             },
             placeholder = "ej: guau, ladra, ladrido",
             singleLine = false,

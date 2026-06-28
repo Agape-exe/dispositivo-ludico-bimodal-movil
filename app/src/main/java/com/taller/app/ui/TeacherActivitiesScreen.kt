@@ -21,6 +21,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -30,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -78,7 +80,10 @@ fun TeacherActivitiesScreen(onBack: () -> Unit, onNavigateToQuestions: (Long) ->
                 editingActivity = it
                 view = TeacherView.FORM
             },
-            onManageQuestions = { onNavigateToQuestions(it.id) }
+            onManageQuestions = { onNavigateToQuestions(it.id) },
+            onDeactivate = { activity ->
+                scope.launch { dao.setActive(activity.id, false) }
+            }
         )
 
         TeacherView.FORM -> ActivityFormView(
@@ -100,18 +105,52 @@ private fun ActivityListView(
     onBack: () -> Unit,
     onCreate: () -> Unit,
     onEdit: (ActivityEntity) -> Unit,
-    onManageQuestions: (ActivityEntity) -> Unit
+    onManageQuestions: (ActivityEntity) -> Unit,
+    onDeactivate: (ActivityEntity) -> Unit
 ) {
+    var activityToDeactivate by remember { mutableStateOf<ActivityEntity?>(null) }
+
+    activityToDeactivate?.let { activity ->
+        AlertDialog(
+            onDismissRequest = { activityToDeactivate = null },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = Color.White,
+            title = { Text("Desactivar sesión", color = TeacherTitleColor) },
+            text = {
+                Text(
+                    "¿Deseas desactivar \"${activity.name}\"? " +
+                        "La sesión dejará de aparecer en las listas. " +
+                        "El historial de registros se conserva."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeactivate(activity)
+                        activityToDeactivate = null
+                    }
+                ) {
+                    Text("Desactivar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { activityToDeactivate = null }) {
+                    Text("Cancelar", color = TeacherPrimaryPurple)
+                }
+            }
+        )
+    }
+
     TeacherPanelContainer(modifier = Modifier.navigationBarsPadding()) {
         Spacer(modifier = Modifier.height(38.dp))
         SectionTitle(
-            text = "Gestión de\nActividades",
+            text = "Gestión de\nSesiones",
             centered = true,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(22.dp))
         PastelActionButton(
-            text = "+ Nueva actividad",
+            text = "+ Nueva sesión",
             onClick = onCreate,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
@@ -125,7 +164,7 @@ private fun ActivityListView(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "No hay actividades guardadas.\nCrea la primera actividad para comenzar.",
+                    text = "No hay sesiones guardadas.\nCrea la primera sesión para comenzar.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = TeacherSecondaryTextColor,
                     textAlign = TextAlign.Center
@@ -142,7 +181,8 @@ private fun ActivityListView(
                     TeacherActivityCard(
                         activity = activity,
                         onEdit = { onEdit(activity) },
-                        onManageQuestions = { onManageQuestions(activity) }
+                        onManageQuestions = { onManageQuestions(activity) },
+                        onDeactivate = { activityToDeactivate = activity }
                     )
                 }
                 item { Spacer(modifier = Modifier.height(4.dp)) }
@@ -163,7 +203,8 @@ private fun ActivityListView(
 private fun TeacherActivityCard(
     activity: ActivityEntity,
     onEdit: () -> Unit,
-    onManageQuestions: () -> Unit
+    onManageQuestions: () -> Unit,
+    onDeactivate: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -184,6 +225,14 @@ private fun TeacherActivityCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = TeacherSecondaryTextColor
             )
+            if (!activity.ageLevel.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Edad: ${activity.ageLevel}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TeacherSecondaryTextColor
+                )
+            }
             Spacer(modifier = Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
@@ -210,6 +259,19 @@ private fun TeacherActivityCard(
                     Text("Preguntas", fontWeight = FontWeight.SemiBold)
                 }
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onDeactivate,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                border = null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Desactivar sesión", fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -226,6 +288,7 @@ private fun ActivityFormView(
     var objective by remember(key) { mutableStateOf(existing?.objective ?: "") }
     var description by remember(key) { mutableStateOf(existing?.description ?: "") }
     var ageLevel by remember(key) { mutableStateOf(existing?.ageLevel ?: "") }
+    var classContextNotes by remember(key) { mutableStateOf(existing?.classContextNotes ?: "") }
     var operationMode by remember(key) { mutableStateOf(existing?.operationMode ?: "") }
     var maxTimeSeconds by remember(key) { mutableStateOf(existing?.maxTimeSeconds?.toString() ?: "60") }
     var maxAttempts by remember(key) { mutableStateOf(existing?.maxAttempts?.toString() ?: "3") }
@@ -253,7 +316,7 @@ private fun ActivityFormView(
     ) {
         Spacer(modifier = Modifier.height(34.dp))
         TeacherFormHeader(
-            title = if (existing == null) "Nueva actividad" else "Editar actividad",
+            title = if (existing == null) "Nueva sesión" else "Editar sesión",
             onCancel = onCancel
         )
         Spacer(modifier = Modifier.height(26.dp))
@@ -261,7 +324,7 @@ private fun ActivityFormView(
         PastelTextField(
             value = name,
             onValueChange = { name = it; nameError = false },
-            label = "Nombre *",
+            label = "Nombre de la sesión *",
             isError = nameError,
             supportingText = if (nameError) "El nombre es obligatorio" else null
         )
@@ -275,22 +338,22 @@ private fun ActivityFormView(
         )
         Spacer(modifier = Modifier.height(12.dp))
         PastelTextField(
-            value = objective,
-            onValueChange = { objective = it },
-            label = "Objetivo"
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
             value = description,
             onValueChange = { description = it },
             label = "Descripción",
             singleLine = false,
-            minLines = 4
+            minLines = 3
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
+            value = objective,
+            onValueChange = { objective = it },
+            label = "Objetivo"
         )
         Spacer(modifier = Modifier.height(26.dp))
 
         Text(
-            text = "Configuración adicional",
+            text = "Datos de la clase",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = TeacherPrimaryPurple
@@ -299,9 +362,27 @@ private fun ActivityFormView(
         PastelTextField(
             value = ageLevel,
             onValueChange = { ageLevel = it },
-            label = "Edad / Nivel"
+            label = "Rango de edad de los niños",
+            supportingText = "Ej: 3 años, 4–5 años, 3 a 5 años"
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        PastelTextField(
+            value = classContextNotes,
+            onValueChange = { classContextNotes = it },
+            label = "Contexto / notas del grupo",
+            supportingText = "Ej: grupo A, nivel inicial, observaciones relevantes",
+            singleLine = false,
+            minLines = 3
+        )
+        Spacer(modifier = Modifier.height(26.dp))
+
+        Text(
+            text = "Configuración de la sesión",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = TeacherPrimaryPurple
+        )
+        Spacer(modifier = Modifier.height(14.dp))
         Text(
             text = "Modo de operación *",
             style = MaterialTheme.typography.bodyMedium,
@@ -309,7 +390,7 @@ private fun ActivityFormView(
             color = if (modeError) MaterialTheme.colorScheme.error else TeacherPrimaryPurple
         )
         Column(modifier = Modifier.selectableGroup()) {
-            listOf("CLASSIC" to "Clásico", "ADVANCED" to "Avanzado").forEach { (value, label) ->
+            listOf("CLASSIC" to "Clásico (temporizador)", "ADVANCED" to "Inteligente (cámara + voz)").forEach { (value, label) ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -362,7 +443,7 @@ private fun ActivityFormView(
         Spacer(modifier = Modifier.height(28.dp))
 
         PastelActionButton(
-            text = if (existing == null) "Crear actividad" else "Editar actividad",
+            text = if (existing == null) "Crear sesión" else "Guardar cambios",
             onClick = {
                 if (validate()) {
                     val now = System.currentTimeMillis()
@@ -374,9 +455,11 @@ private fun ActivityFormView(
                             description = description.trim().ifEmpty { null },
                             objective = objective.trim().ifEmpty { null },
                             ageLevel = ageLevel.trim().ifEmpty { null },
+                            classContextNotes = classContextNotes.trim().ifEmpty { null },
                             operationMode = operationMode,
                             maxTimeSeconds = maxTimeSeconds.toInt(),
                             maxAttempts = maxAttempts.toInt(),
+                            isActive = existing?.isActive ?: true,
                             createdAt = existing?.createdAt ?: now,
                             updatedAt = now
                         )

@@ -11,9 +11,11 @@ data class ActivityEntity(
     val description: String? = null,
     val objective: String? = null,
     val ageLevel: String? = null,
+    val classContextNotes: String? = null,
     val operationMode: String,
     val maxAttempts: Int,
     val maxTimeSeconds: Int,
+    val isActive: Boolean = true,
     val createdAt: Long,
     val updatedAt: Long
 )
