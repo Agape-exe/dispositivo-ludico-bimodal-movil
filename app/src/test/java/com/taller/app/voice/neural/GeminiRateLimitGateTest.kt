@@ -21,21 +21,32 @@ class GeminiRateLimitGateTest {
     }
 
     @Test
-    fun rateLimitActivatesDefaultCooldownWhenNoRetryAfter() {
+    fun rateLimitWithoutRetryAfter_doesNotBlockGemini() {
         val gate = gate()
+        // Google no indico cuanto esperar: la app no impone bloqueo propio.
         gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = null)
 
+        assertFalse(gate.isInCooldown())
+        assertEquals(0L, gate.remainingMs())
+        assertNull(gate.activeReason())
+    }
+
+    @Test
+    fun rateLimitWithRetryAfter_blocksOnlyForRequestedTime() {
+        val gate = gate()
+        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = 17_000L)
+
         assertTrue(gate.isInCooldown())
-        assertEquals(GeminiRateLimitGate.DEFAULT_COOLDOWN_MS, gate.remainingMs())
+        assertEquals(17_000L, gate.remainingMs())
         assertEquals(VoiceErrorType.RATE_LIMITED, gate.activeReason())
     }
 
     @Test
-    fun cooldownExpiresAfterDuration() {
+    fun cooldownExpiresExactlyAfterRequestedTime() {
         val gate = gate()
-        gate.registerRateLimit(VoiceErrorType.QUOTA_EXHAUSTED, retryAfterMs = null)
+        gate.registerRateLimit(VoiceErrorType.QUOTA_EXHAUSTED, retryAfterMs = 17_000L)
 
-        nowMs += GeminiRateLimitGate.DEFAULT_COOLDOWN_MS - 1L
+        nowMs += 16_999L
         assertTrue(gate.isInCooldown())
 
         nowMs += 1L
@@ -45,10 +56,12 @@ class GeminiRateLimitGateTest {
     }
 
     @Test
-    fun retryAfterIsRespectedWithinBounds() {
+    fun nonPositiveRetryAfter_doesNotBlock() {
         val gate = gate()
-        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = 120_000L)
-        assertEquals(120_000L, gate.remainingMs())
+        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = 0L)
+        assertFalse(gate.isInCooldown())
+        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = -5_000L)
+        assertFalse(gate.isInCooldown())
     }
 
     @Test
@@ -59,36 +72,28 @@ class GeminiRateLimitGateTest {
     }
 
     @Test
-    fun consecutiveRateLimitsExtendCooldownUpToMax() {
+    fun noBackoffEscalation_consecutive429sUseOnlyEachRequestedTime() {
         val gate = gate()
-        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED)
-        assertEquals(GeminiRateLimitGate.DEFAULT_COOLDOWN_MS, gate.remainingMs())
-
-        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED)
-        assertEquals(2 * GeminiRateLimitGate.DEFAULT_COOLDOWN_MS, gate.remainingMs())
-
-        repeat(10) { gate.registerRateLimit(VoiceErrorType.RATE_LIMITED) }
-        assertEquals(GeminiRateLimitGate.MAX_COOLDOWN_MS, gate.remainingMs())
+        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = 10_000L)
+        assertEquals(10_000L, gate.remainingMs())
+        // Un segundo 429 con el mismo retryDelay no se acumula ni escala.
+        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = 10_000L)
+        assertEquals(10_000L, gate.remainingMs())
     }
 
     @Test
-    fun successClearsCooldownAndConsecutiveCount() {
+    fun successClearsCooldown() {
         val gate = gate()
-        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED)
-        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED)
+        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED, retryAfterMs = 30_000L)
         gate.registerSuccess()
-
         assertFalse(gate.isInCooldown())
-        // Tras un exito, el contador de consecutivos se reinicia: un nuevo 429
-        // vuelve a empezar desde el cooldown por defecto.
-        gate.registerRateLimit(VoiceErrorType.RATE_LIMITED)
-        assertEquals(GeminiRateLimitGate.DEFAULT_COOLDOWN_MS, gate.remainingMs())
+        assertEquals(0L, gate.remainingMs())
     }
 
     @Test
     fun clearResetsCooldownImmediately() {
         val gate = gate()
-        gate.registerRateLimit(VoiceErrorType.QUOTA_EXHAUSTED)
+        gate.registerRateLimit(VoiceErrorType.QUOTA_EXHAUSTED, retryAfterMs = 30_000L)
         assertTrue(gate.isInCooldown())
 
         gate.clear()

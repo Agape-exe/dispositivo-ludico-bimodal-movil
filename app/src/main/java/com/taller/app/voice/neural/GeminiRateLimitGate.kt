@@ -3,26 +3,26 @@ package com.taller.app.voice.neural
 import com.taller.app.voice.VoiceErrorType
 
 /**
- * Compuerta de enfriamiento (cooldown) para Gemini TTS ante respuestas HTTP 429
- * (limite de cuota o rate limit del plan).
+ * Compuerta de enfriamiento (cooldown) para Gemini TTS ante respuestas HTTP 429.
  *
- * Cuando Gemini responde 429, no tiene sentido seguir golpeando el endpoint en cada
- * frase: cada intento gasta una llamada y vuelve a fallar, agregando latencia y
- * presionando aun mas el limite. Esta compuerta marca un periodo de enfriamiento
- * durante el cual el proveedor de Gemini omite la llamada de red y deja que la cadena
- * de respaldo use OpenAI directamente. Al vencer el enfriamiento, Gemini se vuelve a
- * intentar con normalidad; nunca se desactiva de forma permanente.
+ * Politica: **solo se respeta el tiempo de espera que el propio servidor de Google
+ * indique** (campo `retryDelay` del error o header `Retry-After`). La app no impone
+ * ningun bloqueo propio: si Google no pide esperar, Gemini se vuelve a intentar en la
+ * siguiente frase con normalidad. Asi, un 429 suelto (pico momentaneo) solo provoca
+ * el respaldo de esa frase, sin bloquear Gemini despues.
+ *
+ * Cuando Google si pide esperar, durante ese lapso el proveedor de Gemini omite la
+ * llamada de red y la cadena usa OpenAI; al vencer, Gemini se reintenta. Un `speak`
+ * exitoso o el boton "Reintentar Gemini TTS" limpian el enfriamiento. Gemini nunca se
+ * desactiva de forma permanente.
  *
  * Es independiente de Android y usa un reloj inyectable para poder probarse de forma
  * aislada. El proveedor real comparte una unica instancia ([shared]) porque el limite
- * de cuota aplica a la API key de todo el proceso, no a una pantalla concreta.
- *
- * No guarda audio, texto hablado ni datos sensibles: solo marcas de tiempo y el tipo
- * de error tecnico del limite.
+ * aplica a la API key de todo el proceso. No guarda audio ni texto hablado: solo una
+ * marca de tiempo y el tipo de error tecnico.
  */
 class GeminiRateLimitGate(
     private val now: () -> Long = { System.currentTimeMillis() },
-    private val defaultCooldownMs: Long = DEFAULT_COOLDOWN_MS,
     private val maxCooldownMs: Long = MAX_COOLDOWN_MS
 ) {
     @Volatile
@@ -31,10 +31,7 @@ class GeminiRateLimitGate(
     @Volatile
     private var lastReason: VoiceErrorType? = null
 
-    @Volatile
-    private var consecutiveHits: Int = 0
-
-    /** Indica si Gemini esta en enfriamiento y debe omitirse la llamada de red. */
+    /** Indica si Gemini esta en enfriamiento pedido por Google y debe omitirse la red. */
     @Synchronized
     fun isInCooldown(): Boolean = now() < cooldownUntilMs
 
@@ -47,19 +44,17 @@ class GeminiRateLimitGate(
     fun activeReason(): VoiceErrorType? = if (now() < cooldownUntilMs) lastReason else null
 
     /**
-     * Registra un 429 de Gemini y activa (o extiende) el enfriamiento.
-     *
-     * Si el servidor indico un tiempo de espera ([retryAfterMs]) se respeta, acotado
-     * entre el minimo por defecto y el maximo. Si no lo indico, el enfriamiento crece
-     * con cada 429 consecutivo (backoff lineal) hasta el maximo, para no insistir
-     * sobre un limite que sigue activo.
+     * Registra un 429 de Gemini. Solo activa enfriamiento si Google indico cuanto
+     * esperar ([retryAfterMs], de `Retry-After` o `retryDelay`); el valor se acota a
+     * un maximo de seguridad. Si Google no lo indico, **no se bloquea Gemini**: la
+     * siguiente frase volvera a intentarlo (solo se uso el respaldo en la frase del
+     * 429).
      */
     @Synchronized
     fun registerRateLimit(errorType: VoiceErrorType, retryAfterMs: Long? = null) {
-        consecutiveHits += 1
-        val base = retryAfterMs ?: (defaultCooldownMs * consecutiveHits)
-        val cooldown = base.coerceIn(defaultCooldownMs, maxCooldownMs)
-        cooldownUntilMs = now() + cooldown
+        val requested = retryAfterMs ?: return
+        if (requested <= 0L) return
+        cooldownUntilMs = now() + requested.coerceAtMost(maxCooldownMs)
         lastReason = errorType
     }
 
@@ -72,16 +67,15 @@ class GeminiRateLimitGate(
     fun clear() = reset()
 
     private fun reset() {
-        consecutiveHits = 0
         cooldownUntilMs = 0L
         lastReason = null
     }
 
     companion object {
-        const val DEFAULT_COOLDOWN_MS = 60_000L
+        /** Tope de seguridad por si Google enviara un retryDelay anomalo y enorme. */
         const val MAX_COOLDOWN_MS = 5 * 60_000L
 
-        /** Instancia compartida en todo el proceso (la cuota es por API key). */
+        /** Instancia compartida en todo el proceso (el limite es por API key). */
         val shared = GeminiRateLimitGate()
     }
 }

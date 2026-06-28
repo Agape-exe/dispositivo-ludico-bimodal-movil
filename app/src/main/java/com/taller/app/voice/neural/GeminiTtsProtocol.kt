@@ -350,6 +350,22 @@ object GeminiTtsProtocol {
         stringField(responseBody, "message")?.takeIf { it.isNotBlank() }
             ?: stringField(responseBody, "status")?.takeIf { it.isNotBlank() }
 
+    /**
+     * Extrae el tiempo de espera que Google pide tras un 429, desde el campo
+     * `retryDelay` del bloque RetryInfo del error (por ejemplo "17s" o "1.5s"),
+     * convertido a milisegundos. Devuelve null si no viene o no es parseable, en cuyo
+     * caso la app no impone ningun enfriamiento propio.
+     */
+    fun retryDelayMs(responseBody: String): Long? {
+        val raw = stringField(responseBody, "retryDelay")?.trim() ?: return null
+        val seconds = retryDelaySecondsRegex.find(raw)?.groupValues?.get(1)?.toDoubleOrNull()
+            ?: return null
+        if (seconds <= 0.0) return null
+        return (seconds * 1000.0).toLong()
+    }
+
+    private val retryDelaySecondsRegex = Regex("""([0-9]+(?:\.[0-9]+)?)s""")
+
     private fun hasJsonField(json: String, fieldName: String): Boolean =
         Regex(""""${Regex.escape(fieldName)}"\s*:""").containsMatchIn(json)
 

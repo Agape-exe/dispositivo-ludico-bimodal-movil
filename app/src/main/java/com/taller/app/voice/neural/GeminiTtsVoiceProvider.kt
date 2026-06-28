@@ -231,12 +231,14 @@ class GeminiTtsVoiceProvider(
                 if (!response.isSuccessful) {
                     val responseBody = response.body?.string().orEmpty()
                     val safeDetail = GeminiTtsProtocol.safeErrorMessage(responseBody)
-                    // HTTP 429: limite de cuota / rate limit del plan. No se reintenta
-                    // de inmediato (eso golpea mas el limite): se activa un enfriamiento
-                    // para que las siguientes frases usen el respaldo sin volver a
-                    // llamar a Gemini hasta que venza.
+                    // HTTP 429: limite de ritmo / cuota del plan. Solo se respeta el
+                    // tiempo de espera que Google indique (header Retry-After o campo
+                    // retryDelay del cuerpo); la app no impone bloqueo propio. Si Google
+                    // no pide esperar, solo cae al respaldo en esta frase y la siguiente
+                    // vuelve a intentar Gemini con normalidad.
                     if (response.code == 429) {
                         val retryAfterMs = parseRetryAfterMs(response.header("Retry-After"))
+                            ?: GeminiTtsProtocol.retryDelayMs(responseBody)
                         val category = classifyRateLimit(responseBody)
                         rateLimitGate.registerRateLimit(category, retryAfterMs)
                         Log.w(
