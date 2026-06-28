@@ -52,6 +52,28 @@ class GeminiTtsProtocolTest {
     }
 
     @Test
+    fun retryDelayMs_parsesGoogleRetryInfoSeconds() {
+        val body = """
+            {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[
+            {"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"17s"}]}}
+        """.trimIndent()
+
+        assertEquals(17_000L, GeminiTtsProtocol.retryDelayMs(body))
+    }
+
+    @Test
+    fun retryDelayMs_parsesFractionalSeconds() {
+        val body = """{"error":{"details":[{"retryDelay":"1.5s"}]}}"""
+        assertEquals(1_500L, GeminiTtsProtocol.retryDelayMs(body))
+    }
+
+    @Test
+    fun retryDelayMs_isNullWhenAbsent() {
+        val body = """{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}"""
+        assertEquals(null, GeminiTtsProtocol.retryDelayMs(body))
+    }
+
+    @Test
     fun request_doesNotIncludeModelInBody() {
         // El modelo viaja en la URL; incluirlo en el body provoca HTTP 400.
         val request = GeminiTtsProtocol.buildRequestJson("Hola", defaultConfig()).withoutWhitespace()

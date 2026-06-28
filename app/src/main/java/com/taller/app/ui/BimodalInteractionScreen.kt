@@ -130,11 +130,13 @@ import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceContext
+import com.taller.app.voice.VoiceErrorType
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoiceMode
 import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
+import com.taller.app.voice.neural.GeminiRateLimitGate
 import com.taller.app.voice.neural.GeminiTtsConfig
 import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
@@ -1102,44 +1104,88 @@ private fun BimodalSession(
     // Ultima frase reproducida por el juguete (para mostrarla en la UI).
     var lastSpokenPhrase by remember(activity) { mutableStateOf<String?>(null) }
 
-    // Diagnostico de voz: proveedor que realmente atendio la ultima reproduccion y
-    // si hubo respaldo. Permiten verificar en pantalla que el flujo bimodal usa
-    // el proveedor configurado y fallback solo cuando corresponde.
+    // Diagnostico de voz: proveedor que realmente atendio la ultima reproduccion,
+    // si hubo respaldo, el contexto de la frase, el motivo seguro del fallback, la
+    // latencia y un historial corto. Permiten verificar en pantalla que el flujo
+    // bimodal usa el proveedor preferido y que el fallback solo ocurre cuando Gemini
+    // falla de verdad (con el motivo a la vista). Solo viven en memoria.
     var lastVoiceProviderUsed by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackUsed by remember(activity) { mutableStateOf<Boolean?>(null) }
     var lastVoiceStatus by remember(activity) { mutableStateOf("Sin probar") }
+    var lastVoiceContextLabel by remember(activity) { mutableStateOf<String?>(null) }
+    var lastVoiceFallbackReason by remember(activity) { mutableStateOf<String?>(null) }
+    var lastVoiceLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
+    // Historial corto en memoria (maximo 5), solo para depurar el cambio de proveedor
+    // entre frases. No persiste en Room, no se exporta y nunca guarda el texto hablado.
+    var voiceHistory by remember(activity) { mutableStateOf<List<String>>(emptyList()) }
     var lastGptUsageStatus by remember(activity) { mutableStateOf("sin datos") }
 
-    // Registra que proveedor termino reproduciendo la frase y si hubo fallback,
-    // tanto en la UI como en un log seguro (solo nombres de proveedor, nunca
-    // claves, tokens ni el texto reproducido).
+    // Registra que proveedor termino reproduciendo la frase, si hubo fallback, el
+    // contexto, el motivo seguro y la latencia, tanto en la UI como en un log seguro
+    // (solo nombres de proveedor y codigos, nunca claves, tokens ni el texto hablado).
     fun recordVoiceUsage(outcome: VoiceOutcome?) {
         val selectedLabel = providerLabel(voiceSettings.provider)
         val usedLabel: String
         val fallback: Boolean
+        val status: String
         when (outcome) {
             is VoiceOutcome.Completed -> {
                 usedLabel = ttsProviderDebugName(outcome.providerUsed)
                 fallback = outcome.fallbackUsed
-                lastVoiceStatus = "OK"
+                status = if (outcome.fallbackUsed) "FALLBACK_USED" else "OK"
             }
             is VoiceOutcome.Failed, null -> {
                 usedLabel = "Ninguno"
                 fallback = false
-                lastVoiceStatus = "Error seguro"
+                status = "FAILED_SAFE"
             }
             is VoiceOutcome.SkippedInvalidText -> {
                 usedLabel = "Ninguno"
                 fallback = false
-                lastVoiceStatus = "Error seguro"
+                status = "SKIPPED_INVALID_TEXT"
             }
         }
+        // El motivo solo aplica cuando hubo fallback o fallo: en una reproduccion
+        // normal con el proveedor preferido es NONE. En un Completed con fallback,
+        // outcome.errorType es el error del primer proveedor (Gemini), es decir el
+        // verdadero motivo por el que se cayo a OpenAI.
+        val reason = ttsFallbackReasonLabel(
+            providerUsedIsPreferred = outcome is VoiceOutcome.Completed && !outcome.fallbackUsed,
+            errorType = outcome?.errorType
+        )
+        val contextLabel = ttsContextLabel(outcome?.metric?.voiceContext)
+        val latency = outcome?.synthesisLatencyMs ?: outcome?.totalLatencyMs
+
         lastVoiceProviderUsed = usedLabel
         lastVoiceFallbackUsed = fallback
+        lastVoiceStatus = status
+        lastVoiceContextLabel = contextLabel
+        lastVoiceFallbackReason = reason
+        lastVoiceLatencyMs = latency
+
+        val historyEntry = buildString {
+            append(contextLabel)
+            append(" → ")
+            append(usedLabel)
+            append(" / ")
+            append(status)
+            if (fallback) {
+                append(" / ")
+                append(reason)
+            }
+            latency?.let {
+                append(" / ")
+                append(it)
+                append(" ms")
+            }
+        }
+        voiceHistory = (voiceHistory + historyEntry).takeLast(5)
+
         Log.d(
             BIMODAL_VOICE_TAG,
             "reproduccion: seleccionado=$selectedLabel usado=$usedLabel fallback=$fallback " +
-                "cacheHit=${outcome?.cacheHit} cacheKey=${outcome?.cacheKey} " +
+                "contexto=$contextLabel motivo=$reason estado=$status " +
+                "cacheHit=${outcome?.cacheHit} " +
                 "synthesisLatencyMs=${outcome?.synthesisLatencyMs} " +
                 "playbackLatencyMs=${outcome?.playbackLatencyMs} totalLatencyMs=${outcome?.totalLatencyMs}"
         )
@@ -1325,7 +1371,7 @@ private fun BimodalSession(
         scope.launch {
             try {
                 val phraseResult = recapturePhraseGenerator.generate(
-                    topic = activity.title.ifBlank { "Animales" },
+                    topic = activity.title.takeIf { it.isNotBlank() },
                     attemptNumber = decision.attemptInQuestion
                 )
                 lastRecapturePhraseSource = phraseResult.source.name
@@ -1375,7 +1421,7 @@ private fun BimodalSession(
                 recaptureController.onRecaptureStarted(System.currentTimeMillis())
                 speakAndAwait(
                     text = phraseResult.text,
-                    voiceContext = VoiceContext.FEEDBACK_RETRY,
+                    voiceContext = VoiceContext.RECAPTURE,
                     onPlaybackStart = {
                         recaptureController.onRecaptureTtsStarted(System.currentTimeMillis())
                         logRecaptureEvent(
@@ -1527,7 +1573,7 @@ private fun BimodalSession(
         val presentationSegments = buildList {
             if (playInitialGreeting) {
                 add(animalBank.getInitialFaceGreetingPhrase())
-                add(animalBank.getSessionStartPhrase())
+                add(animalBank.getSessionStartPhrase(mediationKey))
             }
             addAll(splitIntoSpeechSegments(presentationText))
         }
@@ -1771,7 +1817,7 @@ private fun BimodalSession(
                 GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT ->
                     animalBank.getTechnicalErrorFeedback()
                 GeneralTeacherFeedbackType.SESSION_COMPLETED ->
-                    animalBank.getSessionCompletedPhrase()
+                    animalBank.getSessionCompletedPhrase(mediationKey)
                 GeneralTeacherFeedbackType.SESSION_START,
                 GeneralTeacherFeedbackType.QUESTION_INTRO ->
                     feedbackGenerator.message(category).text
@@ -1798,7 +1844,7 @@ private fun BimodalSession(
                 // cierre COMPLETO y solo entonces marca la sesion como completada.
                 // Nunca se salta directamente a SESSION_COMPLETED.
                 val closingStart = System.nanoTime()
-                val closingText = animalBank.getSessionCompletedPhrase()
+                val closingText = animalBank.getSessionCompletedPhrase(mediationKey)
                 lastMediationSource = MediationSource.LOCAL
                 lastMediationLatencyMs = (System.nanoTime() - closingStart) / 1_000_000
                 lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
@@ -1955,7 +2001,13 @@ private fun BimodalSession(
             attemptsInQuestion = recaptureController.attemptsInQuestion,
             attemptsInSession = recaptureController.attemptsInSession,
             lastDecision = lastRecaptureDecisionLabel,
-            phraseSource = lastRecapturePhraseSource
+            phraseSource = lastRecapturePhraseSource,
+            flowPhase = recaptureFlowPhaseFor(
+                state = state,
+                toyVoiceSpeaking = toyVoiceSpeaking,
+                sttState = sttState,
+                hasProgress = progress != null
+            )
         ),
         showTts = ttsDebugInIntelligentModeEnabled,
         ttsProviderConfigured = voiceSettings.provider,
@@ -1963,6 +2015,11 @@ private fun BimodalSession(
         ttsVoice = ttsVoiceDebugName(voiceSettings),
         ttsFallbackUsed = lastVoiceFallbackUsed,
         ttsStatus = lastVoiceStatus,
+        ttsContextLabel = lastVoiceContextLabel,
+        ttsFallbackReason = lastVoiceFallbackReason,
+        ttsLatencyMs = lastVoiceLatencyMs,
+        ttsHistory = voiceHistory,
+        geminiCooldownRemainingMs = GeminiRateLimitGate.shared.remainingMs(),
         showGpt = gptDebugInIntelligentModeEnabled,
         gptConfig = gptDebugConfig,
         lastGptUsageStatus = lastGptUsageStatus
@@ -3304,6 +3361,11 @@ internal fun intelligentDebugPanelText(
     ttsVoice: String?,
     ttsFallbackUsed: Boolean?,
     ttsStatus: String,
+    ttsContextLabel: String? = null,
+    ttsFallbackReason: String? = null,
+    ttsLatencyMs: Long? = null,
+    ttsHistory: List<String> = emptyList(),
+    geminiCooldownRemainingMs: Long? = null,
     showGpt: Boolean,
     gptConfig: GptConfig,
     lastGptUsageStatus: String
@@ -3323,7 +3385,12 @@ internal fun intelligentDebugPanelText(
                 usedProviderLabel = ttsProviderUsedLabel,
                 voice = ttsVoice,
                 fallbackUsed = ttsFallbackUsed,
-                status = ttsStatus
+                status = ttsStatus,
+                contextLabel = ttsContextLabel,
+                fallbackReason = ttsFallbackReason,
+                latencyMs = ttsLatencyMs,
+                history = ttsHistory,
+                geminiCooldownRemainingMs = geminiCooldownRemainingMs
             )
         )
     }
@@ -3337,16 +3404,88 @@ internal fun ttsDebugLabel(
     usedProviderLabel: String?,
     voice: String?,
     fallbackUsed: Boolean?,
-    status: String
+    status: String,
+    contextLabel: String? = null,
+    fallbackReason: String? = null,
+    latencyMs: Long? = null,
+    history: List<String> = emptyList(),
+    geminiCooldownRemainingMs: Long? = null
 ): String {
-    val provider = usedProviderLabel ?: ttsProviderDebugName(configuredProvider)
+    val preferredName = ttsProviderDebugName(configuredProvider)
     val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
+    val usedName = usedProviderLabel ?: "—"
     val fallback = when (fallbackUsed) {
         true -> "Si"
         false -> "No"
-        null -> "Sin datos"
+        null -> "—"
     }
-    return "TTS: $provider$voicePart\nFallback voz: $fallback\nUltima voz: $status"
+    val cooldownLabel = geminiCooldownRemainingMs
+        ?.takeIf { it > 0L }
+        ?.let { "activo (${(it + 999L) / 1000L} s)" }
+        ?: "no activo"
+    val lines = mutableListOf(
+        "TTS preferido: $preferredName$voicePart",
+        "TTS ultimo usado: $usedName",
+        "Contexto: ${contextLabel ?: "—"}",
+        "Fallback voz: $fallback",
+        "Motivo fallback: ${fallbackReason ?: "NONE"}",
+        "Gemini cooldown: $cooldownLabel",
+        "Latencia: ${latencyMs?.let { "$it ms" } ?: "—"}",
+        "Estado: $status"
+    )
+    if (history.isNotEmpty()) {
+        lines.add("Ultimas voces:")
+        history.forEachIndexed { index, entry -> lines.add("${index + 1}. $entry") }
+    }
+    return lines.joinToString("\n")
+}
+
+/** Etiqueta corta y segura del contexto de la ultima voz para el panel de debug. */
+internal fun ttsContextLabel(context: VoiceContext?): String = when (context) {
+    VoiceContext.GREETING -> "INTRO"
+    VoiceContext.QUESTION -> "QUESTION"
+    VoiceContext.FEEDBACK_CORRECT,
+    VoiceContext.FEEDBACK_INCORRECT,
+    VoiceContext.FEEDBACK_RETRY,
+    VoiceContext.NOT_INTERPRETABLE -> "FEEDBACK"
+    VoiceContext.RECAPTURE -> "RECAPTURE"
+    VoiceContext.CLOSING -> "CLOSING"
+    VoiceContext.TEST,
+    VoiceContext.COUNTDOWN,
+    VoiceContext.UNKNOWN,
+    null -> "UNKNOWN"
+}
+
+/**
+ * Motivo seguro del fallback de voz a partir del tipo de error del proveedor
+ * preferido (Gemini). Devuelve "NONE" cuando la reproduccion uso el proveedor
+ * preferido sin error. Nunca expone claves, endpoints ni texto hablado.
+ */
+internal fun ttsFallbackReasonLabel(
+    providerUsedIsPreferred: Boolean,
+    errorType: VoiceErrorType?
+): String {
+    if (providerUsedIsPreferred && errorType == null) return "NONE"
+    return when (errorType) {
+        VoiceErrorType.TIMEOUT -> "GEMINI_TIMEOUT"
+        VoiceErrorType.RATE_LIMITED -> "GEMINI_RATE_LIMIT"
+        VoiceErrorType.QUOTA_EXHAUSTED -> "GEMINI_QUOTA_EXHAUSTED"
+        VoiceErrorType.HTTP_ERROR,
+        VoiceErrorType.HTTP_401,
+        VoiceErrorType.HTTP_403,
+        VoiceErrorType.HTTP_429 -> "GEMINI_HTTP_ERROR"
+        VoiceErrorType.RESPONSE_WITHOUT_AUDIO -> "GEMINI_EMPTY_AUDIO"
+        VoiceErrorType.INVALID_AUDIO,
+        VoiceErrorType.BASE64_INVALID,
+        VoiceErrorType.WAV_WRITE_ERROR,
+        VoiceErrorType.PLAYBACK_FAILED -> "GEMINI_INVALID_AUDIO"
+        VoiceErrorType.INVALID_TTS_TEXT -> "TEXT_VALIDATION_FAILED"
+        VoiceErrorType.NOT_CONFIGURED -> "PROVIDER_NOT_CONFIGURED"
+        VoiceErrorType.NO_NETWORK,
+        VoiceErrorType.NETWORK_ERROR -> "GEMINI_NETWORK_ERROR"
+        VoiceErrorType.UNKNOWN,
+        null -> "UNKNOWN"
+    }
 }
 
 internal fun gptDebugLabel(config: GptConfig, lastUsageStatus: String): String {
@@ -3375,7 +3514,7 @@ private fun ttsProviderDebugName(provider: ToyVoiceProviderType): String = when 
     ToyVoiceProviderType.OPENAI_TTS -> "OpenAI"
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.LOCAL -> "Android local"
-    ToyVoiceProviderType.ELEVENLABS -> "Gemini"
+    ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
 
 private fun intelligentAttentionEventType(
@@ -3460,9 +3599,11 @@ private fun recaptureDebugLabel(
     attemptsInQuestion: Int,
     attemptsInSession: Int,
     lastDecision: String,
-    phraseSource: String?
+    phraseSource: String?,
+    flowPhase: FlowPhase? = null
 ): String =
     "Recaptura: $state\n" +
+        "Fase flujo: ${flowPhase?.name ?: "—"}\n" +
         "Intentos pregunta: $attemptsInQuestion/${RecapturePolicy.MAX_RECAPTURES_PER_QUESTION}\n" +
         "Intentos sesion: $attemptsInSession/${RecapturePolicy.MAX_RECAPTURES_PER_SESSION}\n" +
         "Ultima decision: $lastDecision\n" +

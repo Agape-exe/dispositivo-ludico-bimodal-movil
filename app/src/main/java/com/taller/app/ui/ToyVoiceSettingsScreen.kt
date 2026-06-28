@@ -53,6 +53,7 @@ import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.ElevenLabsConfig
 import com.taller.app.voice.neural.ElevenLabsVoiceProvider
+import com.taller.app.voice.neural.GeminiRateLimitGate
 import com.taller.app.voice.neural.GeminiTtsConfig
 import com.taller.app.voice.neural.GeminiTtsVoices
 import com.taller.app.voice.neural.GeminiTtsVoiceProvider
@@ -529,6 +530,7 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             message = geminiMessage,
             saveMessage = saveMessage,
             enabled = playbackUi == PlaybackUi.IDLE,
+            cooldownRemainingMs = lastGeminiOutcome.let { GeminiRateLimitGate.shared.remainingMs() },
             onVoiceSelected = {
                 geminiVoiceName = it
                 saveMessage = null
@@ -540,7 +542,11 @@ fun ToyVoiceSettingsScreen(onBack: () -> Unit) {
             onPhraseSelected = { selectedGeminiTestPhrase = it },
             onSaveVoice = { saveGeminiVoice() },
             onClearCache = { clearVoiceCache() },
-            onTest = { playGeminiTest() }
+            onTest = { playGeminiTest() },
+            onRetryGemini = {
+                GeminiRateLimitGate.shared.clear()
+                playGeminiTest()
+            }
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -974,12 +980,14 @@ private fun GeminiTestSection(
     message: String?,
     saveMessage: String?,
     enabled: Boolean,
+    cooldownRemainingMs: Long,
     onVoiceSelected: (String) -> Unit,
     onInstructionsSelected: (String) -> Unit,
     onPhraseSelected: (Pair<String, String>) -> Unit,
     onSaveVoice: () -> Unit,
     onClearCache: () -> Unit,
-    onTest: () -> Unit
+    onTest: () -> Unit,
+    onRetryGemini: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1158,6 +1166,24 @@ private fun GeminiTestSection(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Probar voz Gemini")
+            }
+
+            if (cooldownRemainingMs > 0L) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Gemini en enfriamiento por limite de cuota (HTTP 429). " +
+                        "Reintenta en ${(cooldownRemainingMs + 999L) / 1000L} s o pulsa el boton.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onRetryGemini,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Reintentar Gemini TTS")
+                }
             }
         }
     }

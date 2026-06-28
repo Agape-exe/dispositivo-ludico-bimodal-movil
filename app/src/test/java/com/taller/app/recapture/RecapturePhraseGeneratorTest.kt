@@ -28,6 +28,22 @@ class RecapturePhraseGeneratorTest {
     }
 
     @Test
+    fun recaptureTopicFallback_isNotAnimales() {
+        val inputBlank = RecapturePhraseGenerator.recaptureInput(topic = null, attemptNumber = 1)
+        assertFalse(
+            "El topic por defecto no debe ser 'Animales'",
+            inputBlank.topic.equals("Animales", ignoreCase = true)
+        )
+        assertTrue("El topic por defecto debe ser un texto no vacío", inputBlank.topic.isNotBlank())
+    }
+
+    @Test
+    fun recaptureTopicFromActivity_isUsedWhenNotBlank() {
+        val input = RecapturePhraseGenerator.recaptureInput(topic = "Colores", attemptNumber = 1)
+        assertEquals("Colores", input.topic)
+    }
+
+    @Test
     fun recapturePayloadContainsNoQuestionOrSensitiveData() {
         val input = RecapturePhraseGenerator.recaptureInput(
             topic = "Animales",
