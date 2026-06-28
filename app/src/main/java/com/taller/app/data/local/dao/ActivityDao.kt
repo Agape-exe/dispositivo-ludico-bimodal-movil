@@ -20,9 +20,12 @@ interface ActivityDao {
     @Query("SELECT * FROM activities WHERE id = :id")
     suspend fun getById(id: Long): ActivityEntity?
 
-    @Query("SELECT * FROM activities ORDER BY createdAt DESC")
+    @Query("SELECT * FROM activities WHERE isActive = 1 ORDER BY createdAt DESC")
     fun getAllOrderedByCreated(): Flow<List<ActivityEntity>>
 
-    @Query("SELECT * FROM activities ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM activities WHERE isActive = 1 ORDER BY updatedAt DESC")
     fun getAllOrderedByUpdated(): Flow<List<ActivityEntity>>
+
+    @Query("UPDATE activities SET isActive = :active WHERE id = :id")
+    suspend fun setActive(id: Long, active: Boolean)
 }

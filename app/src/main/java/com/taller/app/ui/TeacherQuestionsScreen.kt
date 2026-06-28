@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -25,15 +24,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,13 +41,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.entity.QuestionEntity
-import com.taller.app.model.LocalMediationKey
 import kotlinx.coroutines.launch
 
 private enum class QuestionView { LIST, FORM }
@@ -112,6 +102,7 @@ fun TeacherQuestionsScreen(activityId: Long, onBack: () -> Unit) {
         else -> QuestionFormView(
             activityId = activityId,
             existing = editingQuestion,
+            nextOrderIndex = (questions.maxOfOrNull { it.orderIndex } ?: 0) + 1,
             onSave = { entity ->
                 scope.launch {
                     if (entity.id == 0L) questionDao.insert(entity) else questionDao.update(entity)
@@ -180,7 +171,7 @@ private fun QuestionListView(
     TeacherPanelContainer(modifier = Modifier.navigationBarsPadding()) {
         Spacer(modifier = Modifier.height(38.dp))
         SectionTitle(
-            text = "Preguntas",
+            text = "Preguntas de la sesión",
             centered = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -209,7 +200,7 @@ private fun QuestionListView(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Esta actividad todavía no tiene preguntas.\nAgrega la primera para comenzar.",
+                    text = "Esta sesión todavía no tiene preguntas.\nAgrega la primera para comenzar.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = TeacherSecondaryTextColor,
                     textAlign = TextAlign.Center
@@ -264,7 +255,7 @@ private fun TeacherQuestionCard(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Respuesta esperada:",
+                text = "Respuesta de referencia:",
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = TeacherPrimaryPurple
@@ -304,40 +295,25 @@ private fun TeacherQuestionCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuestionFormView(
     activityId: Long,
     existing: QuestionEntity?,
+    nextOrderIndex: Int,
     onSave: (QuestionEntity) -> Unit,
     onCancel: () -> Unit
 ) {
     val key = existing?.id
-    var orderIndex by remember(key) { mutableStateOf(existing?.orderIndex?.toString() ?: "1") }
     var questionText by remember(key) { mutableStateOf(existing?.questionText ?: "") }
     var expectedAnswer by remember(key) { mutableStateOf(existing?.expectedAnswer ?: "") }
-    var keywords by remember(key) { mutableStateOf(existing?.keywords ?: "") }
-    var maxTimeSeconds by remember(key) { mutableStateOf(existing?.maxTimeSeconds?.toString() ?: "10") }
-    var maxAttempts by remember(key) { mutableStateOf(existing?.maxAttempts?.toString() ?: "2") }
-    var mediationKey by remember(key) { mutableStateOf(LocalMediationKey.fromKey(existing?.mediationKey)) }
-    var mediationDropdownExpanded by remember { mutableStateOf(false) }
 
     var questionTextError by remember(key) { mutableStateOf(false) }
     var expectedAnswerError by remember(key) { mutableStateOf(false) }
-    var keywordsError by remember(key) { mutableStateOf(false) }
-    var orderIndexError by remember(key) { mutableStateOf(false) }
-    var timeError by remember(key) { mutableStateOf(false) }
-    var attemptsError by remember(key) { mutableStateOf(false) }
 
     fun validate(): Boolean {
         questionTextError = questionText.isBlank()
         expectedAnswerError = expectedAnswer.isBlank()
-        keywordsError = keywords.isBlank()
-        orderIndexError = orderIndex.toIntOrNull()?.let { it < 1 } ?: true
-        timeError = maxTimeSeconds.toIntOrNull()?.let { it <= 0 } ?: true
-        attemptsError = maxAttempts.toIntOrNull()?.let { it <= 0 } ?: true
-        return !questionTextError && !expectedAnswerError && !keywordsError &&
-            !orderIndexError && !timeError && !attemptsError
+        return !questionTextError && !expectedAnswerError
     }
 
     TeacherPanelContainer(
@@ -354,15 +330,6 @@ private fun QuestionFormView(
         Spacer(modifier = Modifier.height(26.dp))
 
         PastelTextField(
-            value = orderIndex,
-            onValueChange = { orderIndex = it; orderIndexError = false },
-            label = "Orden de la pregunta *",
-            isError = orderIndexError,
-            supportingText = if (orderIndexError) "Debe ser un número mayor o igual a 1" else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
             value = questionText,
             onValueChange = { questionText = it; questionTextError = false },
             label = "Texto de la pregunta *",
@@ -375,100 +342,18 @@ private fun QuestionFormView(
         PastelTextField(
             value = expectedAnswer,
             onValueChange = { expectedAnswer = it; expectedAnswerError = false },
-            label = "Respuesta esperada principal *",
+            label = "Respuesta de referencia *",
             isError = expectedAnswerError,
-            supportingText = if (expectedAnswerError) "La respuesta esperada es obligatoria" else null
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
-            value = keywords,
-            onValueChange = { keywords = it; keywordsError = false },
-            label = "Palabras clave *",
-            isError = keywordsError,
-            supportingText = if (keywordsError) {
-                "Ingresa al menos una palabra clave"
+            supportingText = if (expectedAnswerError) {
+                "La respuesta de referencia es obligatoria"
             } else {
-                "Separa las respuestas válidas con comas."
-            },
-            placeholder = "ej: guau, ladra, ladrido",
-            singleLine = false,
-            minLines = 2
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
-            value = maxTimeSeconds,
-            onValueChange = { maxTimeSeconds = it; timeError = false },
-            label = "Tiempo máximo (s) *",
-            isError = timeError,
-            supportingText = if (timeError) "Debe ser un número mayor que 0" else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PastelTextField(
-            value = maxAttempts,
-            onValueChange = { maxAttempts = it; attemptsError = false },
-            label = "Intentos máximos *",
-            isError = attemptsError,
-            supportingText = if (attemptsError) "Debe ser un número mayor que 0" else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-        )
-        Spacer(modifier = Modifier.height(26.dp))
-
-        Text(
-            text = "Configuración adicional",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = TeacherPrimaryPurple
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        ExposedDropdownMenuBox(
-            expanded = mediationDropdownExpanded,
-            onExpandedChange = { mediationDropdownExpanded = it }
-        ) {
-            OutlinedTextField(
-                value = mediationKey.displayName,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Mediación local") },
-                supportingText = { Text("Asocia frases lúdicas predefinidas del juguete.") },
-                trailingIcon = {
-                    ExposedDropdownMenuDefaults.TrailingIcon(
-                        expanded = mediationDropdownExpanded
-                    )
-                },
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = TeacherPrimaryPurple,
-                    unfocusedBorderColor = TeacherPrimaryPurple,
-                    focusedLabelColor = TeacherPrimaryPurple,
-                    unfocusedLabelColor = TeacherTitleColor,
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-            )
-            ExposedDropdownMenu(
-                expanded = mediationDropdownExpanded,
-                onDismissRequest = { mediationDropdownExpanded = false }
-            ) {
-                LocalMediationKey.entries.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option.displayName) },
-                        onClick = {
-                            mediationKey = option
-                            mediationDropdownExpanded = false
-                        },
-                        contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                    )
-                }
+                "Respuesta sugerida. Seven podrá aceptar respuestas equivalentes."
             }
-        }
+        )
         Spacer(modifier = Modifier.height(28.dp))
 
         PastelActionButton(
-            text = if (existing == null) "Guardar pregunta" else "Editar pregunta",
+            text = if (existing == null) "Guardar pregunta" else "Guardar cambios",
             onClick = {
                 if (validate()) {
                     val now = System.currentTimeMillis()
@@ -478,17 +363,13 @@ private fun QuestionFormView(
                             activityId = activityId,
                             questionText = questionText.trim(),
                             expectedAnswer = expectedAnswer.trim(),
-                            keywords = keywords.trim(),
-                            orderIndex = orderIndex.toInt(),
-                            maxTimeSeconds = maxTimeSeconds.toInt(),
-                            maxAttempts = maxAttempts.toInt(),
+                            keywords = existing?.keywords ?: "",
+                            orderIndex = existing?.orderIndex ?: nextOrderIndex,
+                            maxTimeSeconds = existing?.maxTimeSeconds ?: 30,
+                            maxAttempts = existing?.maxAttempts ?: 3,
                             createdAt = existing?.createdAt ?: now,
                             updatedAt = now,
-                            mediationKey = if (mediationKey == LocalMediationKey.NONE) {
-                                null
-                            } else {
-                                mediationKey.name
-                            }
+                            mediationKey = existing?.mediationKey
                         )
                     )
                 }
