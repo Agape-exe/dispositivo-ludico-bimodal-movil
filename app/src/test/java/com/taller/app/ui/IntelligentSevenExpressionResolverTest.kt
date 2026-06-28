@@ -335,9 +335,64 @@ class IntelligentSevenExpressionResolverTest {
             ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.NOT_CONFIGURED)
         )
         assertEquals(
+            "GEMINI_RATE_LIMIT",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.RATE_LIMITED)
+        )
+        assertEquals(
+            "GEMINI_QUOTA_EXHAUSTED",
+            ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.QUOTA_EXHAUSTED)
+        )
+        assertEquals(
             "UNKNOWN",
             ttsFallbackReasonLabel(providerUsedIsPreferred = false, errorType = VoiceErrorType.UNKNOWN)
         )
+    }
+
+    @Test
+    fun debugPanelTts_showsGeminiCooldownWhenActive() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "OpenAI",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = true,
+            ttsStatus = "FALLBACK_USED",
+            ttsContextLabel = "QUESTION",
+            ttsFallbackReason = "GEMINI_RATE_LIMIT",
+            ttsLatencyMs = 30L,
+            geminiCooldownRemainingMs = 48_000L,
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("Gemini cooldown: activo (48 s)"))
+        assertTrue(label.contains("Motivo fallback: GEMINI_RATE_LIMIT"))
+    }
+
+    @Test
+    fun debugPanelTts_showsNoCooldownWhenInactive() {
+        val label = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            showTts = true,
+            ttsProviderConfigured = ToyVoiceProviderType.GEMINI_TTS,
+            ttsProviderUsedLabel = "Gemini",
+            ttsVoice = "Puck",
+            ttsFallbackUsed = false,
+            ttsStatus = "OK",
+            ttsContextLabel = "QUESTION",
+            ttsFallbackReason = "NONE",
+            ttsLatencyMs = 820L,
+            geminiCooldownRemainingMs = 0L,
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+
+        assertTrue(label.contains("Gemini cooldown: no activo"))
     }
 
     @Test

@@ -49,6 +49,8 @@ enum class VoiceErrorType {
     HTTP_401,
     HTTP_403,
     HTTP_429,
+    RATE_LIMITED,
+    QUOTA_EXHAUSTED,
     RESPONSE_WITHOUT_AUDIO,
     BASE64_INVALID,
     WAV_WRITE_ERROR,

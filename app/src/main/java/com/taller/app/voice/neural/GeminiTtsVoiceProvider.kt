@@ -26,6 +26,7 @@ import kotlin.coroutines.resume
 
 class GeminiTtsVoiceProvider(
     private val context: Context,
+    private val rateLimitGate: GeminiRateLimitGate = GeminiRateLimitGate.shared,
     private val configProvider: () -> GeminiTtsConfig
 ) : ToyVoiceProvider {
     private val audioCache = OpenAiTtsAudioCache(context)
@@ -114,6 +115,20 @@ class GeminiTtsVoiceProvider(
                 cacheHit = true,
                 cacheShortKey = cacheEntry.shortKey,
                 synthesisLatencyMs = 0L
+            )
+        }
+
+        // Enfriamiento por 429: si Gemini esta limitado y no hay audio cacheado, se
+        // omite la llamada de red y se deja que la cadena use el respaldo (OpenAI).
+        // Los aciertos de cache (arriba) siempre se permiten, aun en enfriamiento.
+        if (rateLimitGate.isInCooldown()) {
+            val reason = rateLimitGate.activeReason() ?: VoiceErrorType.RATE_LIMITED
+            Log.w(TAG, "eventType=GEMINI_TTS_COOLDOWN_SKIP reason=$reason remainingMs=${rateLimitGate.remainingMs()}")
+            return AudioResult.Failure(
+                VoicePlaybackResult.Error(
+                    reason,
+                    "Gemini en enfriamiento por limite de cuota (HTTP 429)."
+                )
             )
         }
 
@@ -216,6 +231,23 @@ class GeminiTtsVoiceProvider(
                 if (!response.isSuccessful) {
                     val responseBody = response.body?.string().orEmpty()
                     val safeDetail = GeminiTtsProtocol.safeErrorMessage(responseBody)
+                    // HTTP 429: limite de cuota / rate limit del plan. No se reintenta
+                    // de inmediato (eso golpea mas el limite): se activa un enfriamiento
+                    // para que las siguientes frases usen el respaldo sin volver a
+                    // llamar a Gemini hasta que venza.
+                    if (response.code == 429) {
+                        val retryAfterMs = parseRetryAfterMs(response.header("Retry-After"))
+                        val category = classifyRateLimit(responseBody)
+                        rateLimitGate.registerRateLimit(category, retryAfterMs)
+                        Log.w(
+                            TAG,
+                            "eventType=GEMINI_TTS_RATE_LIMIT code=429 category=$category " +
+                                "retryAfterMs=${retryAfterMs ?: "none"} cooldownRemainingMs=${rateLimitGate.remainingMs()}"
+                        )
+                        return AudioResult.Failure(
+                            VoicePlaybackResult.Error(category, safeHttpMessage(429, safeDetail))
+                        )
+                    }
                     Log.w(
                         TAG,
                         "eventType=GEMINI_TTS_HTTP_ERROR code=${response.code} " +
@@ -286,6 +318,8 @@ class GeminiTtsVoiceProvider(
                     )
                 }
                 Log.d(TAG, "eventType=GEMINI_TTS_FILE_READY suffix=.$RESPONSE_FORMAT fileBytes=${file.length()}")
+                // Sintesis exitosa: limpia cualquier enfriamiento por 429 previo.
+                rateLimitGate.registerSuccess()
                 return AudioResult.Ok(
                     file = file,
                     cacheHit = false,
@@ -309,6 +343,32 @@ class GeminiTtsVoiceProvider(
                 VoicePlaybackResult.Error(VoiceErrorType.UNKNOWN, "Gemini fallo: error inesperado.")
             )
         }
+    }
+
+    /**
+     * Clasifica un 429 de Gemini: si el cuerpo indica cuota agotada
+     * (RESOURCE_EXHAUSTED / quota) se trata como [VoiceErrorType.QUOTA_EXHAUSTED];
+     * en otro caso como [VoiceErrorType.RATE_LIMITED]. Solo inspecciona texto
+     * tecnico del error, nunca datos del nino.
+     */
+    private fun classifyRateLimit(responseBody: String): VoiceErrorType {
+        val lower = responseBody.lowercase()
+        return if (lower.contains("resource_exhausted") || lower.contains("quota")) {
+            VoiceErrorType.QUOTA_EXHAUSTED
+        } else {
+            VoiceErrorType.RATE_LIMITED
+        }
+    }
+
+    /**
+     * Convierte el header Retry-After (segundos enteros) a milisegundos. Si viene
+     * vacio, como fecha HTTP o no parseable, devuelve null y el enfriamiento usara
+     * su valor por defecto.
+     */
+    private fun parseRetryAfterMs(headerValue: String?): Long? {
+        val seconds = headerValue?.trim()?.toLongOrNull() ?: return null
+        if (seconds <= 0L) return null
+        return seconds * 1000L
     }
 
     private fun safeHttpMessage(code: Int, detail: String? = null): String = when (code) {

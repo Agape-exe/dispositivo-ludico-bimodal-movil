@@ -136,6 +136,7 @@ import com.taller.app.voice.VoiceMode
 import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
+import com.taller.app.voice.neural.GeminiRateLimitGate
 import com.taller.app.voice.neural.GeminiTtsConfig
 import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
@@ -2018,6 +2019,7 @@ private fun BimodalSession(
         ttsFallbackReason = lastVoiceFallbackReason,
         ttsLatencyMs = lastVoiceLatencyMs,
         ttsHistory = voiceHistory,
+        geminiCooldownRemainingMs = GeminiRateLimitGate.shared.remainingMs(),
         showGpt = gptDebugInIntelligentModeEnabled,
         gptConfig = gptDebugConfig,
         lastGptUsageStatus = lastGptUsageStatus
@@ -3363,6 +3365,7 @@ internal fun intelligentDebugPanelText(
     ttsFallbackReason: String? = null,
     ttsLatencyMs: Long? = null,
     ttsHistory: List<String> = emptyList(),
+    geminiCooldownRemainingMs: Long? = null,
     showGpt: Boolean,
     gptConfig: GptConfig,
     lastGptUsageStatus: String
@@ -3386,7 +3389,8 @@ internal fun intelligentDebugPanelText(
                 contextLabel = ttsContextLabel,
                 fallbackReason = ttsFallbackReason,
                 latencyMs = ttsLatencyMs,
-                history = ttsHistory
+                history = ttsHistory,
+                geminiCooldownRemainingMs = geminiCooldownRemainingMs
             )
         )
     }
@@ -3404,7 +3408,8 @@ internal fun ttsDebugLabel(
     contextLabel: String? = null,
     fallbackReason: String? = null,
     latencyMs: Long? = null,
-    history: List<String> = emptyList()
+    history: List<String> = emptyList(),
+    geminiCooldownRemainingMs: Long? = null
 ): String {
     val preferredName = ttsProviderDebugName(configuredProvider)
     val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
@@ -3414,12 +3419,17 @@ internal fun ttsDebugLabel(
         false -> "No"
         null -> "—"
     }
+    val cooldownLabel = geminiCooldownRemainingMs
+        ?.takeIf { it > 0L }
+        ?.let { "activo (${(it + 999L) / 1000L} s)" }
+        ?: "no activo"
     val lines = mutableListOf(
         "TTS preferido: $preferredName$voicePart",
         "TTS ultimo usado: $usedName",
         "Contexto: ${contextLabel ?: "—"}",
         "Fallback voz: $fallback",
         "Motivo fallback: ${fallbackReason ?: "NONE"}",
+        "Gemini cooldown: $cooldownLabel",
         "Latencia: ${latencyMs?.let { "$it ms" } ?: "—"}",
         "Estado: $status"
     )
@@ -3458,6 +3468,8 @@ internal fun ttsFallbackReasonLabel(
     if (providerUsedIsPreferred && errorType == null) return "NONE"
     return when (errorType) {
         VoiceErrorType.TIMEOUT -> "GEMINI_TIMEOUT"
+        VoiceErrorType.RATE_LIMITED -> "GEMINI_RATE_LIMIT"
+        VoiceErrorType.QUOTA_EXHAUSTED -> "GEMINI_QUOTA_EXHAUSTED"
         VoiceErrorType.HTTP_ERROR,
         VoiceErrorType.HTTP_401,
         VoiceErrorType.HTTP_403,
