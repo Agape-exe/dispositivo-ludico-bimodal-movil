@@ -16,6 +16,7 @@ import com.taller.app.ui.IntelligentSevenFaceScreen
 import com.taller.app.ui.MetricsExportScreen
 import com.taller.app.ui.Screen
 import com.taller.app.ui.SemanticTestScreen
+import com.taller.app.ui.SessionScriptScreen
 import com.taller.app.ui.SettingsScreen
 import com.taller.app.ui.SpeechTestScreen
 import com.taller.app.ui.TeacherActivitiesScreen
@@ -72,9 +73,17 @@ class MainActivity : ComponentActivity() {
                         onNavigateToQuestions = { activityId ->
                             selectedActivityId = activityId
                             navigateTo(Screen.TEACHER_QUESTIONS)
+                        },
+                        onNavigateToScript = { activityId ->
+                            selectedActivityId = activityId
+                            navigateTo(Screen.SESSION_SCRIPT)
                         }
                     )
                     Screen.TEACHER_QUESTIONS -> TeacherQuestionsScreen(
+                        activityId = selectedActivityId,
+                        onBack = { navigateTo(Screen.TEACHER_ACTIVITIES) }
+                    )
+                    Screen.SESSION_SCRIPT -> SessionScriptScreen(
                         activityId = selectedActivityId,
                         onBack = { navigateTo(Screen.TEACHER_ACTIVITIES) }
                     )

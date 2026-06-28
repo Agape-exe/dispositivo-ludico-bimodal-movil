@@ -48,7 +48,11 @@ import kotlinx.coroutines.launch
 private enum class TeacherView { LIST, FORM }
 
 @Composable
-fun TeacherActivitiesScreen(onBack: () -> Unit, onNavigateToQuestions: (Long) -> Unit) {
+fun TeacherActivitiesScreen(
+    onBack: () -> Unit,
+    onNavigateToQuestions: (Long) -> Unit,
+    onNavigateToScript: (Long) -> Unit
+) {
     val context = LocalContext.current
     val dao = remember { AppDatabase.getInstance(context).activityDao() }
     val scope = rememberCoroutineScope()
@@ -74,6 +78,7 @@ fun TeacherActivitiesScreen(onBack: () -> Unit, onNavigateToQuestions: (Long) ->
                 view = TeacherView.FORM
             },
             onManageQuestions = { onNavigateToQuestions(it.id) },
+            onManageScript = { onNavigateToScript(it.id) },
             onDeactivate = { activity ->
                 scope.launch { dao.setActive(activity.id, false) }
             }
@@ -99,6 +104,7 @@ private fun ActivityListView(
     onCreate: () -> Unit,
     onEdit: (ActivityEntity) -> Unit,
     onManageQuestions: (ActivityEntity) -> Unit,
+    onManageScript: (ActivityEntity) -> Unit,
     onDeactivate: (ActivityEntity) -> Unit
 ) {
     var activityToDeactivate by remember { mutableStateOf<ActivityEntity?>(null) }
@@ -175,6 +181,7 @@ private fun ActivityListView(
                         activity = activity,
                         onEdit = { onEdit(activity) },
                         onManageQuestions = { onManageQuestions(activity) },
+                        onManageScript = { onManageScript(activity) },
                         onDeactivate = { activityToDeactivate = activity }
                     )
                 }
@@ -197,6 +204,7 @@ private fun TeacherActivityCard(
     activity: ActivityEntity,
     onEdit: () -> Unit,
     onManageQuestions: () -> Unit,
+    onManageScript: () -> Unit,
     onDeactivate: () -> Unit
 ) {
     Card(
@@ -251,6 +259,18 @@ private fun TeacherActivityCard(
                 ) {
                     Text("Preguntas", fontWeight = FontWeight.SemiBold)
                 }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = onManageScript,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = TeacherPrimaryPurple,
+                    contentColor = Color.White
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Guion de Seven", fontWeight = FontWeight.SemiBold)
             }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedButton(
@@ -379,7 +399,14 @@ private fun ActivityFormView(
                             maxAttempts = existing?.maxAttempts ?: 3,
                             isActive = existing?.isActive ?: true,
                             createdAt = existing?.createdAt ?: now,
-                            updatedAt = now
+                            updatedAt = now,
+                            // Conserva el guion de Seven ya generado al editar la sesión.
+                            generatedIntroText = existing?.generatedIntroText,
+                            generatedClosingText = existing?.generatedClosingText,
+                            generatedToneNotes = existing?.generatedToneNotes,
+                            generatedPedagogicalWarnings = existing?.generatedPedagogicalWarnings,
+                            scriptStatus = existing?.scriptStatus ?: "NOT_GENERATED",
+                            scriptUpdatedAt = existing?.scriptUpdatedAt
                         )
                     )
                 }

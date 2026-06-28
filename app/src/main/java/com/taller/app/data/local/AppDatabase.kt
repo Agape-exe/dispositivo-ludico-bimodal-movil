@@ -25,7 +25,7 @@ import com.taller.app.data.local.entity.TechnicalEventEntity
         AttemptEntity::class,
         TechnicalEventEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -100,6 +100,31 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // activities: guion de Seven a nivel de sesion (GEN01)
+                database.execSQL("ALTER TABLE activities ADD COLUMN generatedIntroText TEXT")
+                database.execSQL("ALTER TABLE activities ADD COLUMN generatedClosingText TEXT")
+                database.execSQL("ALTER TABLE activities ADD COLUMN generatedToneNotes TEXT")
+                database.execSQL("ALTER TABLE activities ADD COLUMN generatedPedagogicalWarnings TEXT")
+                database.execSQL("ALTER TABLE activities ADD COLUMN scriptStatus TEXT NOT NULL DEFAULT 'NOT_GENERATED'")
+                database.execSQL("ALTER TABLE activities ADD COLUMN scriptUpdatedAt INTEGER")
+
+                // questions: guion de Seven a nivel de pregunta (GEN01)
+                database.execSQL("ALTER TABLE questions ADD COLUMN childFriendlyQuestionText TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN hintLevel1 TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN hintLevel2 TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN hintLevel3 TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN positiveFeedbackText TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN supportiveFeedbackText TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN retryPromptText TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN answerReferenceWarning TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN suggestedReferenceAnswer TEXT")
+                database.execSQL("ALTER TABLE questions ADD COLUMN scriptReviewed INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE questions ADD COLUMN scriptUpdatedAt INTEGER")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
@@ -107,7 +132,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "taller_app_db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build().also { INSTANCE = it }
             }
         }

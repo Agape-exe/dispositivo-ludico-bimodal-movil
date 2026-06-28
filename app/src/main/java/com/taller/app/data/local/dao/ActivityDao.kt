@@ -28,4 +28,24 @@ interface ActivityDao {
 
     @Query("UPDATE activities SET isActive = :active WHERE id = :id")
     suspend fun setActive(id: Long, active: Boolean)
+
+    @Query(
+        "UPDATE activities SET " +
+            "generatedIntroText = :introText, " +
+            "generatedClosingText = :closingText, " +
+            "generatedToneNotes = :toneNotes, " +
+            "generatedPedagogicalWarnings = :pedagogicalWarnings, " +
+            "scriptStatus = :scriptStatus, " +
+            "scriptUpdatedAt = :scriptUpdatedAt " +
+            "WHERE id = :id"
+    )
+    suspend fun updateScript(
+        id: Long,
+        introText: String?,
+        closingText: String?,
+        toneNotes: String?,
+        pedagogicalWarnings: String?,
+        scriptStatus: String,
+        scriptUpdatedAt: Long
+    )
 }
