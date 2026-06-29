@@ -25,7 +25,7 @@ import com.taller.app.data.local.entity.TechnicalEventEntity
         AttemptEntity::class,
         TechnicalEventEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -125,6 +125,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // activities: estado de la voz pre-generada y cacheada (TTSV01).
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepStatus TEXT NOT NULL DEFAULT 'NOT_PREPARED'")
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepUpdatedAt INTEGER")
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepProvider TEXT")
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepVoice TEXT")
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepReadyCount INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepTotalCount INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE activities ADD COLUMN voicePrepLastError TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
@@ -132,7 +145,13 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "taller_app_db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
+                    )
                     .build().also { INSTANCE = it }
             }
         }

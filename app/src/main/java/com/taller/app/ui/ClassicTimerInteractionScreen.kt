@@ -333,6 +333,17 @@ private fun ClassicActivitySelector(
     onBack: () -> Unit
 ) {
     val activities by activityDao.getAllOrderedByUpdated().collectAsState(initial = emptyList())
+    // Compuerta TTSV01: solo se puede iniciar una sesion con la voz preparada.
+    var gateMessage by remember { mutableStateOf<String?>(null) }
+    val effectiveMessage = gateMessage ?: infoMessage
+    val pickIfReady: (ActivityEntity) -> Unit = { activity ->
+        if (com.taller.app.voice.prep.VoicePrepGate.isReady(activity.voicePrepStatus)) {
+            gateMessage = null
+            onPick(activity)
+        } else {
+            gateMessage = com.taller.app.voice.prep.VoicePrepGate.NOT_READY_MESSAGE
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -362,8 +373,8 @@ private fun ClassicActivitySelector(
         )
         Spacer(modifier = Modifier.height(28.dp))
 
-        if (infoMessage != null) {
-            InfoBanner(infoMessage)
+        if (effectiveMessage != null) {
+            InfoBanner(effectiveMessage)
             Spacer(modifier = Modifier.height(16.dp))
         }
 
@@ -403,7 +414,7 @@ private fun ClassicActivitySelector(
                 items(activities, key = { it.id }) { activity ->
                     ClassicActivityCard(
                         activity = activity,
-                        onStart = { onPick(activity) }
+                        onStart = { pickIfReady(activity) }
                     )
                 }
             }

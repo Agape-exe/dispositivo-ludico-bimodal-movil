@@ -3,6 +3,7 @@ package com.taller.app.voice.neural
 import android.content.Context
 import android.media.MediaPlayer
 import android.util.Log
+import com.taller.app.voice.CacheableVoiceProvider
 import com.taller.app.voice.ToyVoiceProvider
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceTextValidator
@@ -28,7 +29,7 @@ class GeminiTtsVoiceProvider(
     private val context: Context,
     private val rateLimitGate: GeminiRateLimitGate = GeminiRateLimitGate.shared,
     private val configProvider: () -> GeminiTtsConfig
-) : ToyVoiceProvider {
+) : ToyVoiceProvider, CacheableVoiceProvider {
     private val audioCache = OpenAiTtsAudioCache(context)
     private val synthesisLocks = mutableMapOf<String, Mutex>()
     private val synthesisLocksGuard = Any()
@@ -102,6 +103,54 @@ class GeminiTtsVoiceProvider(
         }
 
         return playback
+    }
+
+    override fun isCached(text: String): Boolean {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) return false
+        val entry = runCatching {
+            audioCache.entryFor(validation.normalizedText, configProvider(), RESPONSE_FORMAT)
+        }.getOrNull() ?: return false
+        return entry.file.isFile && entry.file.length() > 0L
+    }
+
+    override suspend fun synthesizeToCache(text: String): VoicePlaybackResult {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) {
+            return VoicePlaybackResult.Error(
+                VoiceErrorType.INVALID_TTS_TEXT,
+                VoiceOutcome.SAFE_INVALID_TEXT_MESSAGE
+            )
+        }
+        val config = configProvider()
+        val cacheEntry = audioCache.entryFor(validation.normalizedText, config, RESPONSE_FORMAT)
+        return when (val result = getOrCreateAudio(validation.normalizedText, config, cacheEntry)) {
+            is AudioResult.Ok -> VoicePlaybackResult.Success(
+                cacheHit = result.cacheHit,
+                cacheKey = result.cacheShortKey,
+                synthesisLatencyMs = result.synthesisLatencyMs
+            )
+            is AudioResult.Failure -> result.error
+        }
+    }
+
+    override suspend fun speakFromCacheOrNull(
+        text: String,
+        onPlaybackStart: () -> Unit
+    ): VoicePlaybackResult? {
+        val validation = ToyVoiceTextValidator.validate(text)
+        if (!validation.isValid) return null
+        val cacheEntry = audioCache.entryFor(validation.normalizedText, configProvider(), RESPONSE_FORMAT)
+        if (!(cacheEntry.file.isFile && cacheEntry.file.length() > 0L)) return null
+        val playback = playFile(cacheEntry.file, onPlaybackStart)
+        if (playback is VoicePlaybackResult.Success) {
+            audioCache.rememberCacheResult(ToyVoiceProviderType.GEMINI_TTS, true)
+            return playback.copy(cacheHit = true, cacheKey = cacheEntry.shortKey)
+        }
+        // Cache corrupta: se descarta sin hacer llamada de red durante la sesion.
+        runCatching { cacheEntry.file.delete() }
+        Log.w(TAG, "eventType=GEMINI_TTS_CACHE_CORRUPT_PREPARED cacheKey=${cacheEntry.shortKey}")
+        return null
     }
 
     private suspend fun getOrCreateAudio(

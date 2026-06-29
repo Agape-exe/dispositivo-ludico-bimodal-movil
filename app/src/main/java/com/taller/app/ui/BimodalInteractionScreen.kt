@@ -27,9 +27,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -37,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +47,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,7 +65,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -73,6 +79,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.taller.app.bimodal.AnswerEvaluationDebugInfo
 import com.taller.app.bimodal.BimodalAutoAction
 import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionResult
@@ -82,6 +89,7 @@ import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.FacePausePhraseBank
+import com.taller.app.bimodal.IntelligentSessionReport
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
@@ -133,6 +141,10 @@ import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceErrorType
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoiceMode
+import com.taller.app.voice.VoicePlaybackDebugInfo
+import com.taller.app.voice.VoicePlaybackDebugMapper
+import com.taller.app.voice.VoicePlaybackMode
+import com.taller.app.voice.VoicePlaybackSource
 import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
@@ -417,6 +429,17 @@ private fun ActivitySelector(
     onBack: () -> Unit
 ) {
     val activities by activityDao.getAllOrderedByUpdated().collectAsState(initial = emptyList())
+    // Compuerta TTSV01: solo se puede iniciar una sesion con la voz preparada.
+    var gateMessage by remember { mutableStateOf<String?>(null) }
+    val effectiveMessage = gateMessage ?: infoMessage
+    val pickIfReady: (ActivityEntity) -> Unit = { activity ->
+        if (com.taller.app.voice.prep.VoicePrepGate.isReady(activity.voicePrepStatus)) {
+            gateMessage = null
+            onPick(activity)
+        } else {
+            gateMessage = com.taller.app.voice.prep.VoicePrepGate.NOT_READY_MESSAGE
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -446,8 +469,8 @@ private fun ActivitySelector(
         )
         Spacer(modifier = Modifier.height(28.dp))
 
-        if (infoMessage != null) {
-            InfoBanner(infoMessage)
+        if (effectiveMessage != null) {
+            InfoBanner(effectiveMessage)
             Spacer(modifier = Modifier.height(16.dp))
         }
 
@@ -494,7 +517,7 @@ private fun ActivitySelector(
                 items(activities, key = { it.id }) { activity ->
                     IntelligentActivityCard(
                         activity = activity,
-                        onStart = { onPick(activity) }
+                        onStart = { pickIfReady(activity) }
                     )
                 }
             }
@@ -659,6 +682,13 @@ private fun BimodalSession(
     // diferenciar claramente en la UI lo real de lo simulado.
     var semanticSource by remember(activity) { mutableStateOf<SemanticSource?>(null) }
     var semanticLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
+
+    // Historial tecnico de la sesion (TTSV01-FIX03): voces reproducidas y
+    // evaluaciones locales. Solo viven en memoria, sin texto largo ni datos
+    // sensibles, para el resumen tecnico del final.
+    var voiceDebugHistory by remember(activity) { mutableStateOf<List<VoicePlaybackDebugInfo>>(emptyList()) }
+    var evaluationHistory by remember(activity) { mutableStateOf<List<AnswerEvaluationDebugInfo>>(emptyList()) }
+    var showTechnicalReport by remember(activity) { mutableStateOf(false) }
 
     // Ultimo mensaje de retroalimentacion general generado (categoria + texto +
     // latencia de generacion local) para mostrarlo en la tarjeta de feedback.
@@ -1020,6 +1050,23 @@ private fun BimodalSession(
         }
         semanticSource = SemanticSource.REAL
         semanticLatencyMs = outcome.latencyMillis
+        // Resumen tecnico (TTSV01-FIX03): guarda en memoria el diagnostico de esta
+        // evaluacion local (pregunta, referencia, transcripcion corta, resultado y
+        // latencia). Sanitizado y sin enviarse a ningun servicio. Sirve para revisar
+        // por que una respuesta abierta pudo quedar marcada como incorrecta.
+        evaluationHistory = (
+            evaluationHistory + AnswerEvaluationDebugInfo(
+                questionOrder = (progress?.currentQuestionIndex ?: 0) + 1,
+                questionId = question.id.toLongOrNull(),
+                questionTextShort = IntelligentSessionReport.shortSafe(question.questionText),
+                expectedAnswerShort = IntelligentSessionReport.shortSafe(question.expectedAnswer),
+                sttFinalTranscriptShort = IntelligentSessionReport.shortSafe(transcription, maxLength = 60),
+                localEvaluationResult = outcome.result.name,
+                localReason = null,
+                evaluationLatencyMs = outcome.latencyMillis,
+                attemptNumber = progress?.currentAttempt ?: 1
+            )
+        ).takeLast(40)
         // Log seguro: solo el resultado semantico y la latencia, nunca la
         // transcripcion ni datos del nino.
         Log.d(
@@ -1115,6 +1162,10 @@ private fun BimodalSession(
     var lastVoiceContextLabel by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallbackReason by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
+    // Diagnostico de cache de voz (TTSV01-FIX01): origen real de la ultima voz
+    // (cache vs sintesis en vivo), modo de reproduccion, latencias y motivo. Solo
+    // vive en memoria; nunca guarda el texto hablado, claves ni payloads.
+    var lastVoiceDebug by remember(activity) { mutableStateOf(VoicePlaybackDebugInfo.none()) }
     // Historial corto en memoria (maximo 5), solo para depurar el cambio de proveedor
     // entre frases. No persiste en Room, no se exporta y nunca guarda el texto hablado.
     var voiceHistory by remember(activity) { mutableStateOf<List<String>>(emptyList()) }
@@ -1123,7 +1174,10 @@ private fun BimodalSession(
     // Registra que proveedor termino reproduciendo la frase, si hubo fallback, el
     // contexto, el motivo seguro y la latencia, tanto en la UI como en un log seguro
     // (solo nombres de proveedor y codigos, nunca claves, tokens ni el texto hablado).
-    fun recordVoiceUsage(outcome: VoiceOutcome?) {
+    fun recordVoiceUsage(
+        outcome: VoiceOutcome?,
+        playbackMode: VoicePlaybackMode = VoicePlaybackMode.CACHE_OR_SYNTHESIZE
+    ) {
         val selectedLabel = providerLabel(voiceSettings.provider)
         val usedLabel: String
         val fallback: Boolean
@@ -1162,6 +1216,15 @@ private fun BimodalSession(
         lastVoiceContextLabel = contextLabel
         lastVoiceFallbackReason = reason
         lastVoiceLatencyMs = latency
+        val debugInfo = VoicePlaybackDebugMapper.fromOutcome(
+            outcome = outcome,
+            playbackMode = playbackMode
+        )
+        lastVoiceDebug = debugInfo
+        // Acumula el historial para el resumen tecnico final (max 40 en memoria).
+        if (debugInfo.source != VoicePlaybackSource.NONE) {
+            voiceDebugHistory = (voiceDebugHistory + debugInfo).takeLast(40)
+        }
 
         val historyEntry = buildString {
             append(contextLabel)
@@ -1205,9 +1268,27 @@ private fun BimodalSession(
     suspend fun speakAndAwait(
         text: String,
         voiceContext: VoiceContext = VoiceContext.UNKNOWN,
+        preparedText: String? = null,
         onPlaybackStart: () -> Unit = {}
     ) {
-        lastSpokenPhrase = text
+        // TTSV01-FIX02: en sesiones con la voz preparada (READY) Seven reproduce SOLO
+        // desde cache, sin sintesis de red. Si existe un texto preparado del guion
+        // (preparedText) se reproduce ese, que es el que quedo cacheado; si no, se
+        // intenta el texto dinamico desde cache (puede no existir aun: no se sintetiza
+        // por red, queda como CACHE_MISS visible en metricas). Sin voz preparada se
+        // mantiene la ruta clasica speak() (cache o sintesis).
+        val preparedVoice = activity.voicePrepReady
+        val effectiveText = if (preparedVoice) {
+            preparedText?.takeIf { it.isNotBlank() } ?: text
+        } else {
+            text
+        }
+        val playbackMode = if (preparedVoice) {
+            VoicePlaybackMode.CACHE_ONLY
+        } else {
+            VoicePlaybackMode.CACHE_OR_SYNTHESIZE
+        }
+        lastSpokenPhrase = effectiveText
         toyVoiceSpeaking = true
         try {
             // Tope de seguridad: si el proveedor de voz se cuelga (red caida, callback
@@ -1215,16 +1296,26 @@ private fun BimodalSession(
             // devuelve null en lugar de bloquear el flujo para siempre. El bloque
             // finally detiene el audio residual de forma ordenada. La interaccion
             // jamas se detiene por un problema de audio.
-            val timeoutMs = speechTimeoutMsFor(text)
+            val timeoutMs = speechTimeoutMsFor(effectiveText)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(
-                        text = text,
-                        source = "inteligente",
-                        mode = VoiceMode.INTELLIGENT,
-                        voiceContext = voiceContext,
-                        onPlaybackStart = onPlaybackStart
-                    )
+                    if (preparedVoice) {
+                        sevenVoiceService.speakFromCacheOnly(
+                            text = effectiveText,
+                            source = "inteligente",
+                            mode = VoiceMode.INTELLIGENT,
+                            voiceContext = voiceContext,
+                            onPlaybackStart = onPlaybackStart
+                        )
+                    } else {
+                        sevenVoiceService.speak(
+                            text = effectiveText,
+                            source = "inteligente",
+                            mode = VoiceMode.INTELLIGENT,
+                            voiceContext = voiceContext,
+                            onPlaybackStart = onPlaybackStart
+                        )
+                    }
                 }.getOrNull()
             }
             if (outcome == null) {
@@ -1246,7 +1337,7 @@ private fun BimodalSession(
                     )
                 }
             }
-            recordVoiceUsage(outcome)
+            recordVoiceUsage(outcome, playbackMode)
         } finally {
             sevenVoiceService.stop()
             toyVoiceSpeaking = false
@@ -1570,16 +1661,37 @@ private fun BimodalSession(
         // toda la introduccion antes de poder reaccionar. SUSPENDE en cada segmento hasta
         // que su audio termina, de modo que la voz nunca se solapa con la captura.
         val versionAtStart = faceLostJobVersion
-        val presentationSegments = buildList {
-            if (playInitialGreeting) {
-                add(animalBank.getInitialFaceGreetingPhrase())
-                add(animalBank.getSessionStartPhrase(mediationKey))
+        // TTSV01-FIX02: con la voz preparada (READY) se reproduce el guion cacheado
+        // (intro de sesion + pregunta amigable) en lugar de la narrativa dinamica del
+        // banco, para que salga desde cache sin sintesis de red. La pregunta original
+        // se conserva intacta en logs/metricas (currentQuestion.questionText).
+        val preparedVoice = activity.voicePrepReady
+        val hasPreparedIntro = preparedVoice && playInitialGreeting &&
+            !activity.generatedIntroText.isNullOrBlank()
+        val greetingSegmentCount = when {
+            preparedVoice -> if (hasPreparedIntro) 1 else 0
+            playInitialGreeting -> 2
+            else -> 0
+        }
+        val presentationSegments = if (preparedVoice) {
+            val preparedQuestion = currentQuestion?.childFriendlyQuestionText
+                ?.takeIf { it.isNotBlank() } ?: questionText
+            buildList {
+                if (hasPreparedIntro) add(activity.generatedIntroText!!.trim())
+                add(preparedQuestion)
             }
-            addAll(splitIntoSpeechSegments(presentationText))
+        } else {
+            buildList {
+                if (playInitialGreeting) {
+                    add(animalBank.getInitialFaceGreetingPhrase())
+                    add(animalBank.getSessionStartPhrase(mediationKey))
+                }
+                addAll(splitIntoSpeechSegments(presentationText))
+            }
         }
         Log.d(
             BIMODAL_VOICE_TAG,
-            "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos)"
+            "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos) preparada=$preparedVoice"
         )
         var interruptedByFaceLost = false
         for ((index, segment) in presentationSegments.withIndex()) {
@@ -1587,7 +1699,7 @@ private fun BimodalSession(
                 interruptedByFaceLost = true
                 break
             }
-            val segmentContext = if (playInitialGreeting && index < 2) {
+            val segmentContext = if (index < greetingSegmentCount) {
                 VoiceContext.GREETING
             } else {
                 VoiceContext.QUESTION
@@ -1830,8 +1942,12 @@ private fun BimodalSession(
             // texto finalmente reproducido por el banco local.
             lastFeedbackMessage = GeneralTeacherFeedbackMessage(category, spokenText)
             Log.d(BIMODAL_VOICE_TAG, "feedback: categoria=$category mediacion=local")
+            // TTSV01-FIX02: con la voz preparada se reproduce el feedback del guion
+            // (positivo/apoyo/reintento o cierre) que quedo cacheado; el texto del
+            // banco sirve de respaldo solo cuando no hay voz preparada.
+            val preparedFeedbackText = preparedFeedbackTextFor(category, currentQuestion, activity)
             // Reproduce el feedback completo: SUSPENDE hasta que el audio termina.
-            speakAndAwait(spokenText, voiceContextForFeedback(category))
+            speakAndAwait(spokenText, voiceContextForFeedback(category), preparedText = preparedFeedbackText)
         }
 
         // 3) Solo despues de que la retroalimentacion termino por completo, decide el
@@ -1850,7 +1966,13 @@ private fun BimodalSession(
                 lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
                 lastMediationFallbackReason = null
                 Log.d(BIMODAL_VOICE_TAG, "cierre: mediacion=local")
-                speakAndAwait(closingText, VoiceContext.CLOSING)
+                // TTSV01-FIX02: el cierre usa el texto preparado del guion
+                // (generatedClosingText) para reproducirse desde cache sin red.
+                speakAndAwait(
+                    closingText,
+                    VoiceContext.CLOSING,
+                    preparedText = activity.generatedClosingText
+                )
                 dispatch { orchestrator.moveToNextQuestion() }
             }
             BimodalAutoAction.NONE -> Unit
@@ -2020,6 +2142,7 @@ private fun BimodalSession(
         ttsLatencyMs = lastVoiceLatencyMs,
         ttsHistory = voiceHistory,
         geminiCooldownRemainingMs = GeminiRateLimitGate.shared.remainingMs(),
+        voiceDebug = lastVoiceDebug,
         showGpt = gptDebugInIntelligentModeEnabled,
         gptConfig = gptDebugConfig,
         lastGptUsageStatus = lastGptUsageStatus
@@ -2109,10 +2232,15 @@ private fun BimodalSession(
         }
 
         if (intelligentDebugText.isNotBlank()) {
+            // Panel tecnico flotante: ancho y alto acotados para no tapar el boton
+            // Salir ni la cara de Seven; con scroll vertical cuando el contenido
+            // excede la pantalla (util en horizontal con muchas metricas).
             Card(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 8.dp, top = 8.dp),
+                    .padding(start = 8.dp, top = 8.dp)
+                    .widthIn(max = 250.dp)
+                    .heightIn(max = 260.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = Color.White.copy(alpha = 0.84f)
                 ),
@@ -2120,7 +2248,9 @@ private fun BimodalSession(
             ) {
                 Text(
                     text = intelligentDebugText,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     color = IntelligentModePrimaryText,
                     fontSize = 12.sp,
                     lineHeight = 15.sp,
@@ -2162,6 +2292,27 @@ private fun BimodalSession(
                     Text("Elegir otra actividad")
                 }
             }
+            // TTSV01-FIX03: resumen tecnico al final o con debug activo.
+            val anyDebugEnabled = attentionVisualDebugEnabled ||
+                ttsDebugInIntelligentModeEnabled || gptDebugInIntelligentModeEnabled
+            val sessionTerminal = state == BimodalInteractionState.SESSION_COMPLETED ||
+                state == BimodalInteractionState.ERROR
+            if ((sessionTerminal || anyDebugEnabled) &&
+                (voiceDebugHistory.isNotEmpty() || evaluationHistory.isNotEmpty())
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(onClick = { showTechnicalReport = true }) {
+                    Text("Ver métricas técnicas")
+                }
+            }
+        }
+
+        if (showTechnicalReport) {
+            IntelligentTechnicalReportDialog(
+                voiceEvents = voiceDebugHistory,
+                evaluations = evaluationHistory,
+                onDismiss = { showTechnicalReport = false }
+            )
         }
     }
     return
@@ -3366,6 +3517,7 @@ internal fun intelligentDebugPanelText(
     ttsLatencyMs: Long? = null,
     ttsHistory: List<String> = emptyList(),
     geminiCooldownRemainingMs: Long? = null,
+    voiceDebug: VoicePlaybackDebugInfo? = null,
     showGpt: Boolean,
     gptConfig: GptConfig,
     lastGptUsageStatus: String
@@ -3390,7 +3542,8 @@ internal fun intelligentDebugPanelText(
                 fallbackReason = ttsFallbackReason,
                 latencyMs = ttsLatencyMs,
                 history = ttsHistory,
-                geminiCooldownRemainingMs = geminiCooldownRemainingMs
+                geminiCooldownRemainingMs = geminiCooldownRemainingMs,
+                voiceDebug = voiceDebug
             )
         )
     }
@@ -3409,7 +3562,8 @@ internal fun ttsDebugLabel(
     fallbackReason: String? = null,
     latencyMs: Long? = null,
     history: List<String> = emptyList(),
-    geminiCooldownRemainingMs: Long? = null
+    geminiCooldownRemainingMs: Long? = null,
+    voiceDebug: VoicePlaybackDebugInfo? = null
 ): String {
     val preferredName = ttsProviderDebugName(configuredProvider)
     val voicePart = voice?.takeIf { it.isNotBlank() }?.let { " / ${it.take(32)}" } ?: ""
@@ -3425,14 +3579,34 @@ internal fun ttsDebugLabel(
         ?: "no activo"
     val lines = mutableListOf(
         "TTS preferido: $preferredName$voicePart",
-        "TTS ultimo usado: $usedName",
-        "Contexto: ${contextLabel ?: "—"}",
-        "Fallback voz: $fallback",
-        "Motivo fallback: ${fallbackReason ?: "NONE"}",
-        "Gemini cooldown: $cooldownLabel",
-        "Latencia: ${latencyMs?.let { "$it ms" } ?: "—"}",
-        "Estado: $status"
+        "TTS ultimo usado: $usedName"
     )
+    // Diagnostico de cache: origen real de la ultima voz y latencias (TTSV01-FIX01).
+    voiceDebug?.takeIf { it.source != VoicePlaybackSource.NONE }?.let { debug ->
+        lines.add("Origen voz: ${debug.source.name}")
+        lines.add("Modo repro: ${debug.playbackMode.name}")
+        lines.add("Proveedor: ${debug.provider ?: "Ninguno"}")
+        lines.add("Linea: ${debug.lineType ?: "UNKNOWN"}")
+        lines.add(
+            "Cache: " + when (debug.cacheHit) {
+                true -> "hit"
+                false -> "miss/synth"
+                null -> "—"
+            }
+        )
+        lines.add("Cache lookup: ${debug.cacheLookupMs?.let { "$it ms" } ?: "—"}")
+        lines.add("Inicio audio: ${debug.playbackStartMs?.let { "$it ms" } ?: "—"}")
+        lines.add("Total voz: ${debug.totalVoiceMs?.let { "$it ms" } ?: "—"}")
+        lines.add("Delay artificial: ${debug.artificialDelayMs?.let { "$it ms" } ?: "—"}")
+        debug.textHashShort?.let { lines.add("Hash pieza: $it") }
+        debug.sanitizedError?.let { lines.add("Error: $it") }
+    }
+    lines.add("Contexto: ${contextLabel ?: "—"}")
+    lines.add("Fallback voz: $fallback")
+    lines.add("Motivo fallback: ${fallbackReason ?: "NONE"}")
+    lines.add("Gemini cooldown: $cooldownLabel")
+    lines.add("Latencia: ${latencyMs?.let { "$it ms" } ?: "—"}")
+    lines.add("Estado: $status")
     if (history.isNotEmpty()) {
         lines.add("Ultimas voces:")
         history.forEachIndexed { index, entry -> lines.add("${index + 1}. $entry") }
@@ -3683,6 +3857,80 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
+
+/**
+ * TTSV01-FIX03: dialogo scrolleable con el resumen tecnico del Modo Inteligente
+ * (resumen de voz, historial de voces y evaluacion local). Texto sanitizado, con
+ * boton para copiar al portapapeles. Cierra sin afectar el flujo ni el boton Salir.
+ */
+@Composable
+private fun IntelligentTechnicalReportDialog(
+    voiceEvents: List<VoicePlaybackDebugInfo>,
+    evaluations: List<AnswerEvaluationDebugInfo>,
+    onDismiss: () -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+    val reportText = remember(voiceEvents, evaluations) {
+        IntelligentSessionReport.buildReportText(voiceEvents, evaluations)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Métricas técnicas") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = reportText,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { clipboard.setText(AnnotatedString(reportText)) }) {
+                Text("Copiar reporte")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cerrar")
+            }
+        }
+    )
+}
+
+/**
+ * TTSV01-FIX02: texto preparado del guion para reproducir una categoria de
+ * retroalimentacion desde cache. Devuelve el campo persistido correspondiente
+ * (feedback positivo, de apoyo, reintento, intro o cierre) o null si la categoria
+ * no tiene un texto preparado equivalente (p. ej. introducciones genericas, que
+ * quedan a cargo del banco dinamico). Es codigo puro para poder probarse.
+ */
+internal fun preparedFeedbackTextFor(
+    category: GeneralTeacherFeedbackType,
+    question: LearningQuestion?,
+    activity: LearningActivity
+): String? = when (category) {
+    GeneralTeacherFeedbackType.CORRECT -> question?.positiveFeedbackText
+    GeneralTeacherFeedbackType.INCORRECT_RETRY,
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY,
+    GeneralTeacherFeedbackType.NO_RESPONSE_RETRY,
+    GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY,
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY ->
+        question?.retryPromptText ?: question?.supportiveFeedbackText
+    GeneralTeacherFeedbackType.INCORRECT_NEXT,
+    GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT,
+    GeneralTeacherFeedbackType.NO_RESPONSE_NEXT,
+    GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT,
+    GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT ->
+        question?.supportiveFeedbackText
+    GeneralTeacherFeedbackType.SESSION_COMPLETED -> activity.generatedClosingText
+    GeneralTeacherFeedbackType.SESSION_START -> activity.generatedIntroText
+    GeneralTeacherFeedbackType.QUESTION_INTRO -> null
+}?.takeIf { it.isNotBlank() }
 
 private fun voiceContextForFeedback(type: GeneralTeacherFeedbackType): VoiceContext = when (type) {
     GeneralTeacherFeedbackType.CORRECT -> VoiceContext.FEEDBACK_CORRECT

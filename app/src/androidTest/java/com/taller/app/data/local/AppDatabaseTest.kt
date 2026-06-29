@@ -556,6 +556,50 @@ class AppDatabaseTest {
     }
 
     @Test
+    fun voicePrepDefaultsAndUpdatePersist() = runBlocking {
+        val now = System.currentTimeMillis()
+        val activityId = activityDao.insert(
+            ActivityEntity(
+                name = "Sesión con voz",
+                topic = "Animales",
+                operationMode = "ADVANCED",
+                maxAttempts = 3,
+                maxTimeSeconds = 60,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+
+        // Por defecto la voz no esta preparada.
+        val initial = activityDao.getById(activityId)
+        assertNotNull(initial)
+        assertEquals("NOT_PREPARED", initial!!.voicePrepStatus)
+        assertEquals(0, initial.voicePrepTotalCount)
+
+        activityDao.updateVoicePrep(
+            id = activityId,
+            status = "READY",
+            updatedAt = now + 500,
+            provider = "GEMINI_TTS",
+            voice = "Puck",
+            readyCount = 12,
+            totalCount = 12,
+            lastError = null
+        )
+
+        val updated = activityDao.getById(activityId)
+        assertNotNull(updated)
+        assertEquals("READY", updated!!.voicePrepStatus)
+        assertEquals("GEMINI_TTS", updated.voicePrepProvider)
+        assertEquals("Puck", updated.voicePrepVoice)
+        assertEquals(12, updated.voicePrepReadyCount)
+        assertEquals(12, updated.voicePrepTotalCount)
+        assertEquals(null, updated.voicePrepLastError)
+        // No se alteran los datos previos de la sesion.
+        assertEquals("Sesión con voz", updated.name)
+    }
+
+    @Test
     fun technicalEventWithoutQuestionIsAllowed() = runBlocking {
         val now = System.currentTimeMillis()
         val activityId = activityDao.insert(
