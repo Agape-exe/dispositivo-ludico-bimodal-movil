@@ -106,6 +106,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import com.taller.app.logger.InteractionDataLogger
+import com.taller.app.ui.seven.SevenEyesFace
+import com.taller.app.ui.seven.SevenFaceState
+import com.taller.app.ui.seven.toSevenFaceState
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.Normalizer
 
@@ -117,8 +120,8 @@ private val ClassicTimerTitleText = Color(0xFFF29A00)
 private val ClassicTimerPrimaryText = Color(0xFF2E2535)
 private val ClassicTimerSecondaryText = Color(0xFF3F3A4A)
 private val ClassicTimerBackground = Color(0xFFFFFFFF)
-private val SevenFaceBackground = Color(0xFFF6F1FF)
-private val SevenFaceBackgroundAlt = Color(0xFFEAFBFA)
+private val SevenFaceBackground = Color(0xFF0D1B2A)
+private val SevenFaceBackgroundAlt = Color(0xFF162642)
 private val SevenFaceAccent = Color(0xFF7C4DFF)
 private val SevenCountdownOrange = Color(0xFFFF8A00)
 private val SevenEyeWhite = Color(0xFFFFFCF6)
@@ -297,9 +300,11 @@ private fun ClassicSevenLoadingOrError(
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            SevenFace(
-                state = SevenVisualState.ERROR,
-                modifier = Modifier.size(220.dp)
+            SevenEyesFace(
+                state = if (isLoading) SevenFaceState.Idle else SevenFaceState.ErrorSoft,
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .height(240.dp)
             )
             Spacer(modifier = Modifier.height(20.dp))
             if (isLoading) {
@@ -307,7 +312,7 @@ private fun ClassicSevenLoadingOrError(
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     text = "Cargando actividad...",
-                    color = ClassicTimerPrimaryText,
+                    color = Color(0xFFE8F4FF),
                     fontSize = 18.sp,
                     textAlign = TextAlign.Center
                 )
@@ -1157,20 +1162,6 @@ private fun ClassicSession(
         if (state == ClassicTimerState.IDLE) onChangeActivity() else pauseByTeacher()
     }
 
-    val visualState = when {
-        isPausedByTeacher -> SevenVisualState.PAUSED
-        state == ClassicTimerState.WAITING_FIXED_RESPONSE -> SevenVisualState.COUNTDOWN
-        toyVoiceSpeaking ||
-            state == ClassicTimerState.SESSION_STARTING ||
-            state == ClassicTimerState.PRESENTING_QUESTION ||
-            state == ClassicTimerState.ANSWER_RECEIVED ||
-            state == ClassicTimerState.TIME_EXPIRED -> SevenVisualState.SPEAKING
-        state == ClassicTimerState.SESSION_COMPLETED -> SevenVisualState.COMPLETED
-        state == ClassicTimerState.ERROR -> SevenVisualState.ERROR
-        state == ClassicTimerState.IDLE || state == ClassicTimerState.READY -> SevenVisualState.WAITING_START_COMMAND
-        else -> SevenVisualState.IDLE
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1192,14 +1183,18 @@ private fun ClassicSession(
             Text("Pausa")
         }
 
-        if (visualState == SevenVisualState.COUNTDOWN) {
-            SevenCountdownView(secondsLeft = timerSecondsLeft)
-        } else {
-            SevenFace(
-                state = visualState,
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
+        SevenEyesFace(
+            state = state.toSevenFaceState(
+                toyVoiceSpeaking = toyVoiceSpeaking,
+                isPaused = isPausedByTeacher
+            ),
+            modifier = Modifier.fillMaxSize(),
+            countdown = if (state == ClassicTimerState.WAITING_FIXED_RESPONSE && !isPausedByTeacher) {
+                timerSecondsLeft
+            } else {
+                null
+            }
+        )
 
         Column(
             modifier = Modifier
@@ -1211,7 +1206,7 @@ private fun ClassicSession(
                 isPausedByTeacher -> {
                     Text(
                         text = "Actividad en pausa",
-                        color = ClassicTimerPrimaryText,
+                        color = Color(0xFFE8F4FF),
                         fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center
@@ -1229,14 +1224,14 @@ private fun ClassicSession(
                 state == ClassicTimerState.IDLE || state == ClassicTimerState.READY -> {
                     Text(
                         text = "Seven está listo",
-                        color = ClassicTimerPrimaryText,
+                        color = Color(0xFFE8F4FF),
                         fontSize = 18.sp,
                         fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center
                     )
                     Text(
                         text = if (audioGranted) startCommandHint else "Concede el micrófono para empezar",
-                        color = ClassicTimerSecondaryText,
+                        color = Color(0xFFADCCF0),
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center
                     )
@@ -1252,7 +1247,7 @@ private fun ClassicSession(
                 state == ClassicTimerState.SESSION_COMPLETED -> {
                     Text(
                         text = "Actividad completada",
-                        color = ClassicTimerPrimaryText,
+                        color = Color(0xFFE8F4FF),
                         fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center

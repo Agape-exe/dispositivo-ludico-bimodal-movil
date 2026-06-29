@@ -169,6 +169,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.taller.app.logger.InteractionDataLogger
+import com.taller.app.ui.seven.SevenEyesFace
+import com.taller.app.ui.seven.SevenFaceState
+import com.taller.app.ui.seven.SevenSpaceBackgroundAlt
+import com.taller.app.ui.seven.SevenSpaceBackgroundDeep
+import com.taller.app.ui.seven.toSevenFaceState
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Etiqueta de logs internos de latencia (solo numeros, sin datos del nino). */
@@ -197,8 +202,8 @@ private val IntelligentModeTitleText = Color(0xFF0087A8)
 private val IntelligentModePrimaryText = Color(0xFF1F2733)
 private val IntelligentModeSecondaryText = Color(0xFF3F3A4A)
 private val IntelligentModeBackground = Color(0xFFFFFFFF)
-private val IntelligentSevenBackground = Color(0xFFEAF9F2)
-private val IntelligentSevenBackgroundAlt = Color(0xFFFFF7D7)
+private val IntelligentSevenBackground = Color(0xFF0D1B2A)
+private val IntelligentSevenBackgroundAlt = Color(0xFF162642)
 
 /**
  * Tope de seguridad para una sola reproduccion de voz. Es generoso para no cortar
@@ -396,9 +401,11 @@ private fun IntelligentSevenLoadingOrError(
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            IntelligentSevenFace(
-                expression = IntelligentSevenExpression.READY,
-                modifier = Modifier.fillMaxWidth(0.74f)
+            SevenEyesFace(
+                state = SevenFaceState.Idle,
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .height(260.dp)
             )
             Spacer(modifier = Modifier.height(16.dp))
             if (isLoading) {
@@ -406,7 +413,7 @@ private fun IntelligentSevenLoadingOrError(
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "Preparando a Seven",
-                    color = IntelligentModePrimaryText,
+                    color = Color(0xFFE8F4FF),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
@@ -2259,20 +2266,8 @@ private fun BimodalSession(
         BimodalInteractionState.IDLE,
         BimodalInteractionState.READY ->
             if (audioGranted) startCommandHint else "Concede el microfono para empezar"
-        BimodalInteractionState.WAITING_FOR_FACE,
-        BimodalInteractionState.PAUSED_FACE_LOST -> "No te veo"
-        BimodalInteractionState.FACE_DETECTED -> "Ya te veo"
-        BimodalInteractionState.PRESENTING_QUESTION -> "Seven te habla"
         BimodalInteractionState.WAITING_FOR_RESPONSE,
         BimodalInteractionState.LISTENING -> "Tu turno"
-        BimodalInteractionState.TRANSCRIBING,
-        BimodalInteractionState.EVALUATING -> "Estoy pensando"
-        BimodalInteractionState.FEEDBACK_CORRECT -> "Muy bien"
-        BimodalInteractionState.FEEDBACK_INCORRECT,
-        BimodalInteractionState.FEEDBACK_NO_RESPONSE,
-        BimodalInteractionState.TIME_EXPIRED,
-        BimodalInteractionState.FEEDBACK_TECHNICAL_ERROR -> "Vamos otra vez"
-        BimodalInteractionState.FEEDBACK_NOT_INTERPRETABLE -> "No entendi bien"
         BimodalInteractionState.SESSION_COMPLETED -> "Lo logramos"
         BimodalInteractionState.SESSION_CANCELLED -> "Actividad pausada"
         BimodalInteractionState.ERROR -> "Necesito ayuda"
@@ -2303,14 +2298,9 @@ private fun BimodalSession(
             )
         }
 
-        IntelligentSevenFace(
-            expression = sevenExpression,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(0.94f)
-                .padding(bottom = 18.dp),
-            faceHeight = 372.dp,
-            showTurnLabel = state == BimodalInteractionState.LISTENING
+        SevenEyesFace(
+            state = sevenExpression.toSevenFaceState(),
+            modifier = Modifier.fillMaxSize()
         )
 
         OutlinedButton(
@@ -2360,7 +2350,7 @@ private fun BimodalSession(
             if (childStatusText.isNotBlank()) {
                 Text(
                     text = childStatusText,
-                    color = IntelligentModePrimaryText,
+                    color = Color(0xFFE8F4FF),
                     fontSize = 20.sp,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
