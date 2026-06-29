@@ -121,10 +121,16 @@ class SevenVoiceService(
         var lastError: VoicePlaybackResult.Error? = null
         for ((type, provider) in chain) {
             when (val result = provider.synthesizeToCache(text)) {
-                is VoicePlaybackResult.Success -> return VoiceLinePrepResult.Prepared(
-                    provider = type,
-                    fromCache = result.cacheHit == true
-                )
+                is VoicePlaybackResult.Success -> {
+                    val info = providerInfo(type)
+                    return VoiceLinePrepResult.Prepared(
+                        provider = type,
+                        fromCache = result.cacheHit == true,
+                        model = info.model,
+                        voice = info.voice,
+                        cacheKeyShort = result.cacheKey
+                    )
+                }
                 is VoicePlaybackResult.Error -> lastError = result
             }
         }

@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -46,6 +47,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -63,7 +65,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -75,6 +79,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.taller.app.bimodal.AnswerEvaluationDebugInfo
 import com.taller.app.bimodal.BimodalAutoAction
 import com.taller.app.bimodal.BimodalFlowOrchestrator
 import com.taller.app.bimodal.BimodalInteractionResult
@@ -84,6 +89,7 @@ import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.FacePausePhraseBank
+import com.taller.app.bimodal.IntelligentSessionReport
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
@@ -677,6 +683,13 @@ private fun BimodalSession(
     var semanticSource by remember(activity) { mutableStateOf<SemanticSource?>(null) }
     var semanticLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
 
+    // Historial tecnico de la sesion (TTSV01-FIX03): voces reproducidas y
+    // evaluaciones locales. Solo viven en memoria, sin texto largo ni datos
+    // sensibles, para el resumen tecnico del final.
+    var voiceDebugHistory by remember(activity) { mutableStateOf<List<VoicePlaybackDebugInfo>>(emptyList()) }
+    var evaluationHistory by remember(activity) { mutableStateOf<List<AnswerEvaluationDebugInfo>>(emptyList()) }
+    var showTechnicalReport by remember(activity) { mutableStateOf(false) }
+
     // Ultimo mensaje de retroalimentacion general generado (categoria + texto +
     // latencia de generacion local) para mostrarlo en la tarjeta de feedback.
     var lastFeedbackMessage by remember(activity) { mutableStateOf<GeneralTeacherFeedbackMessage?>(null) }
@@ -1037,6 +1050,23 @@ private fun BimodalSession(
         }
         semanticSource = SemanticSource.REAL
         semanticLatencyMs = outcome.latencyMillis
+        // Resumen tecnico (TTSV01-FIX03): guarda en memoria el diagnostico de esta
+        // evaluacion local (pregunta, referencia, transcripcion corta, resultado y
+        // latencia). Sanitizado y sin enviarse a ningun servicio. Sirve para revisar
+        // por que una respuesta abierta pudo quedar marcada como incorrecta.
+        evaluationHistory = (
+            evaluationHistory + AnswerEvaluationDebugInfo(
+                questionOrder = (progress?.currentQuestionIndex ?: 0) + 1,
+                questionId = question.id.toLongOrNull(),
+                questionTextShort = IntelligentSessionReport.shortSafe(question.questionText),
+                expectedAnswerShort = IntelligentSessionReport.shortSafe(question.expectedAnswer),
+                sttFinalTranscriptShort = IntelligentSessionReport.shortSafe(transcription, maxLength = 60),
+                localEvaluationResult = outcome.result.name,
+                localReason = null,
+                evaluationLatencyMs = outcome.latencyMillis,
+                attemptNumber = progress?.currentAttempt ?: 1
+            )
+        ).takeLast(40)
         // Log seguro: solo el resultado semantico y la latencia, nunca la
         // transcripcion ni datos del nino.
         Log.d(
@@ -1186,10 +1216,15 @@ private fun BimodalSession(
         lastVoiceContextLabel = contextLabel
         lastVoiceFallbackReason = reason
         lastVoiceLatencyMs = latency
-        lastVoiceDebug = VoicePlaybackDebugMapper.fromOutcome(
+        val debugInfo = VoicePlaybackDebugMapper.fromOutcome(
             outcome = outcome,
             playbackMode = playbackMode
         )
+        lastVoiceDebug = debugInfo
+        // Acumula el historial para el resumen tecnico final (max 40 en memoria).
+        if (debugInfo.source != VoicePlaybackSource.NONE) {
+            voiceDebugHistory = (voiceDebugHistory + debugInfo).takeLast(40)
+        }
 
         val historyEntry = buildString {
             append(contextLabel)
@@ -2257,6 +2292,27 @@ private fun BimodalSession(
                     Text("Elegir otra actividad")
                 }
             }
+            // TTSV01-FIX03: resumen tecnico al final o con debug activo.
+            val anyDebugEnabled = attentionVisualDebugEnabled ||
+                ttsDebugInIntelligentModeEnabled || gptDebugInIntelligentModeEnabled
+            val sessionTerminal = state == BimodalInteractionState.SESSION_COMPLETED ||
+                state == BimodalInteractionState.ERROR
+            if ((sessionTerminal || anyDebugEnabled) &&
+                (voiceDebugHistory.isNotEmpty() || evaluationHistory.isNotEmpty())
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(onClick = { showTechnicalReport = true }) {
+                    Text("Ver métricas técnicas")
+                }
+            }
+        }
+
+        if (showTechnicalReport) {
+            IntelligentTechnicalReportDialog(
+                voiceEvents = voiceDebugHistory,
+                evaluations = evaluationHistory,
+                onDismiss = { showTechnicalReport = false }
+            )
         }
     }
     return
@@ -3800,6 +3856,50 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.AZURE_NEURAL -> "Azure"
     ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
+}
+
+/**
+ * TTSV01-FIX03: dialogo scrolleable con el resumen tecnico del Modo Inteligente
+ * (resumen de voz, historial de voces y evaluacion local). Texto sanitizado, con
+ * boton para copiar al portapapeles. Cierra sin afectar el flujo ni el boton Salir.
+ */
+@Composable
+private fun IntelligentTechnicalReportDialog(
+    voiceEvents: List<VoicePlaybackDebugInfo>,
+    evaluations: List<AnswerEvaluationDebugInfo>,
+    onDismiss: () -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+    val reportText = remember(voiceEvents, evaluations) {
+        IntelligentSessionReport.buildReportText(voiceEvents, evaluations)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Métricas técnicas") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = reportText,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { clipboard.setText(AnnotatedString(reportText)) }) {
+                Text("Copiar reporte")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cerrar")
+            }
+        }
+    )
 }
 
 /**

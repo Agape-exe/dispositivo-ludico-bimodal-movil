@@ -10,10 +10,16 @@ sealed interface VoiceLinePrepResult {
     /**
      * La linea quedo disponible en cache.
      * @param fromCache true si ya existia en cache y no hubo llamada de red.
+     * @param model modelo del proveedor que dejo lista la linea, si se conoce.
+     * @param voice voz usada, si se conoce.
+     * @param cacheKeyShort hash corto de la clave de cache, para identificar la pieza.
      */
     data class Prepared(
         val provider: ToyVoiceProviderType,
-        val fromCache: Boolean
+        val fromCache: Boolean,
+        val model: String? = null,
+        val voice: String? = null,
+        val cacheKeyShort: String? = null
     ) : VoiceLinePrepResult
 
     /** No se pudo preparar la linea. El mensaje es seguro (sin claves ni payloads). */

@@ -60,6 +60,9 @@ import com.taller.app.voice.prep.SessionVoiceLines
 import com.taller.app.voice.prep.SessionVoicePreparer
 import com.taller.app.voice.prep.SessionVoiceSourceFactory
 import com.taller.app.voice.prep.VoicePrepProgress
+import com.taller.app.voice.prep.VoicePrepRecommendedStatus
+import com.taller.app.voice.prep.VoicePrepReport
+import com.taller.app.voice.prep.VoicePrepReportItem
 import com.taller.app.voice.prep.VoicePrepStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -135,6 +138,8 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
     var voicePrepWorking by remember { mutableStateOf(false) }
     var voicePrepProgress by remember { mutableStateOf<VoicePrepProgress?>(null) }
     var voicePrepMessage by remember { mutableStateOf<String?>(null) }
+    // Reporte por audio de la ultima preparacion (TTSV01-FIX03).
+    var voicePrepReport by remember { mutableStateOf<VoicePrepReport?>(null) }
 
     fun loadDraftsFrom(qs: List<QuestionEntity>) {
         drafts.clear()
@@ -257,12 +262,16 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
 
             voicePrepStatus = outcome.status
             voicePrepWorking = false
-            voicePrepMessage = when (outcome.status) {
-                VoicePrepStatus.READY ->
-                    "Voz de Seven lista. Ya puedes usar esta sesión."
-                VoicePrepStatus.PARTIAL ->
+            voicePrepReport = outcome.report
+            voicePrepMessage = when (outcome.report?.recommendedStatus) {
+                VoicePrepRecommendedStatus.READY_IDEAL ->
+                    "Voz de Seven lista con Gemini/Puck. Ya puedes usar esta sesión."
+                VoicePrepRecommendedStatus.REVIEW_FALLBACK ->
+                    "La voz quedó cacheada, pero ${outcome.report?.providerMismatch} audio(s) usaron un " +
+                        "proveedor de respaldo (no Gemini/Puck). Vuelve a preparar para reemplazarlos."
+                VoicePrepRecommendedStatus.INCOMPLETE ->
                     "Faltan ${outcome.missingCount} audios por preparar. Vuelve a intentar para completarlos."
-                else ->
+                null ->
                     outcome.lastError?.let { "No se pudo preparar la voz. $it" }
                         ?: "No se pudo preparar la voz. Revisa la conexión e inténtalo otra vez."
             }
@@ -457,6 +466,7 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
                         working = voicePrepWorking,
                         progress = voicePrepProgress,
                         message = voicePrepMessage,
+                        report = voicePrepReport,
                         onPrepare = { prepareVoice() }
                     )
                 }
@@ -591,6 +601,7 @@ private fun VoicePreparationSection(
     working: Boolean,
     progress: VoicePrepProgress?,
     message: String?,
+    report: VoicePrepReport?,
     onPrepare: () -> Unit
 ) {
     Text(
@@ -661,6 +672,95 @@ private fun VoicePreparationSection(
     message?.let {
         Spacer(modifier = Modifier.height(12.dp))
         InfoCard(it)
+    }
+
+    report?.takeIf { it.items.isNotEmpty() }?.let { rep ->
+        Spacer(modifier = Modifier.height(14.dp))
+        VoicePrepReportCard(rep)
+    }
+}
+
+@Composable
+private fun VoicePrepReportCard(report: VoicePrepReport) {
+    val recommendedLabel = when (report.recommendedStatus) {
+        VoicePrepRecommendedStatus.READY_IDEAL -> "LISTA para prueba real (Gemini/Puck)"
+        VoicePrepRecommendedStatus.REVIEW_FALLBACK -> "REVISAR (hay proveedor de respaldo)"
+        VoicePrepRecommendedStatus.INCOMPLETE -> "INCOMPLETA (faltan audios)"
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = TeacherCardLavender),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Reporte de audios",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = TeacherPrimaryPurple
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Estado recomendado: $recommendedLabel",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = TeacherDarkPurple
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Total: ${report.total} · Listos: ${report.ready} · " +
+                    "Gemini/Puck: ${report.targetProviderReady} · " +
+                    "Respaldo: ${report.fallbackProviderReady} · Fallidos: ${report.failed}",
+                style = MaterialTheme.typography.bodySmall,
+                color = TeacherSecondaryTextColor
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            report.items.forEach { item ->
+                VoicePrepReportRow(item)
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoicePrepReportRow(item: VoicePrepReportItem) {
+    val statusColor = when {
+        item.status == "FAILED" -> MaterialTheme.colorScheme.error
+        !item.isTargetProvider -> TeacherPrimaryPurple
+        else -> TeacherDarkPurple
+    }
+    Column {
+        Text(
+            text = "${item.lineType} · ${item.status}",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = statusColor
+        )
+        val providerLine = buildString {
+            append(item.provider ?: "Ninguno")
+            item.voice?.takeIf { it.isNotBlank() }?.let { append(" / $it") }
+            append(if (item.isTargetProvider) " · objetivo: Sí" else " · objetivo: No")
+        }
+        Text(
+            text = providerLine,
+            style = MaterialTheme.typography.bodySmall,
+            color = TeacherSecondaryTextColor
+        )
+        Text(
+            text = "Pieza: ${item.textHashShort}" +
+                (item.cacheKeyShort?.let { " · clave: $it" } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = TeacherSecondaryTextColor
+        )
+        item.error?.let {
+            Text(
+                text = "Error: ${it.take(80)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
     }
 }
 
