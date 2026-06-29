@@ -276,7 +276,7 @@ class ClassicTimerRunnerTest {
     // ----- Tiempo efectivo -----------------------------------------------------
 
     @Test
-    fun invalidMaxTime_usesDefault() {
+    fun invalidQuestionMaxTime_usesCentralDefault() {
         load(activity(question("q1", maxTimeSeconds = -1)))
         reachWaitingResponse()
         assertEquals(CLASSIC_DEFAULT_MAX_TIME_SECONDS, runner.progress?.effectiveMaxTimeSeconds)
@@ -290,10 +290,22 @@ class ClassicTimerRunnerTest {
     }
 
     @Test
-    fun validMaxTime_usesConfiguredValue() {
+    fun validQuestionMaxTime_doesNotOverrideCentralDefault() {
         load(activity(question("q1", maxTimeSeconds = 15)))
         reachWaitingResponse()
-        assertEquals(15, runner.progress?.effectiveMaxTimeSeconds)
+        assertEquals(CLASSIC_DEFAULT_MAX_TIME_SECONDS, runner.progress?.effectiveMaxTimeSeconds)
+    }
+
+    @Test
+    fun centralResponseTimeIsUsedForAllQuestions() {
+        runner = ClassicTimerRunner(responseTimeSeconds = 20, now = { 1_000L })
+        load(activity(question("q1", maxTimeSeconds = 15), question("q2", maxTimeSeconds = 30)))
+        reachWaitingResponse()
+        assertEquals(20, runner.progress?.effectiveMaxTimeSeconds)
+        runner.onTimeExpired()
+        runner.advanceQuestion()
+        runner.startResponseWindow()
+        assertEquals(20, runner.progress?.effectiveMaxTimeSeconds)
     }
 
     // ----- Reinicio de sesión --------------------------------------------------

@@ -25,12 +25,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -68,6 +72,13 @@ import com.taller.app.gpt.GptRuntimeSettings
 import com.taller.app.gpt.GptSettingsRepository
 import com.taller.app.gpt.SevenInputContract
 import com.taller.app.gpt.StructuredGptResult
+import com.taller.app.settings.AppSettings
+import com.taller.app.settings.AppSettingsRepository
+import com.taller.app.settings.MarkdownLimiterFile
+import com.taller.app.settings.MarkdownLimiterRepository
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,6 +92,11 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val appSettingsRepository = remember { AppSettingsRepository(context.applicationContext) }
+    val appSettings by appSettingsRepository.settings.collectAsState(initial = AppSettings.defaults())
+    val markdownLimiterRepository = remember {
+        MarkdownLimiterRepository(context.applicationContext)
+    }
     val gptSettingsRepository = remember { GptSettingsRepository(context.applicationContext) }
     val savedGptSettings by gptSettingsRepository.settings.collectAsState(initial = GptRuntimeSettings.defaults())
     val attentionDebugSettingsRepository = remember {
@@ -106,9 +122,40 @@ fun SettingsScreen(
     var gptJsonTestResult by remember { mutableStateOf<StructuredGptResult?>(null) }
     var aiMessage by remember { mutableStateOf<String?>(null) }
     var draftGptSettings by remember { mutableStateOf(savedGptSettings) }
+    var classicTimeText by remember { mutableStateOf(appSettings.classicResponseTimeSeconds.toString()) }
+    var recapturesText by remember { mutableStateOf(appSettings.intelligentMaxRecaptures.toString()) }
+    var modeSettingsMessage by remember { mutableStateOf<String?>(null) }
+    var limiterFiles by remember { mutableStateOf<List<MarkdownLimiterFile>>(emptyList()) }
+    var limiterMessage by remember { mutableStateOf<String?>(null) }
+    var limiterContentDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var limiterDeleteTarget by remember { mutableStateOf<MarkdownLimiterFile?>(null) }
 
     LaunchedEffect(savedGptSettings) {
         draftGptSettings = savedGptSettings
+    }
+
+    LaunchedEffect(appSettings) {
+        classicTimeText = appSettings.classicResponseTimeSeconds.toString()
+        recapturesText = appSettings.intelligentMaxRecaptures.toString()
+    }
+
+    fun refreshLimiters() {
+        limiterFiles = markdownLimiterRepository.listFiles()
+    }
+
+    LaunchedEffect(Unit) {
+        refreshLimiters()
+    }
+
+    val markdownImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val result = markdownLimiterRepository.importFromUri(uri)
+            limiterMessage = result.message
+            refreshLimiters()
+        }
     }
 
     DisposableEffect(context) {
@@ -243,6 +290,54 @@ fun SettingsScreen(
             ) {
                 Text("Configurar voz del juguete")
             }
+
+            ModeSettingsSection(
+                classicTimeText = classicTimeText,
+                recapturesText = recapturesText,
+                message = modeSettingsMessage,
+                onClassicTimeChange = { classicTimeText = it.filter(Char::isDigit).take(3) },
+                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) },
+                onSave = {
+                    val classicSeconds = classicTimeText.toIntOrNull()
+                    val recaptures = recapturesText.toIntOrNull()
+                    when {
+                        classicSeconds == null ||
+                            !AppSettings.isValidClassicResponseTime(classicSeconds) ->
+                            modeSettingsMessage = "El tiempo debe estar entre 5 y 120 segundos."
+                        recaptures == null ||
+                            !AppSettings.isValidIntelligentMaxRecaptures(recaptures) ->
+                            modeSettingsMessage = "Las recapturas deben estar entre 0 y 10."
+                        else -> coroutineScope.launch {
+                            appSettingsRepository.save(
+                                appSettings.copy(
+                                    classicResponseTimeSeconds = classicSeconds,
+                                    intelligentMaxRecaptures = recaptures
+                                )
+                            )
+                            modeSettingsMessage = "Configuracion de modos guardada."
+                        }
+                    }
+                }
+            )
+
+            MarkdownLimitersSection(
+                files = limiterFiles,
+                message = limiterMessage,
+                onImport = {
+                    markdownImportLauncher.launch(
+                        arrayOf("text/markdown", "text/plain", "application/octet-stream")
+                    )
+                },
+                onView = { file ->
+                    val content = markdownLimiterRepository.readContent(file.id)
+                    limiterContentDialog = file.displayName to (content ?: "No se pudo leer el archivo.")
+                },
+                onToggleEnabled = { file, enabled ->
+                    markdownLimiterRepository.setEnabled(file.id, enabled)
+                    refreshLimiters()
+                },
+                onDelete = { limiterDeleteTarget = it }
+            )
 
             Button(
                 onClick = onNavigateToFaceDetection,
@@ -416,7 +511,254 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+
+    limiterContentDialog?.let { (title, content) ->
+        AlertDialog(
+            onDismissRequest = { limiterContentDialog = null },
+            confirmButton = {
+                TextButton(onClick = { limiterContentDialog = null }) {
+                    Text("Cerrar")
+                }
+            },
+            title = { Text(title) },
+            text = {
+                Text(
+                    text = content.take(6_000),
+                    fontSize = 13.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                )
+            }
+        )
+    }
+
+    limiterDeleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { limiterDeleteTarget = null },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val deleted = markdownLimiterRepository.delete(target.id)
+                        limiterMessage = if (deleted) "Archivo eliminado." else "No se pudo eliminar."
+                        refreshLimiters()
+                        limiterDeleteTarget = null
+                    }
+                ) {
+                    Text("Quitar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { limiterDeleteTarget = null }) {
+                    Text("Cancelar")
+                }
+            },
+            title = { Text("Quitar limitador") },
+            text = { Text("Se eliminara la copia interna de ${target.displayName}.") }
+        )
+    }
 }
+
+@Composable
+private fun ModeSettingsSection(
+    classicTimeText: String,
+    recapturesText: String,
+    message: String?,
+    onClassicTimeChange: (String) -> Unit,
+    onRecapturesChange: (String) -> Unit,
+    onSave: () -> Unit
+) {
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(
+        text = "Configuracion de modos",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = "Valores generales para todas las actividades. No dependen del formulario de sesion ni de pregunta.",
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = classicTimeText,
+        onValueChange = onClassicTimeChange,
+        label = { Text("Tiempo de respuesta en temporizador") },
+        supportingText = { Text("5 a 120 segundos; recomendado 10") },
+        isError = classicTimeText.toIntOrNull()?.let {
+            !AppSettings.isValidClassicResponseTime(it)
+        } ?: true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    )
+    OutlinedTextField(
+        value = recapturesText,
+        onValueChange = onRecapturesChange,
+        label = { Text("Max. recapturas en modo inteligente") },
+        supportingText = { Text("0 a 10 por sesion; recomendado 5") },
+        isError = recapturesText.toIntOrNull()?.let {
+            !AppSettings.isValidIntelligentMaxRecaptures(it)
+        } ?: true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    )
+    message?.let {
+        Text(
+            text = it,
+            fontSize = 13.sp,
+            color = if (it.contains("entre", ignoreCase = true)) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+        )
+    }
+    Button(
+        onClick = onSave,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 8.dp)
+    ) {
+        Text("Guardar configuracion de modos")
+    }
+}
+
+@Composable
+private fun MarkdownLimitersSection(
+    files: List<MarkdownLimiterFile>,
+    message: String?,
+    onImport: () -> Unit,
+    onView: (MarkdownLimiterFile) -> Unit,
+    onToggleEnabled: (MarkdownLimiterFile, Boolean) -> Unit,
+    onDelete: (MarkdownLimiterFile) -> Unit
+) {
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(
+        text = "Limitadores del modo inteligente (.md)",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = "Estos archivos limitan el comportamiento de Seven y del juez. No reemplazan las reglas de seguridad de la app.",
+        fontSize = 13.sp,
+        lineHeight = 17.sp,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text(
+        text = "No subas datos personales de ninos.",
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+    )
+    Button(
+        onClick = onImport,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    ) {
+        Text("Importar archivo .md")
+    }
+    message?.let {
+        Text(
+            text = it,
+            fontSize = 13.sp,
+            color = if (it.contains("importado", ignoreCase = true) ||
+                it.contains("eliminado", ignoreCase = true)
+            ) {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+        )
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+    if (files.isEmpty()) {
+        Text(
+            text = "No hay archivos .md cargados.",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+            modifier = Modifier.fillMaxWidth()
+        )
+    } else {
+        files.forEach { file ->
+            MarkdownLimiterRow(
+                file = file,
+                onView = { onView(file) },
+                onToggleEnabled = { onToggleEnabled(file, it) },
+                onDelete = { onDelete(file) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarkdownLimiterRow(
+    file: MarkdownLimiterFile,
+    onView: () -> Unit,
+    onToggleEnabled: (Boolean) -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF6F6F6))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = file.displayName,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "${formatBytes(file.sizeBytes)} | ${formatDate(file.importedAt)}",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Activo", fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(checked = file.enabled, onCheckedChange = onToggleEnabled)
+                }
+                Row {
+                    TextButton(onClick = onView) { Text("Ver") }
+                    TextButton(onClick = onDelete) { Text("Quitar") }
+                }
+            }
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String =
+    if (bytes < 1024) "$bytes B" else "${bytes / 1024} KB"
+
+private fun formatDate(timestamp: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(timestamp))
 
 @Composable
 private fun AttentionDebugSettingsSection(

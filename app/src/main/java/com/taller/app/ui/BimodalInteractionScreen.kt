@@ -122,6 +122,9 @@ import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
 import com.taller.app.model.LocalMediationKey
 import com.taller.app.semantic.SemanticResult
+import com.taller.app.settings.AppSettings
+import com.taller.app.settings.AppSettingsRepository
+import com.taller.app.settings.MarkdownLimiterRepository
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
 import com.taller.app.recapture.FlowPhase
@@ -644,8 +647,22 @@ private fun BimodalSession(
     // propone retomar la pregunta. No requiere red ni IA. Una instancia por actividad.
     val facePhraseBank = remember(activity) { FacePausePhraseBank() }
 
+    val appSettingsRepository = remember { AppSettingsRepository(context.applicationContext) }
+    val appSettings by appSettingsRepository.settings.collectAsState(initial = AppSettings.defaults())
+    val markdownLimiterRepository = remember {
+        MarkdownLimiterRepository(context.applicationContext)
+    }
+    val markdownRulesSnapshot = remember(activity) {
+        markdownLimiterRepository.activeRulesSnapshot()
+    }
+
     // Recaptura de atencion REC02: politica local pura + banco seguro local.
-    val recaptureController = remember(activity) { RecaptureController(isIntelligentMode = true) }
+    val recaptureController = remember(activity, appSettings.intelligentMaxRecaptures) {
+        RecaptureController(
+            isIntelligentMode = true,
+            maxRecapturesPerSession = appSettings.intelligentMaxRecaptures
+        )
+    }
     val recapturePhraseBank = remember(activity) { RecapturePhraseBank() }
     var recaptureJobActive by remember(activity) { mutableStateOf(false) }
     var lastRecapturePhraseSource by remember(activity) { mutableStateOf<String?>(null) }
@@ -668,7 +685,10 @@ private fun BimodalSession(
     // dudosos) y evaluador hibrido que combina la capa local con el juez. Reutiliza
     // el cliente GPT existente; el juez solo juzga texto y nunca genera voz.
     val openAnswerJudge = remember(recaptureGptClient) {
-        OpenAnswerJudge(gptClient = recaptureGptClient)
+        OpenAnswerJudge(
+            gptClient = recaptureGptClient,
+            additionalRulesProvider = { markdownRulesSnapshot.content }
+        )
     }
     val hybridEvaluator = remember(openAnswerJudge) {
         HybridAnswerEvaluator(judge = openAnswerJudge)
@@ -1591,7 +1611,8 @@ private fun BimodalSession(
                 )
 
                 if (recaptureController.attemptsInQuestion >= RecapturePolicy.MAX_RECAPTURES_PER_QUESTION ||
-                    recaptureController.attemptsInSession >= RecapturePolicy.MAX_RECAPTURES_PER_SESSION
+                    recaptureController.attemptsInSession >=
+                    recaptureController.maxRecapturesPerSession
                 ) {
                     delay(RecapturePolicy.MAX_SILENCE_AFTER_FINAL_MS)
                     val stillLost = latestAttentionSnapshot?.state == AttentionState.ATTENTION_LOST
@@ -2183,6 +2204,7 @@ private fun BimodalSession(
             state = recaptureController.state.value,
             attemptsInQuestion = recaptureController.attemptsInQuestion,
             attemptsInSession = recaptureController.attemptsInSession,
+            maxAttemptsInSession = recaptureController.maxRecapturesPerSession,
             lastDecision = lastRecaptureDecisionLabel,
             phraseSource = lastRecapturePhraseSource,
             flowPhase = recaptureFlowPhaseFor(
@@ -2211,7 +2233,10 @@ private fun BimodalSession(
         judgeDecision = lastJudgeDecision,
         judgeFinalResult = lastJudgeFinalResult,
         judgeLatencyMs = lastJudgeLatencyMs,
-        judgeFallback = lastJudgeFallback
+        judgeFallback = lastJudgeFallback,
+        activeMarkdownFiles = markdownRulesSnapshot.activeFileCount,
+        markdownCharactersUsed = markdownRulesSnapshot.usedCharacters,
+        markdownRulesTruncated = markdownRulesSnapshot.truncated
     )
 
     val activityForOrientation = context.findActivity()
@@ -3591,7 +3616,10 @@ internal fun intelligentDebugPanelText(
     judgeDecision: String? = null,
     judgeFinalResult: String? = null,
     judgeLatencyMs: Long? = null,
-    judgeFallback: Boolean? = null
+    judgeFallback: Boolean? = null,
+    activeMarkdownFiles: Int = 0,
+    markdownCharactersUsed: Int = 0,
+    markdownRulesTruncated: Boolean = false
 ): String = buildList {
     if (showAttention) {
         add(
@@ -3627,7 +3655,10 @@ internal fun intelligentDebugPanelText(
                 judgeDecision = judgeDecision,
                 judgeFinalResult = judgeFinalResult,
                 judgeLatencyMs = judgeLatencyMs,
-                judgeFallback = judgeFallback
+                judgeFallback = judgeFallback,
+                activeMarkdownFiles = activeMarkdownFiles,
+                markdownCharactersUsed = markdownCharactersUsed,
+                markdownRulesTruncated = markdownRulesTruncated
             )
         )
     }
@@ -3750,7 +3781,10 @@ internal fun gptDebugLabel(
     judgeDecision: String? = null,
     judgeFinalResult: String? = null,
     judgeLatencyMs: Long? = null,
-    judgeFallback: Boolean? = null
+    judgeFallback: Boolean? = null,
+    activeMarkdownFiles: Int = 0,
+    markdownCharactersUsed: Int = 0,
+    markdownRulesTruncated: Boolean = false
 ): String {
     val status = when {
         !config.enabled -> "desactivado"
@@ -3760,24 +3794,28 @@ internal fun gptDebugLabel(
     val fallbackLabel = when (judgeFallback) {
         true -> "Si"
         false -> "No"
-        null -> "—"
+        null -> "-"
     }
     // MED01: estado del juez de respuestas abiertas (capa contextual para casos
     // dudosos). Modelo juez = modelo principal configurado (GPT-mini). Sin prompts.
-    return "GPT: $status\n" +
-        "Modelo: ${config.model}\n" +
-        "Configurado: ${if (config.hasApiKey) "Si" else "No"}\n" +
-        "Fallback local: ${if (config.localFallbackEnabled) "Si" else "No"}\n" +
-        "Ultimo uso: $lastUsageStatus\n" +
-        "Juez configurado: ${if (config.isOperational) "Si" else "No"}\n" +
-        "Modelo juez: ${config.model}\n" +
-        "Ultima capa: ${judgeLayer ?: "—"}\n" +
-        "Resultado juez: ${judgeDecision ?: "—"}\n" +
-        "Resultado final: ${judgeFinalResult ?: "—"}\n" +
-        "Latencia juez: ${judgeLatencyMs?.let { "$it ms" } ?: "—"}\n" +
-        "Fallback juez: $fallbackLabel"
+    return listOf(
+        "GPT: $status",
+        "Modelo: ${config.model}",
+        "Configurado: ${if (config.hasApiKey) "Si" else "No"}",
+        "Fallback local: ${if (config.localFallbackEnabled) "Si" else "No"}",
+        "Ultimo uso: $lastUsageStatus",
+        "Juez configurado: ${if (config.isOperational) "Si" else "No"}",
+        "Modelo juez: ${config.model}",
+        "Ultima capa: ${judgeLayer ?: "-"}",
+        "Resultado juez: ${judgeDecision ?: "-"}",
+        "Resultado final: ${judgeFinalResult ?: "-"}",
+        "Latencia juez: ${judgeLatencyMs?.let { "$it ms" } ?: "-"}",
+        "Fallback juez: $fallbackLabel",
+        "Archivos .md activos: $activeMarkdownFiles",
+        "Caracteres reglas usados: $markdownCharactersUsed",
+        "Reglas truncadas: ${if (markdownRulesTruncated) "Si" else "No"}"
+    ).joinToString("\n")
 }
-
 private fun ttsVoiceDebugName(settings: ToyVoiceSettings): String? = when (settings.provider) {
     ToyVoiceProviderType.GEMINI_TTS -> settings.geminiVoiceName ?: "Puck"
     ToyVoiceProviderType.OPENAI_TTS -> settings.openAiVoiceName ?: "marin"
@@ -3875,17 +3913,17 @@ private fun recaptureDebugLabel(
     state: RecaptureState,
     attemptsInQuestion: Int,
     attemptsInSession: Int,
+    maxAttemptsInSession: Int,
     lastDecision: String,
     phraseSource: String?,
     flowPhase: FlowPhase? = null
 ): String =
     "Recaptura: $state\n" +
-        "Fase flujo: ${flowPhase?.name ?: "—"}\n" +
+        "Fase flujo: ${flowPhase?.name ?: "-"}\n" +
         "Intentos pregunta: $attemptsInQuestion/${RecapturePolicy.MAX_RECAPTURES_PER_QUESTION}\n" +
-        "Intentos sesion: $attemptsInSession/${RecapturePolicy.MAX_RECAPTURES_PER_SESSION}\n" +
+        "Intentos sesion: $attemptsInSession/$maxAttemptsInSession\n" +
         "Ultima decision: $lastDecision\n" +
         "Fuente frase: ${phraseSource ?: "Ninguna"}"
-
 private fun IntelligentSevenExpression.isPrioritySevenExpression(): Boolean =
     when (this) {
         IntelligentSevenExpression.SPEAKING,
