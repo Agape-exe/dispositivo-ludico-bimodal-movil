@@ -13,7 +13,13 @@ import com.taller.app.semantic.SemanticResult
  */
 data class SemanticEvaluationOutcome(
     val result: SemanticResult,
-    val latencyMillis: Long
+    val latencyMillis: Long,
+    /** MED01-FIX01: se acepto por equivalencia de sonido/onomatopeya. */
+    val aliasApplied: Boolean = false,
+    /** Motivo corto y seguro del alias aplicado, para el reporte tecnico. */
+    val aliasReason: String? = null,
+    /** Transcripcion normalizada local, util para el reporte tecnico. */
+    val normalizedAnswer: String? = null
 ) {
     /** Evento del orquestador correspondiente a este resultado semantico. */
     fun toEvent(): BimodalInteractionEvent =
@@ -51,15 +57,19 @@ class SemanticEvaluationAdapter(
         question: LearningQuestion
     ): SemanticEvaluationOutcome {
         val startedAt = clock()
-        val result = evaluator.evaluate(
+        val evaluation = evaluator.evaluateDetailed(
             transcription = transcription,
             expectedAnswer = question.expectedAnswer,
-            keywords = question.keywords
+            keywords = question.keywords,
+            questionText = question.questionText
         )
         val elapsedNanos = (clock() - startedAt).coerceAtLeast(0L)
         return SemanticEvaluationOutcome(
-            result = result,
-            latencyMillis = elapsedNanos / 1_000_000
+            result = evaluation.result,
+            latencyMillis = elapsedNanos / 1_000_000,
+            aliasApplied = evaluation.aliasApplied,
+            aliasReason = evaluation.aliasReason,
+            normalizedAnswer = evaluation.normalizedAnswer
         )
     }
 }

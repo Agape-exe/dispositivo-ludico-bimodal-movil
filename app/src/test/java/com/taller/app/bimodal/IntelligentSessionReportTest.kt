@@ -92,6 +92,34 @@ class IntelligentSessionReportTest {
     }
 
     @Test
+    fun reportShowsSoundAliasReasonAndNormalizedAnswer() {
+        val voiceEvents = listOf(voice(VoicePlaybackSource.CACHE_HIT))
+        val evaluations = listOf(
+            AnswerEvaluationDebugInfo(
+                questionOrder = 2,
+                questionId = 11L,
+                questionTextShort = "¿Qué sonido hace el perro?",
+                expectedAnswerShort = "guau",
+                sttFinalTranscriptShort = "wow",
+                localEvaluationResult = "CORRECT",
+                localReason = "alias de sonido: wow -> guau",
+                localNormalizedAnswerShort = "wow",
+                evaluationLatencyMs = 8L,
+                attemptNumber = 1,
+                decisionLayer = "LOCAL",
+                finalResult = "CORRECT"
+            )
+        )
+        val text = IntelligentSessionReport.buildReportText(voiceEvents, evaluations)
+
+        assertTrue(text.contains("alias de sonido: wow -> guau"))
+        assertTrue(text.contains("Normalizada: wow"))
+        // El reporte no expone prompts ni payloads.
+        assertFalse(text.contains("systemInstruction"))
+        assertFalse(text.contains("api_key"))
+    }
+
+    @Test
     fun shortSafeRedactsAndTruncates() {
         val redacted = IntelligentSessionReport.shortSafe("api_key=SECRET12345 hola")
         assertTrue(redacted!!.contains("credential_redacted"))

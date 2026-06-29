@@ -17,6 +17,9 @@ data class AnswerEvaluationDebugInfo(
     val sttFinalTranscriptShort: String?,
     val localEvaluationResult: String,
     val localReason: String?,
+    // MED01-FIX01: transcripcion normalizada local (sin tildes ni signos), util para
+    // entender por que se acepto o rechazo una onomatopeya. Opcional y sanitizada.
+    val localNormalizedAnswerShort: String? = null,
     val evaluationLatencyMs: Long?,
     val attemptNumber: Int,
     // MED01: decision hibrida del juez de respuestas abiertas. Campos opcionales
@@ -136,6 +139,7 @@ object IntelligentSessionReport {
                 evaluations.forEach { ev ->
                     appendLine("P${ev.questionOrder} intento ${ev.attemptNumber}")
                     appendLine("- STT: ${ev.sttFinalTranscriptShort ?: "—"}")
+                    ev.localNormalizedAnswerShort?.let { appendLine("- Normalizada: $it") }
                     appendLine("- Ref: ${ev.expectedAnswerShort ?: "—"}")
                     appendLine("- Local: ${ev.localEvaluationResult}")
                     appendLine("- Juez: ${ev.judgeDecision ?: "—"}")

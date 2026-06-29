@@ -9,33 +9,70 @@ enum class SemanticResult {
     NO_RESPONSE
 }
 
+/**
+ * Resultado detallado de la evaluacion local, con metadatos para el reporte tecnico.
+ *
+ * @property aliasApplied se acepto por equivalencia de sonido/onomatopeya (no por
+ *   coincidencia directa con la referencia o palabras clave).
+ * @property aliasReason motivo corto y seguro (por ejemplo "alias de sonido: wow -> guau").
+ * @property normalizedAnswer transcripcion normalizada local, util para depuracion.
+ */
+data class SemanticEvaluation(
+    val result: SemanticResult,
+    val aliasApplied: Boolean = false,
+    val aliasReason: String? = null,
+    val normalizedAnswer: String? = null
+)
+
 class SemanticEvaluator {
 
     private val nonInformativeExpressions = setOf(
         "no se", "nose", "mmm", "eh", "ah", "umm", "hmm", "uh"
     )
 
+    /** Compatibilidad: evaluacion sin texto de pregunta (sin contexto de sonido). */
     fun evaluate(
         transcription: String,
         expectedAnswer: String,
         keywords: List<String>
-    ): SemanticResult {
+    ): SemanticResult = evaluate(transcription, expectedAnswer, keywords, questionText = "")
+
+    /** Evaluacion con texto de pregunta, para habilitar la tolerancia de sonidos. */
+    fun evaluate(
+        transcription: String,
+        expectedAnswer: String,
+        keywords: List<String>,
+        questionText: String
+    ): SemanticResult =
+        evaluateDetailed(transcription, expectedAnswer, keywords, questionText).result
+
+    /**
+     * Igual que [evaluate] pero devuelve los metadatos de la decision (incluido si se
+     * aplico un alias de sonido). Antes de declarar INCORRECT en una respuesta de
+     * sonido, intenta reconocer la onomatopeya equivalente segun el contexto.
+     */
+    fun evaluateDetailed(
+        transcription: String,
+        expectedAnswer: String,
+        keywords: List<String>,
+        questionText: String = ""
+    ): SemanticEvaluation {
         if (transcription.isBlank()) {
-            return SemanticResult.NO_RESPONSE
+            return SemanticEvaluation(SemanticResult.NO_RESPONSE)
         }
 
         val normalized = normalize(transcription)
 
         if (normalized.isEmpty() || normalized.none { it.isLetter() }) {
-            return SemanticResult.NOT_INTERPRETABLE
+            return SemanticEvaluation(SemanticResult.NOT_INTERPRETABLE)
         }
 
         if (normalized.length == 1) {
-            return SemanticResult.NOT_INTERPRETABLE
+            return SemanticEvaluation(SemanticResult.NOT_INTERPRETABLE)
         }
 
         if (normalized in nonInformativeExpressions) {
-            return SemanticResult.NOT_INTERPRETABLE
+            return SemanticEvaluation(SemanticResult.NOT_INTERPRETABLE)
         }
 
         // La respuesta de referencia puede ser una lista o varios ejemplos validos
@@ -47,15 +84,30 @@ class SemanticEvaluator {
             normalizedOption.isNotBlank() && containsWholeWord(normalized, normalizedOption)
         }
         if (expectedMatches) {
-            return SemanticResult.CORRECT
+            return SemanticEvaluation(SemanticResult.CORRECT, normalizedAnswer = normalized)
         }
 
         val hasKeyword = keywords.any { keyword ->
             val normalizedKeyword = normalize(keyword)
             normalizedKeyword.isNotBlank() && containsWholeWord(normalized, normalizedKeyword)
         }
+        if (hasKeyword) {
+            return SemanticEvaluation(SemanticResult.CORRECT, normalizedAnswer = normalized)
+        }
 
-        return if (hasKeyword) SemanticResult.CORRECT else SemanticResult.INCORRECT
+        // MED01-FIX01: tolerancia de sonidos. Solo acepta variantes de la onomatopeya
+        // esperada cuando el contexto (referencia o pregunta) lo justifica.
+        val onomatopoeia = OnomatopoeiaNormalizer.match(transcription, expectedAnswer, questionText)
+        if (onomatopoeia.matchedAlias) {
+            return SemanticEvaluation(
+                result = SemanticResult.CORRECT,
+                aliasApplied = true,
+                aliasReason = onomatopoeia.aliasReason,
+                normalizedAnswer = normalized
+            )
+        }
+
+        return SemanticEvaluation(SemanticResult.INCORRECT, normalizedAnswer = normalized)
     }
 
     /**
