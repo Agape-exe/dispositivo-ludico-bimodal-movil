@@ -144,6 +144,35 @@ class FixedTimerNeutralPhraseBankTest {
         }
     }
 
+    @Test
+    fun allEntryPoints_doNotPraiseOrEvaluateAnswer() {
+        // El modo temporizador es neutral: nunca dice si la respuesta fue buena o mala
+        // ni felicita por acertar. La pregunta ({question}) se inyecta aparte, por lo
+        // que aqui se usan textos de pregunta neutros para no introducir esas palabras.
+        val forbidden = listOf(
+            "muy bien", "bien hecho", "qué bien", "correcto", "incorrecto",
+            "acertaste", "felicidades", "lo lograste", "perfecto"
+        )
+        repeat(60) {
+            val samples = listOf(
+                bank.getSessionStart(),
+                bank.getRoundPrompt(1, "di una palabra", isLast = false),
+                bank.getRoundPrompt(4, "di una palabra", isLast = true),
+                bank.getAnswerReceived(isLast = false),
+                bank.getAnswerReceived(isLast = true),
+                bank.getTimeExpired(hadPartialResponse = false),
+                bank.getTimeExpired(hadPartialResponse = false, isLast = true),
+                bank.getNextRound(),
+                bank.getSessionCompleted()
+            ).map { it.lowercase() }
+            for (phrase in samples) {
+                for (word in forbidden) {
+                    assertFalse("El temporizador no debe evaluar/felicitar ('$word'): $phrase", phrase.contains(word))
+                }
+            }
+        }
+    }
+
     // ----- Anti-repetición ------------------------------------------------------
 
     @Test

@@ -128,150 +128,162 @@ class GeneralTeacherFeedbackGenerator(
     companion object {
 
         /**
-         * Banco amplio de frases por categoria, en espanol, breves y adecuadas para
-         * ninos. No incluye frases que sugieran un acierto parcial ("vas bien",
-         * "estas cerca", "casi lo tienes") porque el flujo no modela esa categoria.
+         * Banco amplio de frases de Seven por categoria, en espanol, breves y
+         * adecuadas para ninos de 3 a 5 anos. Es el respaldo generico del modo
+         * inteligente: Seven, el alien explorador, acompana con calidez y sin sonar
+         * a examen.
+         *
+         * Reglas (VOZ01):
+         *  - No culpa al nino: nunca dice "incorrecto", "mal", "fallaste",
+         *    "te equivocaste" ni "no sabes".
+         *  - No suena a adulto rigido: nada de "presta atencion", "concentrate",
+         *    "evaluacion" ni "respuesta valida".
+         *  - No revela la respuesta cuando quedan intentos.
+         *  - No sugiere acierto parcial ("vas bien", "estas cerca", "casi lo
+         *    tienes") porque el flujo no modela esa categoria.
+         *  - Frases cortas (<=120 caracteres) y con la voz de Seven sin abusar de
+         *    "mi antenita" / "mi nave" en todas.
          */
         val DEFAULT_PHRASES: Map<GeneralTeacherFeedbackType, List<String>> = mapOf(
             GeneralTeacherFeedbackType.CORRECT to listOf(
-                "Muy bien, esa respuesta es adecuada.",
-                "Buen trabajo, lo hiciste bien.",
-                "Excelente, continuemos.",
-                "Muy bien, sigamos con la siguiente.",
-                "Lo hiciste bien, vamos a continuar.",
-                "Buen intento, esa respuesta funciona.",
-                "Perfecto, podemos seguir.",
-                "Muy bien, vamos por otra.",
-                "Respuesta válida, sigamos.",
-                "Lo lograste, continuemos.",
-                "Bien hecho, pasemos a la siguiente.",
-                "Muy bien, estás participando muy bien."
+                "¡Muy bien! Mi nave aprendió algo nuevo contigo.",
+                "¡Lo lograste! Seven está feliz.",
+                "¡Excelente ayuda, explorador!",
+                "¡Perfecto! Mi antenita guardó tu respuesta.",
+                "¡Qué bien! Aprendí algo de la Tierra.",
+                "¡Lo lograste! Gracias por ayudarme.",
+                "¡Muy bien! Seguimos descubriendo juntos.",
+                "¡Excelente! Mi nave dio un saltito de alegría.",
+                "¡Perfecto, amiguito! Eso me sirve mucho.",
+                "¡Qué bien lo hiciste! Seven aprende contigo.",
+                "¡Lo lograste! Mi antenita está contenta.",
+                "¡Muy bien! Esa ayuda es genial."
             ),
             GeneralTeacherFeedbackType.INCORRECT_RETRY to listOf(
-                "Aún no es la respuesta esperada. Intentemos otra vez.",
-                "Probemos nuevamente con calma.",
-                "Intentemos una vez más.",
-                "Escucha otra vez la pregunta y vuelve a responder.",
-                "Todavía no coincide. Vamos a intentarlo otra vez.",
-                "No te preocupes, puedes probar nuevamente.",
-                "Vamos a repetirlo con atención.",
-                "Inténtalo otra vez, despacio y claro.",
+                "Sigamos pensando juntitos. Probemos otra vez.",
+                "Mi antenita cree que podemos intentarlo de nuevo.",
+                "Vamos otra vez, con calma. Yo te acompaño.",
+                "Probemos de nuevo, mi pequeño explorador.",
+                "Intentémoslo otra vez, tú y yo.",
+                "Seven quiere escucharte una vez más.",
+                "Vamos a intentarlo de nuevo, sin apuro.",
                 "Pensemos un poquito más y probemos otra vez.",
-                "Aún podemos intentarlo nuevamente.",
-                "Vamos de nuevo, tú puedes.",
-                "Probemos una respuesta diferente."
+                "No pasa nada, podemos intentarlo nuevamente.",
+                "Mi nave espera otro intento. ¡Vamos!",
+                "Probemos con otra idea, exploradorcito.",
+                "Lo intentamos otra vez, juntos."
             ),
             GeneralTeacherFeedbackType.INCORRECT_NEXT to listOf(
-                "No te preocupes, vamos a continuar.",
-                "Está bien, pasemos a la siguiente pregunta.",
-                "Sigamos avanzando con otra pregunta.",
-                "Vamos con la siguiente.",
-                "No pasa nada, continuemos.",
-                "Seguimos con otra pregunta.",
-                "Muy bien por intentarlo, ahora continuemos.",
-                "Vamos a seguir practicando."
+                "Gracias por intentarlo. Sigamos explorando.",
+                "Gracias por participar. Vamos con otro reto.",
+                "No pasa nada, continuemos la aventura.",
+                "Seguimos descubriendo cosas de la Tierra.",
+                "Gracias por tu ayuda. Vamos con otra pregunta.",
+                "Está bien, sigamos jugando juntos.",
+                "Continuemos con calma, explorador.",
+                "Vamos a seguir descubriendo cositas nuevas."
             ),
             GeneralTeacherFeedbackType.NOT_INTERPRETABLE_RETRY to listOf(
-                "No pude entenderte bien. Repitamos con calma.",
-                "Creo que no escuché claramente. Inténtalo otra vez.",
-                "Puedes responder otra vez, despacio y claro.",
-                "Repitamos la respuesta con voz clara.",
-                "No logré interpretar tu respuesta. Probemos de nuevo.",
-                "Intentemos otra vez para escucharte mejor.",
-                "Habla un poquito más claro y probemos nuevamente.",
-                "Vamos a repetirlo con calma.",
-                "No entendí bien esa respuesta. Intenta otra vez.",
-                "Probemos de nuevo, estoy escuchando."
+                "Mi antenita no te escuchó bien. Probemos otra vez.",
+                "Creo que la señal llegó bajita. Repítelo, por favor.",
+                "Dilo despacito otra vez, te escucho.",
+                "No te entendí bien. Intentémoslo de nuevo.",
+                "Mi nave necesita escucharte una vez más.",
+                "Repitamos con voz clarita, exploradorcito.",
+                "Probemos de nuevo, estoy escuchando.",
+                "La señal llegó borrosa. Intenta otra vez.",
+                "No logré entenderte. Repítelo, por favor.",
+                "Dime otra vez, despacito y claro."
             ),
             GeneralTeacherFeedbackType.NOT_INTERPRETABLE_NEXT to listOf(
-                "No pude entender bien la respuesta, pero vamos a continuar.",
-                "Sigamos con la siguiente pregunta.",
-                "Continuemos con otra pregunta.",
-                "Vamos a seguir avanzando.",
-                "No hay problema, pasemos a la siguiente.",
-                "Seguimos practicando con otra pregunta."
+                "No te escuché muy bien, pero sigamos explorando.",
+                "Vamos con otro reto de la Tierra.",
+                "Continuemos la aventura, explorador.",
+                "No pasa nada, seguimos descubriendo.",
+                "Sigamos con otra pregunta juntos.",
+                "Vamos a seguir jugando, amiguito."
             ),
             GeneralTeacherFeedbackType.NO_RESPONSE_RETRY to listOf(
-                "No escuché una respuesta. Intentemos nuevamente.",
-                "Parece que no respondiste. Probemos otra vez.",
-                "Cuando estés listo, responde con voz clara.",
-                "No escuché tu voz. Intentémoslo otra vez.",
-                "Vamos a probar nuevamente.",
-                "Responde cuando estés listo.",
-                "Intentemos otra vez, te estoy escuchando.",
-                "No se detectó respuesta. Probemos de nuevo.",
-                "Puedes intentarlo otra vez.",
-                "Vamos de nuevo con calma."
+                "No escuché tu voz. Probemos otra vez.",
+                "Mi antenita espera tu respuesta. Intenta de nuevo.",
+                "Cuando quieras, respóndeme con tu voz.",
+                "Seven sigue escuchando. Intentémoslo otra vez.",
+                "No llegó tu señal. Vamos a intentarlo de nuevo.",
+                "Te escucho, exploradorcito. Responde cuando quieras.",
+                "Mi nave no captó tu voz. Probemos otra vez.",
+                "Cuéntame tu respuesta, te escucho de nuevo.",
+                "Vamos otra vez, con calma. Estoy atento.",
+                "Puedes intentarlo otra vez, yo espero."
             ),
             GeneralTeacherFeedbackType.NO_RESPONSE_NEXT to listOf(
-                "No escuché respuesta, vamos a continuar.",
-                "Pasemos a la siguiente pregunta.",
-                "No hay problema, seguimos avanzando.",
-                "Continuemos con otra pregunta.",
-                "Vamos a seguir practicando.",
-                "Sigamos con la siguiente."
+                "No escuché respuesta, pero sigamos explorando.",
+                "Vamos con otra pregunta de la Tierra.",
+                "No pasa nada, continuemos la aventura.",
+                "Seguimos descubriendo juntos, explorador.",
+                "Sigamos con otro reto, amiguito.",
+                "Vamos a seguir jugando con calma."
             ),
             GeneralTeacherFeedbackType.TIME_EXPIRED_RETRY to listOf(
-                "Se terminó el tiempo. Intentemos nuevamente.",
-                "El tiempo acabó, pero puedes probar otra vez.",
-                "Vamos a repetirlo un poco más rápido.",
-                "Se acabó el tiempo. Intentemos de nuevo.",
-                "Probemos otra vez antes de continuar.",
-                "El tiempo terminó. Vamos de nuevo.",
-                "Intentemos responder con más calma esta vez.",
-                "Vamos a intentarlo una vez más."
+                "Se acabó el tiempito. Probemos otra vez.",
+                "Mi reloj espacial sonó. Intentémoslo de nuevo.",
+                "Vamos otra vez, un poquito más rápido.",
+                "El tiempo voló. Probemos una vez más.",
+                "Intentémoslo de nuevo, con calma.",
+                "Mi nave te da otro intento. ¡Vamos!",
+                "Se terminó el tiempito, pero podemos intentarlo otra vez.",
+                "Probemos de nuevo antes de seguir."
             ),
             GeneralTeacherFeedbackType.TIME_EXPIRED_NEXT to listOf(
-                "Se terminó el tiempo. Vamos a continuar.",
-                "El tiempo acabó. Pasemos a la siguiente.",
-                "No hay problema, sigamos con otra pregunta.",
-                "Continuemos con la siguiente.",
-                "Vamos a seguir avanzando.",
-                "Pasemos a otra pregunta."
+                "Se acabó el tiempito. Sigamos explorando.",
+                "Vamos a continuar la aventura.",
+                "Seguimos con otra pregunta de la Tierra.",
+                "No pasa nada, continuemos juntos.",
+                "Sigamos descubriendo más cositas.",
+                "Continuemos con otro reto, explorador."
             ),
             GeneralTeacherFeedbackType.TECHNICAL_ERROR_RETRY to listOf(
-                "Hubo un pequeño problema. Intentemos otra vez.",
-                "Algo no funcionó bien. Probemos nuevamente.",
-                "Vamos a repetirlo para continuar.",
-                "Tuve un problema para procesar eso. Intentemos otra vez.",
-                "Probemos nuevamente.",
-                "Intentemos continuar con calma."
+                "Uy, mi nave hizo un ruidito raro. Probemos otra vez.",
+                "Mi antenita se confundió un poquito. Intentémoslo de nuevo.",
+                "Algo pasó en mi nave, pero seguimos tranquilos.",
+                "Mi sistema espacial tartamudeó. Vamos otra vez.",
+                "Hubo un saltito en mi nave. Probemos de nuevo.",
+                "Mi computadora se mareó un momento. Intentémoslo otra vez."
             ),
             GeneralTeacherFeedbackType.TECHNICAL_ERROR_NEXT to listOf(
-                "Hubo un pequeño problema, vamos a continuar.",
-                "Sigamos con la siguiente pregunta.",
-                "No hay problema, continuemos.",
-                "Vamos a avanzar con otra pregunta.",
-                "Continuemos con la actividad.",
-                "Sigamos practicando."
+                "Mi nave tuvo un ruidito, pero sigamos explorando.",
+                "Algo pasó en mi nave. Continuemos la aventura.",
+                "No pasa nada, seguimos con otra pregunta.",
+                "Mi antenita ya está mejor. Sigamos jugando.",
+                "Vamos a continuar, mi nave sigue lista.",
+                "Seguimos descubriendo, exploradorcito."
             ),
             GeneralTeacherFeedbackType.SESSION_START to listOf(
-                "Vamos a empezar.",
-                "Estoy listo para jugar y aprender contigo.",
-                "Empecemos con la actividad.",
-                "Vamos a practicar juntos.",
-                "Prepárate, vamos a comenzar.",
-                "Comencemos con atención."
+                "¡Hola! Soy Seven. Vamos a descubrir cosas juntos.",
+                "Mi antenita está lista para aprender contigo.",
+                "¡Empecemos esta aventura espacial!",
+                "Vine de muy lejos para conocer la Tierra contigo.",
+                "¡Hola, explorador! Comencemos a jugar.",
+                "Mi nave está lista. ¡Vamos a empezar!"
             ),
             GeneralTeacherFeedbackType.QUESTION_INTRO to listOf(
-                "Escucha con atención.",
-                "Ahora va la pregunta.",
-                "Presta atención a esta pregunta.",
-                "Vamos con una pregunta.",
-                "Escucha bien antes de responder.",
-                "Ahora responde cuando estés listo.",
-                "Piensa un momento antes de responder.",
-                "Aquí viene la pregunta."
+                "Aquí viene un reto de la Tierra.",
+                "Tengo una preguntita para ti.",
+                "Mi antenita quiere descubrir algo.",
+                "Vamos con un reto pequeñito.",
+                "Seven tiene una duda curiosa.",
+                "Escucha esta preguntita y dime.",
+                "Aquí va otra aventura para tu voz.",
+                "Mi nave quiere aprender esto contigo."
             ),
             GeneralTeacherFeedbackType.SESSION_COMPLETED to listOf(
-                "Terminamos la actividad. Gracias por participar.",
-                "Muy bien, completamos la actividad.",
-                "Hemos terminado. Buen trabajo.",
-                "Gracias por participar, lo hiciste con esfuerzo.",
-                "Actividad finalizada. Buen trabajo.",
-                "Terminamos por ahora. Gracias por responder.",
-                "Muy bien, llegamos al final.",
-                "Buen trabajo, terminamos la sesión."
+                "Gracias por ayudarme a conocer la Tierra.",
+                "Terminamos por hoy. ¡Hasta la próxima aventura!",
+                "Mi nave guardó una estrellita gracias a ti.",
+                "Seven aprendió mucho contigo. ¡Gracias!",
+                "Completamos la misión. ¡Buen trabajo, explorador!",
+                "Llegamos al final. Gracias por jugar conmigo.",
+                "Terminamos la aventura. Seven está feliz.",
+                "Gracias, exploradorcito. La misión quedó completa."
             )
         )
     }
