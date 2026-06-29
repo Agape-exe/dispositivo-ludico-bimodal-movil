@@ -18,7 +18,17 @@ data class AnswerEvaluationDebugInfo(
     val localEvaluationResult: String,
     val localReason: String?,
     val evaluationLatencyMs: Long?,
-    val attemptNumber: Int
+    val attemptNumber: Int,
+    // MED01: decision hibrida del juez de respuestas abiertas. Campos opcionales
+    // para conservar compatibilidad con evaluaciones puramente locales.
+    val decisionLayer: String? = null,
+    val judgeDecision: String? = null,
+    val finalResult: String? = null,
+    val acceptedAsEquivalent: Boolean? = null,
+    val confidence: Double? = null,
+    val judgeReason: String? = null,
+    val judgeLatencyMs: Long? = null,
+    val usedFallback: Boolean? = null
 )
 
 /** Conteos agregados de las voces reproducidas durante una sesion inteligente. */
@@ -119,21 +129,26 @@ object IntelligentSessionReport {
                 }
             }
             appendLine()
-            appendLine("== Evaluacion local ==")
+            appendLine("== Evaluacion hibrida ==")
             if (evaluations.isEmpty()) {
                 appendLine("(sin respuestas evaluadas)")
             } else {
                 evaluations.forEach { ev ->
-                    appendLine(
-                        "P${ev.questionOrder} intento ${ev.attemptNumber} | ${ev.localEvaluationResult} | " +
-                            "ref:${ev.expectedAnswerShort ?: "—"} | stt:${ev.sttFinalTranscriptShort ?: "—"} | " +
-                            "latencia:${ev.evaluationLatencyMs ?: "—"}ms" +
-                            (ev.localReason?.let { " | motivo:$it" } ?: "")
-                    )
+                    appendLine("P${ev.questionOrder} intento ${ev.attemptNumber}")
+                    appendLine("- STT: ${ev.sttFinalTranscriptShort ?: "—"}")
+                    appendLine("- Ref: ${ev.expectedAnswerShort ?: "—"}")
+                    appendLine("- Local: ${ev.localEvaluationResult}")
+                    appendLine("- Juez: ${ev.judgeDecision ?: "—"}")
+                    appendLine("- Capa final: ${ev.decisionLayer ?: "LOCAL"}")
+                    appendLine("- Resultado final: ${ev.finalResult ?: ev.localEvaluationResult}")
+                    appendLine("- Equivalente: ${boolLabel(ev.acceptedAsEquivalent)}")
+                    appendLine("- Confianza: ${ev.confidence?.let { formatConfidence(it) } ?: "—"}")
+                    appendLine("- Latencia local: ${ev.evaluationLatencyMs ?: "—"}ms")
+                    appendLine("- Latencia juez: ${ev.judgeLatencyMs?.let { "$it ms" } ?: "—"}")
+                    appendLine("- Fallback: ${boolLabel(ev.usedFallback)}")
+                    appendLine("- Motivo: ${ev.judgeReason ?: ev.localReason ?: "—"}")
                 }
             }
-            appendLine()
-            appendLine("Nota: las respuestas abiertas/dudosas las resolvera el juez de MED01.")
         }.trim()
     }
 
@@ -145,6 +160,21 @@ object IntelligentSessionReport {
             .replace(Regex("(?i)(api[_-]?key|bearer|token|secret)[^\\s]*"), "credential_redacted")
             .trim()
             .take(maxLength)
+    }
+
+    private fun boolLabel(value: Boolean?): String = when (value) {
+        true -> "Si"
+        false -> "No"
+        null -> "—"
+    }
+
+    /** Confianza con dos decimales y sin depender de la configuracion regional. */
+    private fun formatConfidence(value: Double): String {
+        val clamped = value.coerceIn(0.0, 1.0)
+        val rounded = Math.round(clamped * 100.0)
+        return "0.${rounded.toString().padStart(2, '0')}".let {
+            if (rounded >= 100L) "1.00" else it
+        }
     }
 
     private fun List<Long>.averageOrNull(): Long? =

@@ -89,6 +89,8 @@ import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
 import com.taller.app.bimodal.FacePausePhraseBank
+import com.taller.app.bimodal.HybridAnswerEvaluator
+import com.taller.app.bimodal.HybridSessionContext
 import com.taller.app.bimodal.IntelligentSessionReport
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
@@ -103,6 +105,8 @@ import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
 import com.taller.app.gpt.GptClientImpl
 import com.taller.app.gpt.GptConfig
+import com.taller.app.gpt.judge.JudgeDecisionLayer
+import com.taller.app.gpt.judge.OpenAnswerJudge
 import com.taller.app.gpt.GptRuntimeSettings
 import com.taller.app.gpt.GptSettingsRepository
 import com.taller.app.attention.AttentionInput
@@ -660,6 +664,16 @@ private fun BimodalSession(
         )
     }
 
+    // MED01: juez de respuestas abiertas (capa contextual GPT-mini para casos
+    // dudosos) y evaluador hibrido que combina la capa local con el juez. Reutiliza
+    // el cliente GPT existente; el juez solo juzga texto y nunca genera voz.
+    val openAnswerJudge = remember(recaptureGptClient) {
+        OpenAnswerJudge(gptClient = recaptureGptClient)
+    }
+    val hybridEvaluator = remember(openAnswerJudge) {
+        HybridAnswerEvaluator(judge = openAnswerJudge)
+    }
+
     // Diagnostico de la ultima mediacion para la interfaz tecnica: origen efectivo
     // (siempre local en esta actividad), latencia de seleccion, tipo y motivo del
     // respaldo, si lo hubo. No contiene texto del nino.
@@ -689,6 +703,14 @@ private fun BimodalSession(
     var voiceDebugHistory by remember(activity) { mutableStateOf<List<VoicePlaybackDebugInfo>>(emptyList()) }
     var evaluationHistory by remember(activity) { mutableStateOf<List<AnswerEvaluationDebugInfo>>(emptyList()) }
     var showTechnicalReport by remember(activity) { mutableStateOf(false) }
+
+    // MED01: estado del juez de respuestas abiertas para el panel tecnico. Solo
+    // codigos y resultados, nunca transcripcion, prompts ni datos sensibles.
+    var lastJudgeLayer by remember(activity) { mutableStateOf<String?>(null) }
+    var lastJudgeDecision by remember(activity) { mutableStateOf<String?>(null) }
+    var lastJudgeFinalResult by remember(activity) { mutableStateOf<String?>(null) }
+    var lastJudgeLatencyMs by remember(activity) { mutableStateOf<Long?>(null) }
+    var lastJudgeFallback by remember(activity) { mutableStateOf<Boolean?>(null) }
 
     // Ultimo mensaje de retroalimentacion general generado (categoria + texto +
     // latencia de generacion local) para mostrarlo en la tarjeta de feedback.
@@ -1050,10 +1072,39 @@ private fun BimodalSession(
         }
         semanticSource = SemanticSource.REAL
         semanticLatencyMs = outcome.latencyMillis
-        // Resumen tecnico (TTSV01-FIX03): guarda en memoria el diagnostico de esta
-        // evaluacion local (pregunta, referencia, transcripcion corta, resultado y
-        // latencia). Sanitizado y sin enviarse a ningun servicio. Sirve para revisar
-        // por que una respuesta abierta pudo quedar marcada como incorrecta.
+
+        // MED01: evaluacion hibrida. La capa local ya decidio; si el caso es abierto
+        // o dudoso (la referencia parece lista/ejemplo o la pregunta admite ejemplos)
+        // se consulta al juez textual. Nunca bloquea: ante un fallo del juez se usa un
+        // respaldo local seguro. La voz sigue viniendo del guion cacheado, no del juez.
+        val attemptNumber = progress?.currentAttempt ?: 1
+        val attemptsRemaining = attemptNumber < question.maxAttempts
+        val hybrid = runCatching {
+            hybridEvaluator.evaluate(
+                transcription = transcription,
+                question = question,
+                localResult = outcome.result,
+                context = HybridSessionContext(
+                    ageRange = activity.ageLevel.orEmpty(),
+                    topic = activity.topic,
+                    classContext = activity.classContextNotes,
+                    currentAttempt = attemptNumber,
+                    attemptsRemaining = attemptsRemaining
+                )
+            )
+        }.getOrNull()
+        val finalResult = hybrid?.finalResult ?: outcome.result
+
+        // Estado del juez para el panel tecnico (sin texto del nino ni prompts).
+        lastJudgeLayer = hybrid?.decisionLayer?.name ?: JudgeDecisionLayer.LOCAL.name
+        lastJudgeDecision = hybrid?.judgeDecision?.name
+        lastJudgeFinalResult = finalResult.name
+        lastJudgeLatencyMs = hybrid?.judgeLatencyMs
+        lastJudgeFallback = hybrid?.usedFallback
+
+        // Resumen tecnico (MED01): guarda en memoria el diagnostico de esta evaluacion
+        // hibrida (capa local + juez). Sanitizado y sin enviarse a ningun servicio.
+        // Sirve para revisar por que una respuesta abierta fue aceptada o rechazada.
         evaluationHistory = (
             evaluationHistory + AnswerEvaluationDebugInfo(
                 questionOrder = (progress?.currentQuestionIndex ?: 0) + 1,
@@ -1064,16 +1115,26 @@ private fun BimodalSession(
                 localEvaluationResult = outcome.result.name,
                 localReason = null,
                 evaluationLatencyMs = outcome.latencyMillis,
-                attemptNumber = progress?.currentAttempt ?: 1
+                attemptNumber = attemptNumber,
+                decisionLayer = hybrid?.decisionLayer?.name,
+                judgeDecision = hybrid?.judgeDecision?.name,
+                finalResult = finalResult.name,
+                acceptedAsEquivalent = hybrid?.acceptedAsEquivalent,
+                confidence = hybrid?.confidence,
+                judgeReason = hybrid?.reason?.let { IntelligentSessionReport.shortSafe(it) },
+                judgeLatencyMs = hybrid?.judgeLatencyMs,
+                usedFallback = hybrid?.usedFallback
             )
         ).takeLast(40)
-        // Log seguro: solo el resultado semantico y la latencia, nunca la
-        // transcripcion ni datos del nino.
+        // Log seguro: solo resultados, capa y latencias, nunca la transcripcion ni
+        // datos del nino.
         Log.d(
             BIMODAL_SEMANTIC_TAG,
-            "evaluacion: resultadoCrudo=${outcome.result} latenciaMs=${outcome.latencyMillis}"
+            "evaluacion: local=${outcome.result} final=$finalResult capa=${hybrid?.decisionLayer} " +
+                "juez=${hybrid?.judgeDecision} latenciaLocalMs=${outcome.latencyMillis} " +
+                "latenciaJuezMs=${hybrid?.judgeLatencyMs} fallback=${hybrid?.usedFallback}"
         )
-        dispatch { orchestrator.onEvent(outcome.toEvent()) }
+        dispatch { orchestrator.onSemanticEvaluated(finalResult) }
         Log.d(
             BIMODAL_SEMANTIC_TAG,
             "mapeo: estado=${orchestrator.state} " +
@@ -2145,7 +2206,12 @@ private fun BimodalSession(
         voiceDebug = lastVoiceDebug,
         showGpt = gptDebugInIntelligentModeEnabled,
         gptConfig = gptDebugConfig,
-        lastGptUsageStatus = lastGptUsageStatus
+        lastGptUsageStatus = lastGptUsageStatus,
+        judgeLayer = lastJudgeLayer,
+        judgeDecision = lastJudgeDecision,
+        judgeFinalResult = lastJudgeFinalResult,
+        judgeLatencyMs = lastJudgeLatencyMs,
+        judgeFallback = lastJudgeFallback
     )
 
     val activityForOrientation = context.findActivity()
@@ -3520,7 +3586,12 @@ internal fun intelligentDebugPanelText(
     voiceDebug: VoicePlaybackDebugInfo? = null,
     showGpt: Boolean,
     gptConfig: GptConfig,
-    lastGptUsageStatus: String
+    lastGptUsageStatus: String,
+    judgeLayer: String? = null,
+    judgeDecision: String? = null,
+    judgeFinalResult: String? = null,
+    judgeLatencyMs: Long? = null,
+    judgeFallback: Boolean? = null
 ): String = buildList {
     if (showAttention) {
         add(
@@ -3548,7 +3619,17 @@ internal fun intelligentDebugPanelText(
         )
     }
     if (showGpt) {
-        add(gptDebugLabel(gptConfig, lastGptUsageStatus))
+        add(
+            gptDebugLabel(
+                config = gptConfig,
+                lastUsageStatus = lastGptUsageStatus,
+                judgeLayer = judgeLayer,
+                judgeDecision = judgeDecision,
+                judgeFinalResult = judgeFinalResult,
+                judgeLatencyMs = judgeLatencyMs,
+                judgeFallback = judgeFallback
+            )
+        )
     }
 }.joinToString("\n\n")
 
@@ -3662,17 +3743,39 @@ internal fun ttsFallbackReasonLabel(
     }
 }
 
-internal fun gptDebugLabel(config: GptConfig, lastUsageStatus: String): String {
+internal fun gptDebugLabel(
+    config: GptConfig,
+    lastUsageStatus: String,
+    judgeLayer: String? = null,
+    judgeDecision: String? = null,
+    judgeFinalResult: String? = null,
+    judgeLatencyMs: Long? = null,
+    judgeFallback: Boolean? = null
+): String {
     val status = when {
         !config.enabled -> "desactivado"
         !config.hasApiKey -> "no configurado"
         else -> "activado"
     }
+    val fallbackLabel = when (judgeFallback) {
+        true -> "Si"
+        false -> "No"
+        null -> "—"
+    }
+    // MED01: estado del juez de respuestas abiertas (capa contextual para casos
+    // dudosos). Modelo juez = modelo principal configurado (GPT-mini). Sin prompts.
     return "GPT: $status\n" +
         "Modelo: ${config.model}\n" +
         "Configurado: ${if (config.hasApiKey) "Si" else "No"}\n" +
         "Fallback local: ${if (config.localFallbackEnabled) "Si" else "No"}\n" +
-        "Ultimo uso: $lastUsageStatus"
+        "Ultimo uso: $lastUsageStatus\n" +
+        "Juez configurado: ${if (config.isOperational) "Si" else "No"}\n" +
+        "Modelo juez: ${config.model}\n" +
+        "Ultima capa: ${judgeLayer ?: "—"}\n" +
+        "Resultado juez: ${judgeDecision ?: "—"}\n" +
+        "Resultado final: ${judgeFinalResult ?: "—"}\n" +
+        "Latencia juez: ${judgeLatencyMs?.let { "$it ms" } ?: "—"}\n" +
+        "Fallback juez: $fallbackLabel"
 }
 
 private fun ttsVoiceDebugName(settings: ToyVoiceSettings): String? = when (settings.provider) {

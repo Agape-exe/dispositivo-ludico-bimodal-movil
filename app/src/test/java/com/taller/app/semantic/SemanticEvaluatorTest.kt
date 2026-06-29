@@ -114,4 +114,56 @@ class SemanticEvaluatorTest {
             e.evaluate("es un gato", expectedAnswer = "", keywords = listOf("gato"))
         )
     }
+
+    // ----- MED01: referencia tipo lista / ejemplos validos -----------------------
+
+    @Test fun listReference_acceptsFirstItemWithArticle() {
+        val e = SemanticEvaluator()
+        // "el perro" debe aceptarse contra "Perro, gato, hamster." (regresion MED01).
+        assertEquals(
+            SemanticResult.CORRECT,
+            e.evaluate("el perro", expectedAnswer = "Perro, gato, hamster.", keywords = emptyList())
+        )
+    }
+
+    @Test fun listReference_acceptsMiddleItemWithArticle() {
+        val e = SemanticEvaluator()
+        assertEquals(
+            SemanticResult.CORRECT,
+            e.evaluate("el gato", expectedAnswer = "Perro, gato, hamster.", keywords = emptyList())
+        )
+    }
+
+    @Test fun listReference_acceptsAccentedItem() {
+        val e = SemanticEvaluator()
+        // "hamster" debe aceptar "hámster" (tildes normalizadas).
+        assertEquals(
+            SemanticResult.CORRECT,
+            e.evaluate("un hámster", expectedAnswer = "Perro, gato, hamster.", keywords = emptyList())
+        )
+    }
+
+    @Test fun listReference_rejectsUnrelatedAnswer() {
+        val e = SemanticEvaluator()
+        assertEquals(
+            SemanticResult.INCORRECT,
+            e.evaluate("el avion", expectedAnswer = "Perro, gato, hamster.", keywords = emptyList())
+        )
+    }
+
+    @Test fun listReference_acceptsItemSeparatedByConjunction() {
+        val e = SemanticEvaluator()
+        assertEquals(
+            SemanticResult.CORRECT,
+            e.evaluate("la gallina", expectedAnswer = "vaca, caballo y gallina", keywords = emptyList())
+        )
+    }
+
+    @Test fun referenceLooksLikeList_detectsEnumeration() {
+        val e = SemanticEvaluator()
+        assertEquals(true, e.referenceLooksLikeList("Perro, gato, hamster."))
+        assertEquals(true, e.referenceLooksLikeList("vaca o gallina"))
+        assertEquals(false, e.referenceLooksLikeList("perro"))
+        assertEquals(false, e.referenceLooksLikeList(""))
+    }
 }

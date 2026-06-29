@@ -9,7 +9,9 @@ import com.taller.app.model.OperationMode
 fun LearningActivity.toEntity(): ActivityEntity = ActivityEntity(
     id = id.toLongOrNull() ?: 0L,
     name = title,
-    topic = "",
+    topic = topic,
+    ageLevel = ageLevel,
+    classContextNotes = classContextNotes,
     operationMode = mode.name,
     maxAttempts = questions.maxOfOrNull { it.maxAttempts } ?: 3,
     maxTimeSeconds = questions.maxOfOrNull { it.maxTimeSeconds } ?: 60,
@@ -25,7 +27,10 @@ fun ActivityEntity.toDomain(questions: List<LearningQuestion> = emptyList()): Le
         questions = questions,
         generatedIntroText = generatedIntroText,
         generatedClosingText = generatedClosingText,
-        voicePrepReady = voicePrepStatus == "READY"
+        voicePrepReady = voicePrepStatus == "READY",
+        topic = topic,
+        ageLevel = ageLevel,
+        classContextNotes = classContextNotes
     )
 
 fun LearningQuestion.toEntity(activityId: Long, orderIndex: Int): QuestionEntity = QuestionEntity(

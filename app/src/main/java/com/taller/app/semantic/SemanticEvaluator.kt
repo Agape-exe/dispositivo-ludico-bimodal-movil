@@ -38,8 +38,15 @@ class SemanticEvaluator {
             return SemanticResult.NOT_INTERPRETABLE
         }
 
-        val normalizedExpected = normalize(expectedAnswer)
-        if (normalizedExpected.isNotBlank() && containsWholeWord(normalized, normalizedExpected)) {
+        // La respuesta de referencia puede ser una lista o varios ejemplos validos
+        // ("Perro, gato, hamster."): se separa en opciones y basta con que la
+        // transcripcion contenga una de ellas como palabra/frase completa. Asi
+        // "el perro" o "el gato" se aceptan localmente sin recurrir al juez externo.
+        val expectedMatches = splitReferenceOptions(expectedAnswer).any { option ->
+            val normalizedOption = normalize(option)
+            normalizedOption.isNotBlank() && containsWholeWord(normalized, normalizedOption)
+        }
+        if (expectedMatches) {
             return SemanticResult.CORRECT
         }
 
@@ -49,6 +56,31 @@ class SemanticEvaluator {
         }
 
         return if (hasKeyword) SemanticResult.CORRECT else SemanticResult.INCORRECT
+    }
+
+    /**
+     * Indica si la respuesta de referencia esta redactada como una lista o conjunto
+     * de ejemplos validos ("perro, gato, hamster" o "vaca o gallina"), en cuyo caso
+     * la pregunta suele admitir cualquiera de ellos como respuesta. Sirve para
+     * decidir si conviene consultar al juez de respuestas abiertas cuando la capa
+     * local marca incorrecto.
+     */
+    fun referenceLooksLikeList(expectedAnswer: String): Boolean =
+        splitReferenceOptions(expectedAnswer).count { it.isNotBlank() } > 1
+
+    /**
+     * Separa una respuesta de referencia en sus opciones validas. Reconoce comas,
+     * punto y coma, barras, saltos de linea y los conectores " y " / " o " del
+     * habla natural. Una referencia simple ("gato") devuelve una sola opcion, por lo
+     * que el comportamiento para respuestas no enumeradas no cambia.
+     */
+    fun splitReferenceOptions(expectedAnswer: String): List<String> {
+        if (expectedAnswer.isBlank()) return emptyList()
+        return expectedAnswer
+            .split(Regex("(?i)[,;/\\n]| y | o | u | e "))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .ifEmpty { listOf(expectedAnswer.trim()) }
     }
 
     /**

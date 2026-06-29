@@ -9,7 +9,11 @@ data class LearningActivity(
     // Permiten reproducir desde cache las lineas finitas sin sintetizar en vivo.
     val generatedIntroText: String? = null,
     val generatedClosingText: String? = null,
-    val voicePrepReady: Boolean = false
+    val voicePrepReady: Boolean = false,
+    // MED01: contexto pedagogico textual usado por el juez de respuestas abiertas.
+    val topic: String = "",
+    val ageLevel: String? = null,
+    val classContextNotes: String? = null
 )
 
 data class LearningQuestion(
