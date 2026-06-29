@@ -46,6 +46,7 @@ import com.taller.app.gpt.GptRuntimeSettings
 import com.taller.app.gpt.GptSettingsRepository
 import com.taller.app.gpt.script.ScriptStatus
 import com.taller.app.gpt.script.SessionScript
+import com.taller.app.gpt.script.SessionScriptClientConfig
 import com.taller.app.gpt.script.SessionScriptGenerator
 import com.taller.app.gpt.script.SessionScriptInput
 import com.taller.app.gpt.script.SessionScriptInputFactory
@@ -366,14 +367,23 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
                                 issues = emptyList()
                                 scope.launch {
                                     val safe = gptSettingsRepository.readOnce().sanitized()
-                                    val client = GptClientImpl(configProvider = { GptConfig.fromBuild(safe) })
+                                    // El guion necesita más presupuesto de salida que las
+                                    // respuestas habladas cortas; de lo contrario llegaba truncado.
+                                    val scriptConfig = SessionScriptClientConfig.forScript(
+                                        GptConfig.fromBuild(safe),
+                                        input.questions.size
+                                    )
+                                    val client = GptClientImpl(configProvider = { scriptConfig })
                                     val generator = SessionScriptGenerator(client)
                                     val outcome = withContext(Dispatchers.IO) { generator.generate(input) }
                                     applyGenerated(outcome.script)
                                     infoMessage = when (outcome) {
                                         is SessionScriptGenerator.Outcome.FromModel ->
                                             "Guion preparado. Revísalo y edítalo antes de guardar."
-                                        is SessionScriptGenerator.Outcome.FromLocal -> outcome.message
+                                        is SessionScriptGenerator.Outcome.FromModelPartial ->
+                                            outcome.message
+                                        is SessionScriptGenerator.Outcome.FromLocal ->
+                                            "${outcome.message}\nMotivo técnico: ${outcome.reason}"
                                     }
                                     // Persiste como pendiente de revisión para no perder el trabajo.
                                     persistScript(

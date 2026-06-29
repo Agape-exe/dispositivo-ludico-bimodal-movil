@@ -13,7 +13,7 @@ package com.taller.app.voice.prep
  * editorial del banco tipo profesor
  * ([com.taller.app.bimodal.feedback.GeneralTeacherFeedbackGenerator]); aqui se
  * mantiene una seleccion fija y sin estado para que la lista a sintetizar sea
- * estable. La revision fina de estas frases corresponde a VOZ01.
+ * estable.
  */
 object SevenGenericVoiceBank {
 
@@ -21,31 +21,38 @@ object SevenGenericVoiceBank {
     val phrases: List<String> = listOf(
         // Saludo general
         "Hola, soy Seven. Vamos a jugar y aprender juntos.",
-        "Que alegria verte. Empecemos.",
+        "Mi antenita está lista para aprender contigo.",
+        "¡Qué alegría verte! Empecemos esta aventura.",
         // Transicion entre preguntas
-        "Muy bien, sigamos.",
-        "Vamos con otra.",
+        "Vamos con otra aventura pequeñita.",
+        "Sigamos explorando juntos.",
         "Continuemos con calma.",
-        // Te escucho
-        "Te escucho.",
+        "Tengo otro reto de la Tierra para ti.",
+        // Te escucho / turno del nino
+        "Te escucho con mis orejitas espaciales.",
+        "Ahora es tu turno, dime con calma.",
         "Cuando quieras, dime tu respuesta.",
         // Pensamiento / espera
-        "Estoy pensando.",
-        "Dame un momentito.",
-        // Recaptura de atencion
-        "Aqui estoy, mirame.",
-        "Volvamos a mirar juntos.",
+        "Estoy pensando con mi antenita.",
+        "Dame un momentito, estoy revisando.",
+        "Déjame ordenar mis estrellas.",
+        // Volver a la aventura (suave, sin ordenes duras)
+        "Aquí estoy, sigamos juntos.",
+        "Volvamos a la aventura, explorador.",
         // Apoyo cuando no responde
-        "No te preocupes, tomate tu tiempo.",
-        "Cuando estes listo, te escucho.",
+        "No te preocupes, tómate tu tiempo.",
+        "Cuando estés listo, te escucho.",
+        "Sin apuro, aquí te espero.",
         // Cierre neutro
         "Gracias por jugar conmigo.",
-        "Lo hicimos muy bien. Hasta pronto.",
+        "Lo pasamos muy bien. ¡Hasta pronto!",
+        "Gracias por acompañarme en la aventura.",
         // Error suave / intentemos otra vez
-        "Hubo un pequeno problema. Intentemos otra vez.",
-        "Probemos de nuevo, sin apuro.",
+        "Uy, mi nave hizo un ruidito. Probemos otra vez.",
+        "Mi antenita se confundió un poquito.",
+        "Algo pasó en mi nave, pero seguimos tranquilos.",
         // Frase de calma
-        "Respira tranquilo, todo esta bien.",
+        "Respira tranquilo, todo está bien.",
         "Estamos bien, sigamos jugando."
     )
 

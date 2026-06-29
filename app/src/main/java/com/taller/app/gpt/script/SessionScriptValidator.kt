@@ -84,6 +84,16 @@ object SessionScriptValidator {
 
     fun normalize(text: String): String = text.trim().lowercase()
 
+    /** True si el texto contiene una frase no permitida (mención a IA, tecnología, etc.). */
+    fun hasForbidden(text: String): Boolean {
+        if (text.isBlank()) return false
+        val normalized = normalize(text)
+        return FORBIDDEN_FRAGMENTS.any { normalized.contains(it) }
+    }
+
+    /** True si el texto excede el largo recomendado para niños pequeños. */
+    fun isTooLong(text: String): Boolean = text.length > MAX_SPOKEN_CHARS
+
     /** Una pista revela la respuesta si la contiene como palabra completa. */
     fun revealsAnswer(hint: String, reference: String): Boolean {
         val normalizedHint = " ${normalize(hint)} "

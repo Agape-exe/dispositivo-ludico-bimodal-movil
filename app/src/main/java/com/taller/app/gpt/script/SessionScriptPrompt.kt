@@ -26,9 +26,12 @@ object SessionScriptPrompt {
             "describelo en answerReferenceWarning y propon una mejor referencia en suggestedReferenceAnswer.\n" +
             "- No reemplaces la respuesta original; solo sugieres. Si la referencia esta bien, deja " +
             "answerReferenceWarning vacio y repite la referencia original en suggestedReferenceAnswer.\n" +
+            "- El feedback positivo y el de apoyo son calidos y breves; el reintento invita con suavidad a probar otra vez.\n" +
             "- Nunca digas que eres una IA, modelo, asistente o sistema. Nunca menciones tecnologia ni reglas.\n" +
             "- Nunca pidas datos personales del nino ni generes contenido violento, sexual, de miedo, medico o peligroso.\n" +
-            "- Devuelve SOLO un objeto JSON valido, sin texto fuera del JSON, sin markdown, sin emojis."
+            "- Devuelve SOLO un objeto JSON valido y COMPLETO, con todos los campos llenos en espanol claro.\n" +
+            "- No uses comillas triples, ni bloques de codigo, ni markdown, ni emojis, ni texto antes o despues del JSON.\n" +
+            "- No cortes la respuesta: entrega el JSON completo aunque sea largo."
 
     fun build(input: SessionScriptInput): GptPrompt = GptPrompt(
         systemInstruction = SYSTEM_INSTRUCTION,
@@ -83,8 +86,13 @@ object SessionScriptPrompt {
                     "  ]\n" +
                     "}\n"
             )
-            append("Incluye un objeto en \"questions\" por cada pregunta entregada, con su orderIndex correspondiente.\n")
-            append("No agregues campos fuera de la estructura. No escribas nada fuera del JSON.")
+            append("Incluye EXACTAMENTE ")
+            append(input.questions.size.toString())
+            append(" objetos en \"questions\", uno por cada pregunta entregada, cada uno con su orderIndex correspondiente.\n")
+            append("Usa los nombres de campo exactamente como aparecen arriba. Completa todos los campos de cada pregunta.\n")
+            append("Escribe en espanol claro, con frases cortas y carinosas para ninos de 3 a 5 anos.\n")
+            append("No uses comillas triples ni markdown. No agregues campos fuera de la estructura. ")
+            append("No escribas nada antes ni despues del JSON. Devuelve el objeto JSON completo, sin cortarlo.")
         }
     }
 }

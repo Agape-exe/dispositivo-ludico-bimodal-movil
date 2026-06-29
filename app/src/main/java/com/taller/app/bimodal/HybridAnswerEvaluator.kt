@@ -5,6 +5,7 @@ import com.taller.app.gpt.judge.JudgeDecisionLayer
 import com.taller.app.gpt.judge.OpenAnswerJudge
 import com.taller.app.gpt.judge.OpenAnswerJudgeInput
 import com.taller.app.model.LearningQuestion
+import com.taller.app.semantic.OnomatopoeiaNormalizer
 import com.taller.app.semantic.SemanticEvaluator
 import com.taller.app.semantic.SemanticResult
 import java.text.Normalizer
@@ -65,7 +66,7 @@ class HybridAnswerEvaluator(
         context: HybridSessionContext
     ): HybridEvaluationResult {
         // Caso claro o no aplicable: la capa local decide y no se consulta al juez.
-        if (!shouldConsultJudge(localResult, question)) {
+        if (!shouldConsultJudge(localResult, question, transcription)) {
             return HybridEvaluationResult(
                 finalResult = localResult,
                 decisionLayer = JudgeDecisionLayer.LOCAL,
@@ -150,14 +151,45 @@ class HybridAnswerEvaluator(
 
     /**
      * El juez solo se consulta cuando la capa local marco incorrecto y el caso es
-     * abierto: la referencia parece una lista/ejemplo o la pregunta admite ejemplos.
+     * abierto o dudoso:
+     *  - la referencia parece una lista/ejemplo o la pregunta admite ejemplos, o
+     *  - es una pregunta de sonido y la transcripcion parece un sonido corto que el
+     *    STT pudo confundir (sin ser un sonido contradictorio claro como "miau" para
+     *    "guau").
      * Las respuestas correctas, sin voz o no interpretables no pasan por el juez.
      */
-    fun shouldConsultJudge(localResult: SemanticResult, question: LearningQuestion): Boolean {
+    fun shouldConsultJudge(
+        localResult: SemanticResult,
+        question: LearningQuestion,
+        transcription: String
+    ): Boolean {
         if (localResult != SemanticResult.INCORRECT) return false
-        return semanticEvaluator.referenceLooksLikeList(question.expectedAnswer) ||
+        if (semanticEvaluator.referenceLooksLikeList(question.expectedAnswer) ||
             questionLooksOpen(question.questionText)
+        ) {
+            return true
+        }
+        if (questionLooksLikeSoundPrompt(question)) {
+            val onomatopoeia = OnomatopoeiaNormalizer.match(
+                answer = transcription,
+                expectedAnswer = question.expectedAnswer,
+                questionText = question.questionText
+            )
+            // Sonido claramente contradictorio: caso cerrado, no se consulta al juez.
+            if (onomatopoeia.contradictorySound) return false
+            // Transcripcion corta tipo sonido: posible error de STT, vale consultar.
+            return OnomatopoeiaNormalizer.answerLooksLikeShortSound(transcription)
+        }
+        return false
     }
+
+    /**
+     * La pregunta pide el sonido de un animal y la respuesta de referencia es una
+     * onomatopeya conocida: contexto donde un error de STT puede confundir el sonido.
+     */
+    fun questionLooksLikeSoundPrompt(question: LearningQuestion): Boolean =
+        OnomatopoeiaNormalizer.isSoundQuestion(question.questionText) &&
+            OnomatopoeiaNormalizer.expectedLooksLikeOnomatopoeia(question.expectedAnswer)
 
     /**
      * Heuristica local de pregunta abierta: detecta enunciados que piden mencionar,

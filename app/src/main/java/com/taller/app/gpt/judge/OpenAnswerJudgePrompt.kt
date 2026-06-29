@@ -27,6 +27,7 @@ object OpenAnswerJudgePrompt {
             "- La respuesta de referencia de la docente es sugerida, no unica.\n" +
             "- Si la pregunta pide \"menciona un animal domestico\", acepta perro, gato, conejo, hamster, pez u otros validos, aunque la referencia solo diga perro.\n" +
             "- Si el nino responde con articulo o frase corta como \"el gato\", interpretalo como \"gato\".\n" +
+            "- En preguntas de sonidos de animales, considera errores comunes del reconocimiento de voz: si la pregunta pide el sonido del perro y la referencia es \"guau\", transcripciones como \"wow\", \"wau\" o \"woof\" pueden ser el intento de decir \"guau\". Acepta solo si el animal de la pregunta coincide; nunca aceptes \"miau\" como sonido del perro ni \"guau\" como sonido del gato.\n" +
             "- Si la respuesta es claramente de otra categoria, marca INCORRECT.\n" +
             "- No reveles la respuesta correcta. Si quedan intentos y la respuesta es incorrecta, NO incluyas la respuesta correcta en reason ni en ninguna pista, y revealsAnswer debe ser false.\n" +
             "- Si no tienes base suficiente para decidir, usa UNCERTAIN con confidence baja.\n" +

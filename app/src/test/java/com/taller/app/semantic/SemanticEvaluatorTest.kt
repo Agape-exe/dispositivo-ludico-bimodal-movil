@@ -166,4 +166,64 @@ class SemanticEvaluatorTest {
         assertEquals(false, e.referenceLooksLikeList("perro"))
         assertEquals(false, e.referenceLooksLikeList(""))
     }
+
+    // ----- MED01-FIX01: tolerancia de sonidos / onomatopeyas ---------------------
+
+    private val dogQuestion = "¿Qué sonido hace el perro?"
+    private val catQuestion = "¿Qué sonido hace el gato?"
+
+    private fun evalSound(answer: String, expected: String, question: String) =
+        SemanticEvaluator().evaluate(answer, expectedAnswer = expected, keywords = emptyList(), questionText = question)
+
+    @Test fun dogSound_guau_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("guau", "guau", dogQuestion))
+
+    @Test fun dogSound_guauGuau_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("guau guau", "guau", dogQuestion))
+
+    @Test fun dogSound_wow_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("wow", "guau", dogQuestion))
+
+    @Test fun dogSound_wowWow_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("wow wow", "guau", dogQuestion))
+
+    @Test fun dogSound_wau_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("wau", "guau", dogQuestion))
+
+    @Test fun dogSound_woof_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("woof", "guau", dogQuestion))
+
+    @Test fun dogSound_miau_isIncorrect() =
+        assertEquals(SemanticResult.INCORRECT, evalSound("miau", "guau", dogQuestion))
+
+    @Test fun catSound_meow_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, evalSound("meow", "miau", catQuestion))
+
+    @Test fun catSound_wow_isIncorrect() =
+        assertEquals(SemanticResult.INCORRECT, evalSound("wow", "miau", catQuestion))
+
+    @Test fun dogSound_unrelatedWord_isIncorrect() =
+        assertEquals(SemanticResult.INCORRECT, evalSound("mesa", "guau", dogQuestion))
+
+    @Test
+    fun dogSound_wow_reportsAliasMetadata() {
+        val detailed = SemanticEvaluator().evaluateDetailed(
+            transcription = "wow",
+            expectedAnswer = "guau",
+            keywords = emptyList(),
+            questionText = dogQuestion
+        )
+        assertEquals(SemanticResult.CORRECT, detailed.result)
+        assertEquals(true, detailed.aliasApplied)
+        assertEquals(true, detailed.aliasReason?.contains("guau"))
+    }
+
+    @Test
+    fun soundAlias_notAppliedWithoutContext() {
+        // Sin contexto de sonido ni referencia onomatopeyica, "wow" no se acepta.
+        assertEquals(
+            SemanticResult.INCORRECT,
+            SemanticEvaluator().evaluate("wow", expectedAnswer = "azul", keywords = emptyList(), questionText = "¿De qué color es el cielo?")
+        )
+    }
 }

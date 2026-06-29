@@ -225,4 +225,90 @@ class HybridAnswerEvaluatorTest {
         assertTrue(evaluator.questionLooksOpen("Dime un ejemplo de fruta"))
         assertFalse(evaluator.questionLooksOpen("De que color es el cielo"))
     }
+
+    // ----- MED01-FIX01: preguntas de sonido / onomatopeyas ----------------------
+
+    private fun soundQuestion(expected: String = "guau") = question(
+        text = "¿Qué sonido hace el perro?",
+        expected = expected
+    )
+
+    @Test
+    fun aliasAcceptedLocally_doesNotCallJudge() = runBlocking {
+        // La capa local ya acepto el alias (CORRECT): no se consulta al juez.
+        val (evaluator, client) = evaluatorWith({ success("{}") })
+        val result = evaluator.evaluate(
+            transcription = "wow",
+            question = soundQuestion(),
+            localResult = SemanticResult.CORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.LOCAL, result.decisionLayer)
+        assertEquals(SemanticResult.CORRECT, result.finalResult)
+        assertEquals(0, client.generateCalls)
+    }
+
+    @Test
+    fun soundPromptDubiousAnswer_consultsJudge() = runBlocking {
+        // Pregunta de sonido, transcripcion corta no reconocida localmente: dudoso.
+        val json = """{ "decision": "CORRECT", "confidence": 0.8, "acceptedAsEquivalent": true }"""
+        val (evaluator, client) = evaluatorWith({ success(json) })
+        val result = evaluator.evaluate(
+            transcription = "grr",
+            question = soundQuestion(),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.JUDGE, result.decisionLayer)
+        assertEquals(SemanticResult.CORRECT, result.finalResult)
+        assertEquals(1, client.generateCalls)
+    }
+
+    @Test
+    fun soundPromptContradictorySound_doesNotCallJudge() = runBlocking {
+        // "miau" como sonido del perro es contradictorio: caso cerrado, sin juez.
+        val (evaluator, client) = evaluatorWith({ success("{}") })
+        val result = evaluator.evaluate(
+            transcription = "miau",
+            question = soundQuestion(),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.LOCAL, result.decisionLayer)
+        assertEquals(SemanticResult.INCORRECT, result.finalResult)
+        assertEquals(0, client.generateCalls)
+    }
+
+    @Test
+    fun soundPromptJudgeFails_fallsBackLocal() = runBlocking {
+        val failure = {
+            GptResult.Failure(
+                errorType = GptErrorType.NO_NETWORK,
+                safeMessage = "sin red",
+                fallbackText = "",
+                modelAttempted = "gpt-5.4-mini"
+            ) as GptResult
+        }
+        val (evaluator, _) = evaluatorWith(failure)
+        val result = evaluator.evaluate(
+            transcription = "grr",
+            question = soundQuestion(),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.FALLBACK_LOCAL, result.decisionLayer)
+        assertEquals(SemanticResult.INCORRECT, result.finalResult)
+        assertTrue(result.usedFallback)
+    }
+
+    @Test
+    fun questionLooksLikeSoundPrompt_detectsSoundQuestions() {
+        val (evaluator, _) = evaluatorWith({ success("{}") })
+        assertTrue(evaluator.questionLooksLikeSoundPrompt(soundQuestion()))
+        assertFalse(
+            evaluator.questionLooksLikeSoundPrompt(
+                question(text = "Menciona un animal domestico", expected = "perro")
+            )
+        )
+    }
 }
