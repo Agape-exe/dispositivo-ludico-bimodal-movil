@@ -170,6 +170,34 @@ class RecaptureControllerTest {
     }
 
     @Test
+    fun configurableMaxPerSessionBlocksAtConfiguredLimit() {
+        val controller = RecaptureController(maxRecapturesPerSession = 3)
+        repeat(3) { controller.onRecaptureStarted(it * 20_000L) }
+        controller.resetForNextQuestion()
+
+        val decision = controller.evaluate(
+            attentionSnapshot = snapshot(AttentionState.ATTENTION_LOST, lostDurationMs = 4_000L),
+            flowPhase = FlowPhase.BETWEEN_QUESTIONS,
+            nowMs = 80_000L
+        )
+
+        assertTrue(decision is RecaptureDecision.CloseGracefully)
+    }
+
+    @Test
+    fun zeroMaxPerSessionDoesNotExecuteRecapture() {
+        val controller = RecaptureController(maxRecapturesPerSession = 0)
+
+        val decision = controller.evaluate(
+            attentionSnapshot = snapshot(AttentionState.ATTENTION_LOST, lostDurationMs = 4_000L),
+            flowPhase = FlowPhase.BETWEEN_QUESTIONS,
+            nowMs = 10_000L
+        )
+
+        assertTrue(decision is RecaptureDecision.CloseGracefully)
+    }
+
+    @Test
     fun fixedTimerModeSuppressesRecapture() {
         val controller = RecaptureController(isIntelligentMode = false)
 

@@ -81,6 +81,8 @@ import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LocalMediationKey
+import com.taller.app.settings.AppSettings
+import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
 import com.taller.app.voice.LocalToyVoiceProvider
@@ -510,7 +512,12 @@ private fun ClassicSession(
     onChangeActivity: () -> Unit,
     onBack: () -> Unit
 ) {
-    val runner = remember(activity) { ClassicTimerRunner() }
+    val context = LocalContext.current
+    val appSettingsRepository = remember { AppSettingsRepository(context.applicationContext) }
+    val appSettings by appSettingsRepository.settings.collectAsState(initial = AppSettings.defaults())
+    val runner = remember(activity, appSettings.classicResponseTimeSeconds) {
+        ClassicTimerRunner(responseTimeSeconds = appSettings.classicResponseTimeSeconds)
+    }
     val phraseBank = remember(activity) { FixedTimerNeutralPhraseBank() }
 
     var state by remember(activity) { mutableStateOf(runner.state) }
@@ -535,7 +542,6 @@ private fun ClassicSession(
     var classicNoResponse by remember(activity) { mutableStateOf(0) }
     var classicTimeouts by remember(activity) { mutableStateOf(0) }
 
-    val context = LocalContext.current
     ClassicImmersiveSystemBarsEffect(context)
 
     // ----- STT -------------------------------------------------------------------

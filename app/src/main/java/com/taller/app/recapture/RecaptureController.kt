@@ -6,7 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 class RecaptureController(
-    private val isIntelligentMode: Boolean = true
+    private val isIntelligentMode: Boolean = true,
+    val maxRecapturesPerSession: Int = RecapturePolicy.MAX_RECAPTURES_PER_SESSION
 ) {
     private val mutableState = MutableStateFlow(RecaptureState.IDLE)
     val state: StateFlow<RecaptureState> = mutableState
@@ -72,7 +73,7 @@ class RecaptureController(
             return remember(RecaptureDecision.WaitCooldown(cooldownRemaining))
         }
 
-        if (attemptsInSession >= RecapturePolicy.MAX_RECAPTURES_PER_SESSION) {
+        if (attemptsInSession >= maxRecapturesPerSession) {
             mutableState.value = RecaptureState.EXHAUSTED
             return remember(RecaptureDecision.CloseGracefully(RecaptureReason.LIMIT_REACHED))
         }
@@ -149,7 +150,7 @@ class RecaptureController(
     fun finalSilenceExceeded(nowMs: Long): RecaptureDecision? {
         val started = lastRecaptureStartedAtMs ?: return null
         if (attemptsInQuestion < RecapturePolicy.MAX_RECAPTURES_PER_QUESTION &&
-            attemptsInSession < RecapturePolicy.MAX_RECAPTURES_PER_SESSION
+            attemptsInSession < maxRecapturesPerSession
         ) return null
         return if (nowMs - started >= RecapturePolicy.MAX_SILENCE_AFTER_FINAL_MS) {
             mutableState.value = RecaptureState.EXHAUSTED

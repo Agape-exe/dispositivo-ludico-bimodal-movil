@@ -11,6 +11,7 @@ import com.taller.app.model.LearningQuestion
  * No invoca SemanticEvaluator en ningún momento.
  */
 class ClassicTimerRunner(
+    private val responseTimeSeconds: Int = CLASSIC_DEFAULT_MAX_TIME_SECONDS,
     private val now: () -> Long = { System.currentTimeMillis() }
 ) {
 
@@ -199,7 +200,7 @@ class ClassicTimerRunner(
             currentQuestionId = question.id,
             currentQuestionText = question.questionText,
             currentQuestionMediationKey = question.mediationKey,
-            maxTimeSeconds = question.maxTimeSeconds,
+            maxTimeSeconds = responseTimeSeconds,
             sessionStartedAt = sessionStartedAt,
             questionStartedAt = existing?.questionStartedAt,
             answerReceived = existing?.answerReceived ?: false,

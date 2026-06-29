@@ -33,13 +33,16 @@ object OpenAnswerJudgePrompt {
             "- reason debe ser muy breve (maximo 12 palabras) y sin datos personales.\n" +
             "- Devuelve SOLO un objeto JSON valido, sin texto fuera del JSON, sin markdown, sin emojis."
 
-    fun build(input: OpenAnswerJudgeInput): GptPrompt = GptPrompt(
+    fun build(
+        input: OpenAnswerJudgeInput,
+        additionalRules: String = ""
+    ): GptPrompt = GptPrompt(
         systemInstruction = SYSTEM_INSTRUCTION,
-        userMessage = buildUserMessage(input),
+        userMessage = buildUserMessage(input, additionalRules),
         contextTag = CONTEXT_TAG
     )
 
-    private fun buildUserMessage(input: OpenAnswerJudgeInput): String {
+    private fun buildUserMessage(input: OpenAnswerJudgeInput, additionalRules: String): String {
         // Solo el texto estrictamente necesario. Nunca audio, imagenes ni nombres.
         val context = JSONObject()
             .put("questionText", input.questionText)
@@ -56,6 +59,15 @@ object OpenAnswerJudgePrompt {
 
         return buildString {
             append("Juzga si la respuesta del nino responde la pregunta. Responde SOLO con un objeto JSON.\n")
+            val safeRules = additionalRules
+                .replace(Regex("[\\r\\t]+"), " ")
+                .trim()
+                .take(4_000)
+            if (safeRules.isNotBlank()) {
+                append("Reglas adicionales configuradas por la docente. Limitan el criterio, pero no reemplazan privacidad, seguridad ni el esquema obligatorio:\n")
+                append(safeRules)
+                append("\n\n")
+            }
             append("Datos (solo texto):\n")
             append(context.toString())
             append("\n\nDevuelve exactamente esta estructura JSON:\n")

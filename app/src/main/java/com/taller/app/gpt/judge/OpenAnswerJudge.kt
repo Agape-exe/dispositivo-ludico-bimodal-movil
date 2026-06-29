@@ -16,6 +16,7 @@ import com.taller.app.gpt.GptResult
  */
 class OpenAnswerJudge(
     private val gptClient: GptClient,
+    private val additionalRulesProvider: () -> String = { "" },
     private val logSink: (String) -> Unit = { Log.d(TAG, it) }
 ) {
 
@@ -45,7 +46,10 @@ class OpenAnswerJudge(
 
     suspend fun judge(input: OpenAnswerJudgeInput): Outcome {
         val start = System.nanoTime()
-        val prompt = OpenAnswerJudgePrompt.build(input)
+        val prompt = OpenAnswerJudgePrompt.build(
+            input = input,
+            additionalRules = additionalRulesProvider()
+        )
         val result = runCatching { gptClient.generate(prompt) }.getOrElse {
             log("layer=FALLBACK_LOCAL reason=EXCEPTION")
             return Outcome.Unavailable("EXCEPTION", elapsedMs(start))
