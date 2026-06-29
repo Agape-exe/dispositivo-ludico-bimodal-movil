@@ -84,7 +84,7 @@ class IntelligentSessionReportTest {
 
         assertTrue(text.contains("Resumen de voz"))
         assertTrue(text.contains("Historial de voces"))
-        assertTrue(text.contains("Evaluacion local"))
+        assertTrue(text.contains("Evaluacion hibrida"))
         assertTrue(text.contains("CACHE_HIT"))
         assertTrue(text.contains("CORRECT"))
         assertFalse(text.contains("api_key"))
