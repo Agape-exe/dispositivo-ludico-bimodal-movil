@@ -13,12 +13,16 @@ object SessionVoiceSourceFactory {
         SessionVoiceSource(
             introText = activity.generatedIntroText,
             closingText = activity.generatedClosingText,
+            activityTitle = activity.name,
+            activityTopic = activity.topic,
             questions = questions.sortedBy { it.orderIndex }.map { q ->
                 QuestionVoiceSource(
                     questionId = q.id,
                     orderIndex = q.orderIndex,
                     childFriendlyQuestionText = q.childFriendlyQuestionText,
                     rawQuestionText = q.questionText,
+                    expectedAnswer = q.expectedAnswer,
+                    keywords = q.keywords.split(",").map { it.trim() }.filter { it.isNotEmpty() },
                     hint1 = q.hintLevel1,
                     hint2 = q.hintLevel2,
                     hint3 = q.hintLevel3,

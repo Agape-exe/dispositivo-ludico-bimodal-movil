@@ -76,12 +76,10 @@ import com.taller.app.classic.ClassicTimerProgress
 import com.taller.app.classic.ClassicTimerRunner
 import com.taller.app.classic.ClassicTimerScript
 import com.taller.app.classic.ClassicTimerState
-import com.taller.app.classic.FixedTimerNeutralPhraseBank
 import com.taller.app.data.local.AppDatabase
 import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
-import com.taller.app.model.LocalMediationKey
 import com.taller.app.semantic.SemanticEvaluator
 import com.taller.app.semantic.SemanticResult
 import com.taller.app.settings.AppSettings
@@ -98,6 +96,9 @@ import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceOutcome
 import com.taller.app.voice.VoiceMode
+import com.taller.app.voice.VoicePlaybackDebugInfo
+import com.taller.app.voice.VoicePlaybackDebugMapper
+import com.taller.app.voice.VoicePlaybackMode
 import com.taller.app.voice.buildVoiceProviderInfo
 import com.taller.app.voice.neural.AzureSpeechConfig
 import com.taller.app.voice.neural.AzureSpeechVoiceProvider
@@ -154,7 +155,7 @@ private fun speechTimeoutMsFor(text: String): Long =
  * tiempo agotado. Mantiene el ritmo ágil sin pausas largas. No se aplica en la
  * última ronda, donde el cierre encadena directamente.
  */
-private const val ROUND_TRANSITION_DELAY_MS = 800L
+private const val STRICT_NEUTRAL_ADVANCE_DELAY_MS = 250L
 
 private data class ClassicAttemptMetric(
     val sessionId: Long,
@@ -537,7 +538,6 @@ private fun ClassicSession(
     val runner = remember(activity, appSettings.classicResponseTimeSeconds) {
         ClassicTimerRunner(responseTimeSeconds = appSettings.classicResponseTimeSeconds)
     }
-    val phraseBank = remember(activity) { FixedTimerNeutralPhraseBank() }
     val semanticEvaluator = remember(activity) { SemanticEvaluator() }
 
     var state by remember(activity) { mutableStateOf(runner.state) }
@@ -854,8 +854,9 @@ private fun ClassicSession(
     var lastSpokenPhrase by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceProvider by remember(activity) { mutableStateOf<String?>(null) }
     var lastVoiceFallback by remember(activity) { mutableStateOf<Boolean?>(null) }
+    var lastVoiceDebug by remember(activity) { mutableStateOf(VoicePlaybackDebugInfo.none()) }
 
-    fun recordVoice(outcome: VoiceOutcome?) {
+    fun recordVoice(outcome: VoiceOutcome?, playbackMode: VoicePlaybackMode) {
         val label: String
         val fallback: Boolean
         when (outcome) {
@@ -865,9 +866,14 @@ private fun ClassicSession(
         }
         lastVoiceProvider = label
         lastVoiceFallback = fallback
+        lastVoiceDebug = VoicePlaybackDebugMapper.fromOutcome(
+            outcome = outcome,
+            playbackMode = playbackMode
+        )
         Log.d(
             CLASSIC_LOG_TAG,
-            "voz: seleccionado=${providerLabel(voiceSettings.provider)} usado=$label fallback=$fallback " +
+            "voz: mode=$playbackMode source=${lastVoiceDebug.source} " +
+                "seleccionado=${providerLabel(voiceSettings.provider)} usado=$label fallback=$fallback " +
                 "cacheHit=${outcome?.cacheHit} cacheKey=${outcome?.cacheKey} " +
                 "synthesisLatencyMs=${outcome?.synthesisLatencyMs} " +
                 "playbackLatencyMs=${outcome?.playbackLatencyMs} totalLatencyMs=${outcome?.totalLatencyMs}"
@@ -877,16 +883,31 @@ private fun ClassicSession(
     suspend fun speakAndAwait(text: String, voiceContext: VoiceContext = VoiceContext.UNKNOWN) {
         lastSpokenPhrase = text
         toyVoiceSpeaking = true
+        val preparedVoice = activity.voicePrepReady
+        val playbackMode = if (preparedVoice) {
+            VoicePlaybackMode.CACHE_ONLY
+        } else {
+            VoicePlaybackMode.CACHE_OR_SYNTHESIZE
+        }
         try {
             val timeoutMs = speechTimeoutMsFor(text)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    sevenVoiceService.speak(
-                        text = text,
-                        source = "temporizador",
-                        mode = VoiceMode.TIMER,
-                        voiceContext = voiceContext
-                    )
+                    if (preparedVoice) {
+                        sevenVoiceService.speakFromCacheOnly(
+                            text = text,
+                            source = "temporizador",
+                            mode = VoiceMode.TIMER,
+                            voiceContext = voiceContext
+                        )
+                    } else {
+                        sevenVoiceService.speak(
+                            text = text,
+                            source = "temporizador",
+                            mode = VoiceMode.TIMER,
+                            voiceContext = voiceContext
+                        )
+                    }
                 }.getOrNull()
             }
             if (outcome == null) {
@@ -905,7 +926,20 @@ private fun ClassicSession(
                     )
                 }
             }
-            recordVoice(outcome)
+            if (outcome?.metric == null && preparedVoice) {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = logSessionId,
+                        questionId = progress?.currentQuestionId?.toLongOrNull(),
+                        attemptId = logAttemptId.takeIf { it > 0L },
+                        operationMode = "CLASSIC",
+                        eventType = "VOICE_CACHE_ONLY_MISS",
+                        message = "voicePlaybackMode=CACHE_ONLY voiceCacheHit=false voiceContext=${voiceContext.name}",
+                        latencyMs = outcome?.latencyMs
+                    )
+                }
+            }
+            recordVoice(outcome, playbackMode)
         } finally {
             sevenVoiceService.stop()
             toyVoiceSpeaking = false
@@ -987,13 +1021,10 @@ private fun ClassicSession(
     }
     LaunchedEffect(presentKey, resumeToken, isPausedByTeacher) {
         if (presentKey == null || isPausedByTeacher) return@LaunchedEffect
-        val isLast = progress?.isLastQuestion ?: false
         val questionText = currentSpokenQuestionText().ifBlank { return@LaunchedEffect }
-        val round = progress?.questionNumber ?: (presentKey + 1)
-        val mediationKey = LocalMediationKey.fromKey(progress?.currentQuestionMediationKey)
-        Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION round=$round isLast=$isLast key=$mediationKey")
+        Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION idx=$presentKey")
         // Transición + pregunta en una sola reproducción para reducir demora.
-        speakAndAwait(phraseBank.getRoundPrompt(round, questionText, isLast, mediationKey), VoiceContext.QUESTION)
+        speakAndAwait(questionText, VoiceContext.QUESTION)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.PRESENTING_QUESTION) {
             dispatch { runner.startResponseWindow() }
         }
@@ -1033,8 +1064,7 @@ private fun ClassicSession(
     }
     LaunchedEffect(answerKey, resumeToken, isPausedByTeacher) {
         if (answerKey == null || isPausedByTeacher) return@LaunchedEffect
-        val isLast = progress?.isLastQuestion ?: false
-        Log.d(CLASSIC_LOG_TAG, "ANSWER_RECEIVED idx=$answerKey isLast=$isLast")
+        Log.d(CLASSIC_LOG_TAG, "ANSWER_RECEIVED idx=$answerKey")
 
         val classicAid = logAttemptId
         val classicSid = logSessionId
@@ -1071,8 +1101,7 @@ private fun ClassicSession(
 
         // Última ronda: frase de cierre de participación sin anunciar otra pregunta,
         // y avance inmediato al cierre (sin transición intermedia).
-        speakAndAwait(phraseBank.getAnswerReceived(isLast), VoiceContext.UNKNOWN)
-        if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
+        delay(STRICT_NEUTRAL_ADVANCE_DELAY_MS)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.ANSWER_RECEIVED) {
             dispatch { runner.advanceQuestion() }
         }
@@ -1087,8 +1116,7 @@ private fun ClassicSession(
     LaunchedEffect(timeoutKey, resumeToken, isPausedByTeacher) {
         if (timeoutKey == null || isPausedByTeacher) return@LaunchedEffect
         val hadPartial = progress?.hadPartialResponseOnTimeout ?: false
-        val isLast = progress?.isLastQuestion ?: false
-        Log.d(CLASSIC_LOG_TAG, "TIME_EXPIRED idx=$timeoutKey hadPartial=$hadPartial isLast=$isLast")
+        Log.d(CLASSIC_LOG_TAG, "TIME_EXPIRED idx=$timeoutKey hadPartial=$hadPartial")
 
         val timeoutAid = logAttemptId
         val timeoutSid = logSessionId
@@ -1135,8 +1163,7 @@ private fun ClassicSession(
         }
 
         // En la última ronda la frase no anuncia otra pregunta; encadena al cierre.
-        speakAndAwait(phraseBank.getTimeExpired(hadPartial, isLast), VoiceContext.COUNTDOWN)
-        if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
+        delay(STRICT_NEUTRAL_ADVANCE_DELAY_MS)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.TIME_EXPIRED) {
             dispatch { runner.advanceQuestion() }
         }
@@ -1573,6 +1600,8 @@ private fun ClassicSession(
                         p.responseLatencyMs?.let { "$it ms" } ?: "—"
                     )
                     InfoRow("Voz usada", lastVoiceProvider ?: "—")
+                    InfoRow("Modo cache voz", lastVoiceDebug.playbackMode.name)
+                    InfoRow("Origen voz", lastVoiceDebug.source.name)
                     InfoRow("Fallback de voz", when (lastVoiceFallback) {
                         true -> "Sí"; false -> "No"; null -> "—"
                     })

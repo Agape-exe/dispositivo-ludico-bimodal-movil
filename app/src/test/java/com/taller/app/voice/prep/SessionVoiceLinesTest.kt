@@ -113,4 +113,33 @@ class SessionVoiceLinesTest {
         assertEquals(normalized.size, normalized.toSet().size)
         assertEquals(1, normalized.count { it == "Muy bien" })
     }
+
+    @Test
+    fun collectIncludesTimerSafeLinesForCachePreparation() {
+        val source = SessionVoiceSource(
+            introText = null,
+            closingText = null,
+            activityTitle = "Animales",
+            activityTopic = "animales",
+            questions = listOf(
+                question(
+                    id = 1,
+                    order = 1,
+                    childFriendly = "El perro dice guau. Que sonido hace?",
+                    raw = "Que sonido hace el perro?"
+                ).copy(
+                    expectedAnswer = "guau",
+                    keywords = listOf("perro")
+                )
+            )
+        )
+
+        val lines = SessionVoiceLines.collect(source, includeGeneric = false)
+        val intro = "¡Hola! Soy Seven. Hoy vamos a explorar sobre animales. Te haré unas preguntitas y puedes responder con calma."
+        val closing = "Terminamos por ahora. ¡Hasta la próxima aventura!"
+
+        assertTrue(lines.any { it.role == VoiceLineRole.INTRO && it.text == intro })
+        assertTrue(lines.any { it.role == VoiceLineRole.CLOSING && it.text == closing })
+        assertTrue(lines.any { it.role == VoiceLineRole.QUESTION && it.text == "Que sonido hace el perro?" })
+    }
 }
