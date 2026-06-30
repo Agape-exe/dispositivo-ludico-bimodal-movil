@@ -1,6 +1,8 @@
 package com.taller.app.export
 
+import com.taller.app.data.local.dao.ActivityDao
 import com.taller.app.data.local.dao.AttemptDao
+import com.taller.app.data.local.dao.QuestionDao
 import com.taller.app.data.local.dao.SessionDao
 import com.taller.app.data.local.dao.TechnicalEventDao
 import com.taller.app.voice.VoicePlaybackMetricParser
@@ -8,7 +10,9 @@ import com.taller.app.voice.VoicePlaybackMetricParser
 class MetricsExportRepository(
     private val sessionDao: SessionDao,
     private val attemptDao: AttemptDao,
-    private val eventDao: TechnicalEventDao
+    private val eventDao: TechnicalEventDao,
+    private val activityDao: ActivityDao? = null,
+    private val questionDao: QuestionDao? = null
 ) {
 
     suspend fun countSessions(): Int = sessionDao.count()
@@ -20,6 +24,11 @@ class MetricsExportRepository(
         return sessions.map { session ->
             val attempts = attemptDao.getBySessionIdOnce(session.id)
             val events = eventDao.getBySessionIdOnce(session.id)
+            val activity = activityDao?.getById(session.activityId)
+            val questionsById = questionDao
+                ?.getByActivityIdOnce(session.activityId)
+                ?.associateBy { it.id }
+                .orEmpty()
             ExportSessionDto(
                 sessionId = session.id,
                 activityId = session.activityId,
@@ -69,7 +78,12 @@ class MetricsExportRepository(
                         feedbackStartAtMs = a.feedbackStartAtMs,
                         totalResponseLatencyMs = a.totalResponseLatencyMs,
                         responseToFeedbackLatencyMs = a.responseToFeedbackLatencyMs,
-                        fullPipelineLatencyMs = a.fullPipelineLatencyMs
+                        fullPipelineLatencyMs = a.fullPipelineLatencyMs,
+                        expectedAnswer = questionsById[a.questionId]?.let { question ->
+                            question.suggestedReferenceAnswer
+                                ?.takeIf { it.isNotBlank() }
+                                ?: question.expectedAnswer
+                        }
                     )
                 },
                 technicalEvents = events.map { e ->
@@ -95,7 +109,8 @@ class MetricsExportRepository(
                         voiceErrorType = voice["voiceErrorType"],
                         voiceContext = voice["voiceContext"]
                     )
-                }
+                },
+                activityTopic = activity?.topic
             )
         }
     }

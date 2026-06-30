@@ -11,7 +11,8 @@ data class ExportSessionDto(
     val totalDurationMs: Long?,
     val summary: ExportSessionSummaryDto,
     val attempts: List<ExportAttemptDto>,
-    val technicalEvents: List<ExportTechnicalEventDto>
+    val technicalEvents: List<ExportTechnicalEventDto>,
+    val activityTopic: String? = null
 )
 
 data class ExportSessionSummaryDto(
@@ -54,7 +55,8 @@ data class ExportAttemptDto(
     val feedbackStartAtMs: Long?,
     val totalResponseLatencyMs: Long?,
     val responseToFeedbackLatencyMs: Long?,
-    val fullPipelineLatencyMs: Long?
+    val fullPipelineLatencyMs: Long?,
+    val expectedAnswer: String? = null
 )
 
 data class ExportTechnicalEventDto(
