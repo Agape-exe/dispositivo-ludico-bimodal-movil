@@ -89,6 +89,45 @@ class SessionScriptValidatorTest {
         assertFalse(result.isValid)
     }
 
+    // ----- MED02: la pista no debe delatar la respuesta ni sus variantes obvias --
+
+    @Test
+    fun hintWithDiminutiveVariant_fails() {
+        // "perrito" delata "perro" aunque no sea la palabra textual.
+        val result = SessionScriptValidator.validate(
+            script(question(hint1 = "Piensa en un perrito juguetón")),
+            input()
+        )
+        assertFalse(result.isValid)
+    }
+
+    @Test
+    fun hintWithoutAccentMatchesAccentedReference() {
+        val accentedInput = input().copy(
+            questions = listOf(
+                SessionScriptQuestionInput(
+                    questionId = 1L,
+                    orderIndex = 1,
+                    questionText = "¿Qué forma tiene una pelota?",
+                    referenceAnswer = "círculo"
+                )
+            )
+        )
+        // La pista escribe "circulo" sin tilde: igual debe detectarse como filtración.
+        val result = SessionScriptValidator.validate(
+            script(question(hint1 = "Tiene forma de circulo")),
+            accentedInput
+        )
+        assertFalse(result.isValid)
+    }
+
+    @Test
+    fun revealsAnswer_detectsVariantsAndLiteral() {
+        assertTrue(SessionScriptValidator.revealsAnswer("es un perro", "perro"))
+        assertTrue(SessionScriptValidator.revealsAnswer("muchos perritos", "perro"))
+        assertFalse(SessionScriptValidator.revealsAnswer("mueve la cola y ladra", "perro"))
+    }
+
     @Test
     fun tooLongText_fails() {
         val longText = "a".repeat(SessionScriptValidator.MAX_SPOKEN_CHARS + 10)

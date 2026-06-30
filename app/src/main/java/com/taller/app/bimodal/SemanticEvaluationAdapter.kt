@@ -1,6 +1,7 @@
 package com.taller.app.bimodal
 
 import com.taller.app.model.LearningQuestion
+import com.taller.app.semantic.LocalAcceptanceType
 import com.taller.app.semantic.SemanticEvaluator
 import com.taller.app.semantic.SemanticResult
 
@@ -19,7 +20,9 @@ data class SemanticEvaluationOutcome(
     /** Motivo corto y seguro del alias aplicado, para el reporte tecnico. */
     val aliasReason: String? = null,
     /** Transcripcion normalizada local, util para el reporte tecnico. */
-    val normalizedAnswer: String? = null
+    val normalizedAnswer: String? = null,
+    /** MED02: tipo de aceptacion/rechazo de la capa local. */
+    val acceptanceType: LocalAcceptanceType = LocalAcceptanceType.NONE
 ) {
     /** Evento del orquestador correspondiente a este resultado semantico. */
     fun toEvent(): BimodalInteractionEvent =
@@ -69,7 +72,8 @@ class SemanticEvaluationAdapter(
             latencyMillis = elapsedNanos / 1_000_000,
             aliasApplied = evaluation.aliasApplied,
             aliasReason = evaluation.aliasReason,
-            normalizedAnswer = evaluation.normalizedAnswer
+            normalizedAnswer = evaluation.normalizedAnswer,
+            acceptanceType = evaluation.acceptanceType
         )
     }
 }

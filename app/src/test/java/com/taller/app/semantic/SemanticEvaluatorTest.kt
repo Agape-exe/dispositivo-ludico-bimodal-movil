@@ -226,4 +226,145 @@ class SemanticEvaluatorTest {
             SemanticEvaluator().evaluate("wow", expectedAnswer = "azul", keywords = emptyList(), questionText = "¿De qué color es el cielo?")
         )
     }
+
+    // ----- MED02: equivalencias infantiles (plural/singular, diminutivos, sinonimos)
+
+    private fun e() = SemanticEvaluator()
+
+    @Test fun diminutive_perrito_matchesPerro() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("el perrito", "perro", emptyList()))
+
+    @Test fun diminutive_gatito_matchesGato() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("un gatito", "gato", emptyList()))
+
+    @Test fun pluralAnswer_matchesSingularReference() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("ojos", "ojo", emptyList()))
+
+    @Test fun singularAnswer_matchesPluralReference() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("ojo", "ojos", emptyList()))
+
+    @Test fun synonym_banana_matchesPlatano() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("una banana", "plátano", emptyList()))
+
+    @Test fun synonym_autobus_matchesBus() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("el autobús", "bus", emptyList()))
+
+    @Test fun synonym_redonda_matchesCirculo() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("redonda", "círculo", emptyList()))
+
+    @Test fun equivalence_reportsEquivalenceType() {
+        val detailed = e().evaluateDetailed("el perrito", "perro", emptyList())
+        assertEquals(SemanticResult.CORRECT, detailed.result)
+        assertEquals(LocalAcceptanceType.EQUIVALENCE, detailed.acceptanceType)
+    }
+
+    @Test fun reference_reportsReferenceType() {
+        val detailed = e().evaluateDetailed("perro", "perro", emptyList())
+        assertEquals(LocalAcceptanceType.REFERENCE, detailed.acceptanceType)
+    }
+
+    // ----- MED02: animales (listas de referencia) --------------------------------
+
+    private val pets = "perro, gato, conejo, hámster, pez"
+    private val farm = "vaca, gallina, cerdo, pato, caballo, oveja"
+
+    @Test fun pet_perro_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("perro", pets, emptyList()))
+    @Test fun pet_gato_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("el gato", pets, emptyList()))
+    @Test fun pet_conejo_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("un conejo", pets, emptyList()))
+    @Test fun pet_mesa_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("mesa", pets, emptyList()))
+
+    @Test fun farm_vaca_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("la vaca", farm, emptyList()))
+    @Test fun farm_gallina_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("gallina", farm, emptyList()))
+    @Test fun farm_pato_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("un pato", farm, emptyList()))
+    @Test fun farm_lapiz_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("lápiz", farm, emptyList()))
+
+    // ----- MED02: sonidos de animales --------------------------------------------
+
+    private fun sound(answer: String, expected: String, question: String) =
+        e().evaluate(answer, expected, emptyList(), question)
+
+    private val cowQuestion = "¿Qué sonido hace la vaca?"
+    private val duckQuestion = "¿Qué sonido hace el pato?"
+
+    @Test fun cowSound_muu_isCorrect() = assertEquals(SemanticResult.CORRECT, sound("muu", "muu", cowQuestion))
+    @Test fun cowSound_mu_isCorrect() = assertEquals(SemanticResult.CORRECT, sound("mu", "muu", cowQuestion))
+    @Test fun cowSound_guau_isIncorrect() = assertEquals(SemanticResult.INCORRECT, sound("guau", "muu", cowQuestion))
+
+    @Test fun duckSound_cuac_isCorrect() = assertEquals(SemanticResult.CORRECT, sound("cuac", "cuac", duckQuestion))
+    @Test fun duckSound_quack_isCorrect() = assertEquals(SemanticResult.CORRECT, sound("quack", "cuac", duckQuestion))
+    @Test fun duckSound_cuaCua_isCorrect() = assertEquals(SemanticResult.CORRECT, sound("cua cua", "cuac", duckQuestion))
+    @Test fun duckSound_miau_isIncorrect() = assertEquals(SemanticResult.INCORRECT, sound("miau", "cuac", duckQuestion))
+
+    // ----- MED02: colores --------------------------------------------------------
+
+    private val colors = "rojo, azul, amarillo, verde, rosado, morado"
+
+    @Test fun color_rojo_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("rojo", colors, emptyList()))
+    @Test fun color_azul_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("azul", colors, emptyList()))
+    @Test fun color_verde_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("verde", colors, emptyList()))
+    @Test fun color_perro_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("perro", colors, emptyList()))
+
+    @Test fun skyColor_azul_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("azul", "azul, celeste", emptyList()))
+    @Test fun skyColor_celeste_isCorrect() =
+        assertEquals(SemanticResult.CORRECT, e().evaluate("celeste", "azul, celeste", emptyList()))
+    @Test fun skyColor_gris_isNotAutoAccepted() =
+        // "gris" no se acepta localmente sin contexto: queda para que decida el juez.
+        assertEquals(SemanticResult.INCORRECT, e().evaluate("gris", "azul, celeste", emptyList()))
+
+    // ----- MED02: formas ---------------------------------------------------------
+
+    private val shapes = "círculo, cuadrado, triángulo, rectángulo"
+
+    @Test fun shape_circulo_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("círculo", shapes, emptyList()))
+    @Test fun shape_cuadrado_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("cuadrado", shapes, emptyList()))
+    @Test fun shape_triangulo_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("triángulo", shapes, emptyList()))
+    @Test fun shape_gato_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("gato", shapes, emptyList()))
+
+    @Test fun ballShape_circulo_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("círculo", "círculo", emptyList()))
+    @Test fun ballShape_redonda_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("redonda", "círculo", emptyList()))
+    @Test fun ballShape_esfera_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("esfera", "círculo", emptyList()))
+    @Test fun ballShape_cuadrado_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("cuadrado", "círculo", emptyList()))
+
+    // ----- MED02: partes del cuerpo ----------------------------------------------
+
+    private val body = "mano, pie, cabeza, ojo, nariz, boca"
+
+    @Test fun body_mano_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("mano", body, emptyList()))
+    @Test fun body_pie_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("el pie", body, emptyList()))
+    @Test fun body_cabeza_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("cabeza", body, emptyList()))
+    @Test fun body_avion_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("avión", body, emptyList()))
+
+    @Test fun seeWith_ojos_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("ojos", "ojos", emptyList()))
+    @Test fun seeWith_ojo_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("ojo", "ojos", emptyList()))
+    @Test fun seeWith_conLosOjos_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("con los ojos", "ojos", emptyList()))
+    @Test fun seeWith_orejas_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("orejas", "ojos", emptyList()))
+
+    // ----- MED02: alimentos ------------------------------------------------------
+
+    private val fruits = "manzana, plátano, banana, uva, pera, naranja, fresa"
+
+    @Test fun fruit_manzana_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("manzana", fruits, emptyList()))
+    @Test fun fruit_platano_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("plátano", fruits, emptyList()))
+    @Test fun fruit_banana_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("banana", fruits, emptyList()))
+    @Test fun fruit_uvas_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("uvas", fruits, emptyList()))
+    @Test fun fruit_zapato_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("zapato", fruits, emptyList()))
+
+    private val edible = "pan, arroz, sopa, fruta, manzana"
+
+    @Test fun edible_pan_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("pan", edible, emptyList()))
+    @Test fun edible_arroz_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("arroz", edible, emptyList()))
+    @Test fun edible_sopa_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("sopa", edible, emptyList()))
+    @Test fun edible_piedra_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("piedra", edible, emptyList()))
+
+    // ----- MED02: transportes ----------------------------------------------------
+
+    private val transports = "carro, bus, autobús, bicicleta, avión, tren, moto"
+
+    @Test fun transport_carro_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("carro", transports, emptyList()))
+    @Test fun transport_bus_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("el bus", transports, emptyList()))
+    @Test fun transport_bicicleta_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("bicicleta", transports, emptyList()))
+    @Test fun transport_avion_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("avión", transports, emptyList()))
+    @Test fun transport_tren_isCorrect() = assertEquals(SemanticResult.CORRECT, e().evaluate("tren", transports, emptyList()))
+    @Test fun transport_perro_isIncorrect() = assertEquals(SemanticResult.INCORRECT, e().evaluate("perro", transports, emptyList()))
 }

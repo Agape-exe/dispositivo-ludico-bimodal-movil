@@ -66,6 +66,50 @@ class OnomatopoeiaNormalizerTest {
         assertTrue(match.matchedAlias)
     }
 
+    // ----- MED02: sonidos seguros adicionales (vaca, pato, oveja) ----------------
+
+    private val cowQuestion = "¿Qué sonido hace la vaca?"
+    private val duckQuestion = "¿Qué sonido hace el pato?"
+    private val sheepQuestion = "¿Qué sonido hace la oveja?"
+
+    @Test
+    fun match_cowAliasesWithCowContext() {
+        for (alias in listOf("mu", "muu", "muuu", "moo")) {
+            val match = OnomatopoeiaNormalizer.match(alias, "muu", cowQuestion)
+            assertTrue("'$alias' debería ser alias de muu", match.matchedAlias)
+        }
+    }
+
+    @Test
+    fun match_duckAliasesWithDuckContext() {
+        for (alias in listOf("cuac", "cua", "cua cua", "quack")) {
+            val match = OnomatopoeiaNormalizer.match(alias, "cuac", duckQuestion)
+            assertTrue("'$alias' debería ser alias de cuac", match.matchedAlias)
+        }
+    }
+
+    @Test
+    fun match_sheepAliasesWithSheepContext() {
+        for (alias in listOf("be", "bee", "beee")) {
+            val match = OnomatopoeiaNormalizer.match(alias, "bee", sheepQuestion)
+            assertTrue("'$alias' debería ser alias de bee", match.matchedAlias)
+        }
+    }
+
+    @Test
+    fun match_cowDoesNotAcceptDogSound() {
+        val match = OnomatopoeiaNormalizer.match("guau", "muu", cowQuestion)
+        assertFalse(match.matchedAlias)
+        assertTrue(match.contradictorySound)
+    }
+
+    @Test
+    fun match_duckDoesNotAcceptCatSound() {
+        val match = OnomatopoeiaNormalizer.match("miau", "cuac", duckQuestion)
+        assertFalse(match.matchedAlias)
+        assertTrue(match.contradictorySound)
+    }
+
     @Test
     fun helpers_detectSoundContextAndShortSounds() {
         assertTrue(OnomatopoeiaNormalizer.isSoundQuestion(dogQuestion))

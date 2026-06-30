@@ -103,6 +103,29 @@ class OpenAnswerJudgeParserTest {
     }
 
     @Test
+    fun parsesAcceptanceTypeWhenCorrect() {
+        val json = """{ "decision": "CORRECT", "confidence": 0.8, "acceptedAsEquivalent": true,
+            "acceptanceType": "EQUIVALENT" }"""
+        val verdict = OpenAnswerJudgeParser.parse(json, input())
+        assertEquals(JudgeAcceptanceType.EQUIVALENT, verdict.acceptanceType)
+    }
+
+    @Test
+    fun ignoresAcceptanceTypeWhenIncorrect() {
+        // Si no acepto, no se conserva un tipo de aceptacion.
+        val json = """{ "decision": "INCORRECT", "confidence": 0.8, "acceptanceType": "LITERAL" }"""
+        val verdict = OpenAnswerJudgeParser.parse(json, input())
+        assertEquals(JudgeAcceptanceType.NONE, verdict.acceptanceType)
+    }
+
+    @Test
+    fun unknownAcceptanceTypeBecomesNone() {
+        val json = """{ "decision": "CORRECT", "confidence": 0.8, "acceptanceType": "loquesea" }"""
+        val verdict = OpenAnswerJudgeParser.parse(json, input())
+        assertEquals(JudgeAcceptanceType.NONE, verdict.acceptanceType)
+    }
+
+    @Test
     fun parsesFencedJson() {
         val json = "```json\n{ \"decision\": \"CORRECT\", \"confidence\": 0.5 }\n```"
         val verdict = OpenAnswerJudgeParser.parse(json, input())

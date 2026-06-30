@@ -38,7 +38,9 @@ data class HybridEvaluationResult(
     val confidence: Double?,
     val reason: String?,
     val judgeLatencyMs: Long?,
-    val usedFallback: Boolean
+    val usedFallback: Boolean,
+    /** MED02: tipo de aceptacion declarado por el juez (solo cuando lo decide el juez). */
+    val acceptanceType: String? = null
 )
 
 /**
@@ -121,7 +123,12 @@ class HybridAnswerEvaluator(
                     confidence = verdict.confidence,
                     reason = verdict.reason,
                     judgeLatencyMs = outcome.latencyMs,
-                    usedFallback = false
+                    usedFallback = false,
+                    acceptanceType = if (verdict.decision == JudgeDecision.CORRECT) {
+                        verdict.acceptanceType.name
+                    } else {
+                        null
+                    }
                 )
             }
 

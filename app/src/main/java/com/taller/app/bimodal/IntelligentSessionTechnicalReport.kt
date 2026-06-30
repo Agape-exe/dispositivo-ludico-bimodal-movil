@@ -31,7 +31,10 @@ data class AnswerEvaluationDebugInfo(
     val confidence: Double? = null,
     val judgeReason: String? = null,
     val judgeLatencyMs: Long? = null,
-    val usedFallback: Boolean? = null
+    val usedFallback: Boolean? = null,
+    // MED02: por que se acepto/rechazo (referencia, equivalencia, onomatopeya, alias
+    // STT, categoria abierta...). Opcional para conservar compatibilidad.
+    val acceptanceType: String? = null
 )
 
 /** Conteos agregados de las voces reproducidas durante una sesion inteligente. */
@@ -145,6 +148,7 @@ object IntelligentSessionReport {
                     appendLine("- Juez: ${ev.judgeDecision ?: "—"}")
                     appendLine("- Capa final: ${ev.decisionLayer ?: "LOCAL"}")
                     appendLine("- Resultado final: ${ev.finalResult ?: ev.localEvaluationResult}")
+                    appendLine("- Tipo de aceptacion: ${ev.acceptanceType ?: "—"}")
                     appendLine("- Equivalente: ${boolLabel(ev.acceptedAsEquivalent)}")
                     appendLine("- Confianza: ${ev.confidence?.let { formatConfidence(it) } ?: "—"}")
                     appendLine("- Latencia local: ${ev.evaluationLatencyMs ?: "—"}ms")

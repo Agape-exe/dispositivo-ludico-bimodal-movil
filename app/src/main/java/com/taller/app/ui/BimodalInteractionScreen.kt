@@ -121,6 +121,7 @@ import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LearningQuestion
 import com.taller.app.model.LocalMediationKey
+import com.taller.app.semantic.LocalAcceptanceType
 import com.taller.app.semantic.SemanticResult
 import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
@@ -215,6 +216,18 @@ private const val SPEECH_TIMEOUT_PER_CHAR_MS = 120L
 private fun speechTimeoutMsFor(text: String): Long =
     (SPEECH_TIMEOUT_MIN_MS + text.length * SPEECH_TIMEOUT_PER_CHAR_MS)
         .coerceAtMost(SPEECH_TIMEOUT_MAX_MS)
+
+/**
+ * MED02: etiqueta corta y segura del tipo de aceptacion de la capa local, para el
+ * reporte tecnico. Devuelve null cuando no hubo aceptacion local (NONE).
+ */
+private fun localAcceptanceLabel(type: LocalAcceptanceType): String? = when (type) {
+    LocalAcceptanceType.REFERENCE -> "REFERENCIA"
+    LocalAcceptanceType.KEYWORD -> "PALABRA_CLAVE"
+    LocalAcceptanceType.EQUIVALENCE -> "EQUIVALENCIA"
+    LocalAcceptanceType.ONOMATOPOEIA -> "ONOMATOPEYA"
+    LocalAcceptanceType.NONE -> null
+}
 
 /**
  * Divide un texto en segmentos cortos de voz por oraciones (puntuacion fuerte y
@@ -1144,7 +1157,10 @@ private fun BimodalSession(
                 confidence = hybrid?.confidence,
                 judgeReason = hybrid?.reason?.let { IntelligentSessionReport.shortSafe(it) },
                 judgeLatencyMs = hybrid?.judgeLatencyMs,
-                usedFallback = hybrid?.usedFallback
+                usedFallback = hybrid?.usedFallback,
+                // MED02: si el juez decidio, su tipo de aceptacion manda; si no, el de la
+                // capa local. Solo etiqueta corta y segura, util para revisar la decision.
+                acceptanceType = hybrid?.acceptanceType ?: localAcceptanceLabel(outcome.acceptanceType)
             )
         ).takeLast(40)
         // Log seguro: solo resultados, capa y latencias, nunca la transcripcion ni

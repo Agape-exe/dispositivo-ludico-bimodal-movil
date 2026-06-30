@@ -10,18 +10,37 @@ enum class SemanticResult {
 }
 
 /**
+ * MED02: por que la capa local acepto o rechazo una respuesta. Sirve para que el
+ * reporte tecnico explique la decision sin exponer datos sensibles.
+ */
+enum class LocalAcceptanceType {
+    /** Coincide textualmente con la respuesta de referencia o una de sus opciones. */
+    REFERENCE,
+    /** Coincide con una palabra clave de la pregunta. */
+    KEYWORD,
+    /** Equivalencia infantil segura: plural/singular, diminutivo o sinonimo comun. */
+    EQUIVALENCE,
+    /** Variante de una onomatopeya esperada (posible error de reconocimiento de voz). */
+    ONOMATOPOEIA,
+    /** No se acepto localmente (incorrecta, sin voz o no interpretable). */
+    NONE
+}
+
+/**
  * Resultado detallado de la evaluacion local, con metadatos para el reporte tecnico.
  *
  * @property aliasApplied se acepto por equivalencia de sonido/onomatopeya (no por
  *   coincidencia directa con la referencia o palabras clave).
  * @property aliasReason motivo corto y seguro (por ejemplo "alias de sonido: wow -> guau").
  * @property normalizedAnswer transcripcion normalizada local, util para depuracion.
+ * @property acceptanceType tipo de aceptacion/rechazo de la capa local (MED02).
  */
 data class SemanticEvaluation(
     val result: SemanticResult,
     val aliasApplied: Boolean = false,
     val aliasReason: String? = null,
-    val normalizedAnswer: String? = null
+    val normalizedAnswer: String? = null,
+    val acceptanceType: LocalAcceptanceType = LocalAcceptanceType.NONE
 )
 
 class SemanticEvaluator {
@@ -79,12 +98,17 @@ class SemanticEvaluator {
         // ("Perro, gato, hamster."): se separa en opciones y basta con que la
         // transcripcion contenga una de ellas como palabra/frase completa. Asi
         // "el perro" o "el gato" se aceptan localmente sin recurrir al juez externo.
-        val expectedMatches = splitReferenceOptions(expectedAnswer).any { option ->
+        val referenceOptions = splitReferenceOptions(expectedAnswer)
+        val expectedMatches = referenceOptions.any { option ->
             val normalizedOption = normalize(option)
             normalizedOption.isNotBlank() && containsWholeWord(normalized, normalizedOption)
         }
         if (expectedMatches) {
-            return SemanticEvaluation(SemanticResult.CORRECT, normalizedAnswer = normalized)
+            return SemanticEvaluation(
+                SemanticResult.CORRECT,
+                normalizedAnswer = normalized,
+                acceptanceType = LocalAcceptanceType.REFERENCE
+            )
         }
 
         val hasKeyword = keywords.any { keyword ->
@@ -92,7 +116,24 @@ class SemanticEvaluator {
             normalizedKeyword.isNotBlank() && containsWholeWord(normalized, normalizedKeyword)
         }
         if (hasKeyword) {
-            return SemanticEvaluation(SemanticResult.CORRECT, normalizedAnswer = normalized)
+            return SemanticEvaluation(
+                SemanticResult.CORRECT,
+                normalizedAnswer = normalized,
+                acceptanceType = LocalAcceptanceType.KEYWORD
+            )
+        }
+
+        // MED02: equivalencias infantiles seguras (plural/singular, diminutivos y
+        // sinonimos comunes) cuando no hubo coincidencia textual. La referencia y las
+        // palabras clave siguen mandando: solo se acepta lo equivalente a ellas.
+        val equivalentOptions = (referenceOptions + keywords).filter { it.isNotBlank() }
+        if (ChildAnswerEquivalences.answerMatchesAnyOption(transcription, equivalentOptions)) {
+            return SemanticEvaluation(
+                SemanticResult.CORRECT,
+                normalizedAnswer = normalized,
+                acceptanceType = LocalAcceptanceType.EQUIVALENCE,
+                aliasReason = "equivalencia infantil"
+            )
         }
 
         // MED01-FIX01: tolerancia de sonidos. Solo acepta variantes de la onomatopeya
@@ -103,11 +144,16 @@ class SemanticEvaluator {
                 result = SemanticResult.CORRECT,
                 aliasApplied = true,
                 aliasReason = onomatopoeia.aliasReason,
-                normalizedAnswer = normalized
+                normalizedAnswer = normalized,
+                acceptanceType = LocalAcceptanceType.ONOMATOPOEIA
             )
         }
 
-        return SemanticEvaluation(SemanticResult.INCORRECT, normalizedAnswer = normalized)
+        return SemanticEvaluation(
+            SemanticResult.INCORRECT,
+            normalizedAnswer = normalized,
+            acceptanceType = LocalAcceptanceType.NONE
+        )
     }
 
     /**

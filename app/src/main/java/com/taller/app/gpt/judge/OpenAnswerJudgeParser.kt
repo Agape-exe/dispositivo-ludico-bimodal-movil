@@ -68,7 +68,14 @@ object OpenAnswerJudgeParser {
             safeHintLevel = root.optInt("safeHintLevel", 0).coerceIn(0, 3),
             revealsAnswer = revealsAnswer,
             normalizedChildAnswer = root.optString("normalizedChildAnswer").trim().take(MAX_NORMALIZED_LENGTH),
-            normalizedExpectedConcept = root.optString("normalizedExpectedConcept").trim().take(MAX_NORMALIZED_LENGTH)
+            normalizedExpectedConcept = root.optString("normalizedExpectedConcept").trim().take(MAX_NORMALIZED_LENGTH),
+            // MED02: tipo de aceptacion declarado por el modelo, saneado a un valor conocido.
+            // Solo es informativo; si el juez no acepto, no se conserva un tipo de aceptacion.
+            acceptanceType = if (decision == JudgeDecision.CORRECT) {
+                JudgeAcceptanceType.parse(root.optString("acceptanceType"))
+            } else {
+                JudgeAcceptanceType.NONE
+            }
         )
     }
 

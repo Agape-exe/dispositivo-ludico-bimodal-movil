@@ -53,7 +53,26 @@ object OnomatopoeiaNormalizer {
                 "miau", "miaw", "miao", "meow", "meaw", "mau", "meu", "niau"
             ),
             animalMarkers = setOf("gato", "gatito", "gatos", "gatita", "minino", "michi")
+        ),
+        // MED02: sonidos seguros adicionales. Solo variantes claras y poco ambiguas.
+        SoundGroup(
+            canonical = "muu",
+            aliases = setOf("mu", "muu", "muuu", "moo", "muh", "muuh"),
+            animalMarkers = setOf("vaca", "vaquita", "vacas", "ternero", "becerro")
+        ),
+        SoundGroup(
+            canonical = "cuac",
+            aliases = setOf("cuac", "cua", "cuacuac", "cuak", "quack", "cuc"),
+            animalMarkers = setOf("pato", "patito", "patos", "pata", "patos")
+        ),
+        SoundGroup(
+            canonical = "bee",
+            aliases = setOf("be", "bee", "beee", "mee", "meee", "baa"),
+            animalMarkers = setOf("oveja", "ovejita", "ovejas", "borrego", "cordero", "corderito")
         )
+        // Pendientes (menos seguros de aislar por STT): cerdo (oink/oinc),
+        // gallina/pollo (pio pio, cocoroco, clo clo). Se anaden cuando haya datos
+        // reales que confirmen las transcripciones tipicas.
     )
 
     /** Conectores y artículos que se descartan para aislar el sonido. */
