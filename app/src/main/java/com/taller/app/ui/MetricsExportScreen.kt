@@ -43,6 +43,8 @@ import com.taller.app.export.ExportSessionDto
 import com.taller.app.export.MetricsCsvExporter
 import com.taller.app.export.MetricsExportRepository
 import com.taller.app.export.MetricsJsonExporter
+import com.taller.app.export.MetricsReportMapper
+import com.taller.app.export.PdfMetricsExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,10 +59,17 @@ fun MetricsExportScreen(onBack: () -> Unit) {
 
     val db = remember { AppDatabase.getInstance(context) }
     val repository = remember {
-        MetricsExportRepository(db.sessionDao(), db.attemptDao(), db.technicalEventDao())
+        MetricsExportRepository(
+            db.sessionDao(),
+            db.attemptDao(),
+            db.technicalEventDao(),
+            db.activityDao(),
+            db.questionDao()
+        )
     }
     val jsonExporter = remember { MetricsJsonExporter() }
     val csvExporter = remember { MetricsCsvExporter() }
+    val pdfExporter = remember { PdfMetricsExporter() }
 
     var sessionCount by remember { mutableIntStateOf(0) }
     var attemptCount by remember { mutableIntStateOf(0) }
@@ -69,16 +78,16 @@ fun MetricsExportScreen(onBack: () -> Unit) {
     var isExporting by remember { mutableStateOf(false) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportIsError by remember { mutableStateOf(false) }
-    var recentClassicRuns by remember { mutableStateOf(emptyList<ExportSessionDto>()) }
+    var recentSessions by remember { mutableStateOf(emptyList<ExportSessionDto>()) }
+    var pendingPdfSessionId by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(Unit) {
         isLoadingCounts = true
         sessionCount = repository.countSessions()
         attemptCount = repository.countAttempts()
         eventCount = repository.countTechnicalEvents()
-        recentClassicRuns = repository.buildExportSessions()
+        recentSessions = repository.buildExportSessions()
             .asReversed()
-            .filter { it.operationMode == "CLASSIC" }
             .take(8)
         isLoadingCounts = false
     }
@@ -189,6 +198,62 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         }
     }
 
+    val summaryPdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            isExporting = true
+            exportStatus = null
+            try {
+                val sessions = repository.buildExportSessions()
+                val report = MetricsReportMapper.mapAll(sessions)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        pdfExporter.writeSessionsSummary(report, out)
+                    } ?: error("No se pudo abrir el archivo de destino")
+                }
+                exportStatus = "PDF general exportado (${sessions.size} sesiones)"
+                exportIsError = false
+            } catch (e: Exception) {
+                exportStatus = "Error al exportar PDF general: ${e.message}"
+                exportIsError = true
+            } finally {
+                isExporting = false
+            }
+        }
+    }
+
+    val sessionPdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val sessionId = pendingPdfSessionId
+        pendingPdfSessionId = null
+        if (uri == null || sessionId == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            isExporting = true
+            exportStatus = null
+            try {
+                val session = repository.buildExportSessions()
+                    .firstOrNull { it.sessionId == sessionId }
+                    ?: error("No se encontro la sesion $sessionId")
+                val report = MetricsReportMapper.mapSession(session)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        pdfExporter.writeSessionReport(report, out)
+                    } ?: error("No se pudo abrir el archivo de destino")
+                }
+                exportStatus = "PDF de sesion $sessionId exportado correctamente"
+                exportIsError = false
+            } catch (e: Exception) {
+                exportStatus = "Error al exportar PDF de sesion: ${e.message}"
+                exportIsError = true
+            } finally {
+                isExporting = false
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -226,9 +291,14 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         )
 
         Spacer(modifier = Modifier.height(24.dp))
-        ClassicRunsSection(
+        RecentSessionsSection(
             isLoading = isLoadingCounts,
-            sessions = recentClassicRuns
+            sessions = recentSessions,
+            isExporting = isExporting,
+            onExportPdf = { session ->
+                pendingPdfSessionId = session.sessionId
+                sessionPdfLauncher.launch("reporte_sesion_${session.sessionId}.pdf")
+            }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -283,6 +353,17 @@ fun MetricsExportScreen(onBack: () -> Unit) {
             onClick = {
                 val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
                 eventsCsvLauncher.launch("technical_events_$ts.csv")
+            },
+            enabled = !isExporting
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        ExportButton(
+            text = "Exportar PDF - Resumen de sesiones",
+            onClick = {
+                val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+                summaryPdfLauncher.launch("reporte_metricas_$ts.pdf")
             },
             enabled = !isExporting
         )
@@ -373,13 +454,15 @@ private fun RecordsSummaryRow(label: String, value: Int) {
 }
 
 @Composable
-private fun ClassicRunsSection(
+private fun RecentSessionsSection(
     isLoading: Boolean,
-    sessions: List<ExportSessionDto>
+    sessions: List<ExportSessionDto>,
+    isExporting: Boolean,
+    onExportPdf: (ExportSessionDto) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "Ejecuciones del temporizador",
+            text = "Sesiones recientes",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             color = RecordsPink
@@ -395,7 +478,7 @@ private fun ClassicRunsSection(
                     .padding(vertical = 8.dp)
             )
             sessions.isEmpty() -> Text(
-                text = "Aun no hay ejecuciones registradas del temporizador.",
+                text = "Aun no hay sesiones registradas.",
                 fontSize = 14.sp,
                 color = RecordsText
             )
@@ -413,6 +496,7 @@ private fun ClassicRunsSection(
                     )
                     Text(
                         text = "Estado: ${session.finalState ?: "En curso"} | " +
+                            "Modo: ${MetricsReportMapper.modeLabel(session.operationMode)} | " +
                             "Preguntas: ${session.summary.completedQuestions}/${session.summary.totalQuestions}",
                         fontSize = 13.sp,
                         color = RecordsSubtitle
@@ -424,6 +508,12 @@ private fun ClassicRunsSection(
                             "Incorrectas internas: ${session.summary.incorrectCount ?: 0}",
                         fontSize = 13.sp,
                         color = RecordsSubtitle
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExportButton(
+                        text = "Exportar PDF de esta sesion",
+                        onClick = { onExportPdf(session) },
+                        enabled = !isExporting
                     )
                 }
             }
