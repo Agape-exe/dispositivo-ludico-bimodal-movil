@@ -247,7 +247,7 @@ class InteractionDataLoggerTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun finishClassicSession_dejaNulosCamposSemanticos() = runBlocking {
+    fun finishClassicSession_guardaConteosInternosSiExisten() = runBlocking {
         val sid = logger.startSession(2L, "Clasica", "CLASSIC", 4)
 
         logger.finishClassicSession(
@@ -257,15 +257,18 @@ class InteractionDataLoggerTest {
             completedQuestions = 4,
             totalAttempts = 4,
             noResponseCount = 1,
-            timeoutCount = 2
+            timeoutCount = 2,
+            correctCount = 2,
+            incorrectCount = 1,
+            notInterpretableCount = 0
         )
 
         val stored = sessionDao.sessions.first()
         assertTrue(stored.completed)
         assertEquals(4, stored.totalAttempts)
-        assertNull(stored.correctCount)
-        assertNull(stored.incorrectCount)
-        assertNull(stored.notInterpretableCount)
+        assertEquals(2, stored.correctCount)
+        assertEquals(1, stored.incorrectCount)
+        assertEquals(0, stored.notInterpretableCount)
         assertEquals(1, stored.noResponseCount)
         assertEquals(2, stored.timeoutCount)
     }
@@ -391,11 +394,11 @@ class InteractionDataLoggerTest {
     // -------------------------------------------------------------------------
 
     @Test
-    fun finishClassicAttempt_sinCamposSemanticos() = runBlocking {
+    fun finishClassicAttempt_guardaResultadoInterno() = runBlocking {
         val sid = logger.startSession(2L, "Clasica", "CLASSIC", 3)
         val aid = logger.logAttemptStarted(
             sid, 20L, 0, 1, "CLASSIC",
-            usedSemanticEvaluation = false
+            usedSemanticEvaluation = true
         )
 
         logger.finishClassicAttempt(
@@ -403,6 +406,7 @@ class InteractionDataLoggerTest {
             finalAttemptState = "ANSWER_RECEIVED",
             classicResult = "ANSWERED",
             transcript = "cuatro",
+            semanticResult = "CORRECT",
             usedStt = true
         )
 
@@ -410,7 +414,8 @@ class InteractionDataLoggerTest {
         assertEquals("ANSWER_RECEIVED", stored.finalAttemptState)
         assertEquals("ANSWERED", stored.classicResult)
         assertEquals("cuatro", stored.transcription)
-        assertNull(stored.semanticResult)
+        assertEquals("CORRECT", stored.semanticResult)
+        assertTrue(stored.usedSemanticEvaluation)
         assertTrue(stored.usedSpeechToText)
         assertNull(stored.totalResponseLatencyMs)
     }

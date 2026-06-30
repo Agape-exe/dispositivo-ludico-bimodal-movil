@@ -74,6 +74,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.taller.app.classic.ClassicTimerProgress
 import com.taller.app.classic.ClassicTimerRunner
+import com.taller.app.classic.ClassicTimerScript
 import com.taller.app.classic.ClassicTimerState
 import com.taller.app.classic.FixedTimerNeutralPhraseBank
 import com.taller.app.data.local.AppDatabase
@@ -81,6 +82,8 @@ import com.taller.app.data.local.entity.ActivityEntity
 import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
 import com.taller.app.model.LocalMediationKey
+import com.taller.app.semantic.SemanticEvaluator
+import com.taller.app.semantic.SemanticResult
 import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.speech.SpeechToTextService
@@ -152,6 +155,22 @@ private fun speechTimeoutMsFor(text: String): Long =
  * última ronda, donde el cierre encadena directamente.
  */
 private const val ROUND_TRANSITION_DELAY_MS = 800L
+
+private data class ClassicAttemptMetric(
+    val sessionId: Long,
+    val questionId: String,
+    val questionOrder: Int,
+    val questionText: String,
+    val referenceAnswer: String,
+    val transcript: String?,
+    val responded: Boolean,
+    val timedOut: Boolean,
+    val responseTimeMs: Long?,
+    val semanticResult: SemanticResult,
+    val startedAtMs: Long?,
+    val responseReceivedAtMs: Long?,
+    val finishedAtMs: Long
+)
 
 private fun normalizeSevenCommand(text: String): String {
     val withoutMarks = Normalizer.normalize(text, Normalizer.Form.NFD)
@@ -519,6 +538,7 @@ private fun ClassicSession(
         ClassicTimerRunner(responseTimeSeconds = appSettings.classicResponseTimeSeconds)
     }
     val phraseBank = remember(activity) { FixedTimerNeutralPhraseBank() }
+    val semanticEvaluator = remember(activity) { SemanticEvaluator() }
 
     var state by remember(activity) { mutableStateOf(runner.state) }
     var progress by remember(activity) { mutableStateOf(runner.progress) }
@@ -541,6 +561,12 @@ private fun ClassicSession(
     var classicTotalAttempts by remember(activity) { mutableStateOf(0) }
     var classicNoResponse by remember(activity) { mutableStateOf(0) }
     var classicTimeouts by remember(activity) { mutableStateOf(0) }
+    var classicCorrect by remember(activity) { mutableStateOf(0) }
+    var classicIncorrect by remember(activity) { mutableStateOf(0) }
+    var classicNotInterpretable by remember(activity) { mutableStateOf(0) }
+    var classicAttemptMetrics by remember(activity) { mutableStateOf(emptyList<ClassicAttemptMetric>()) }
+    var completedSessionId by remember(activity) { mutableStateOf<Long?>(null) }
+    var showTechnicalSummary by remember(activity) { mutableStateOf(false) }
 
     ClassicImmersiveSystemBarsEffect(context)
 
@@ -583,6 +609,66 @@ private fun ClassicSession(
                 )
             }
         }
+    }
+
+    fun currentQuestion(): com.taller.app.model.LearningQuestion? {
+        val id = progress?.currentQuestionId ?: return null
+        return activity.questions.firstOrNull { it.id == id }
+    }
+
+    fun currentSpokenQuestionText(): String {
+        val question = currentQuestion()
+        return question?.let { ClassicTimerScript.questionText(it) }
+            ?: progress?.currentQuestionText
+            ?: ""
+    }
+
+    fun evaluateClassicAnswer(transcript: String?): SemanticResult {
+        val question = currentQuestion() ?: return SemanticResult.NOT_INTERPRETABLE
+        if (transcript.isNullOrBlank()) return SemanticResult.NO_RESPONSE
+        return semanticEvaluator.evaluate(
+            transcription = transcript,
+            expectedAnswer = question.expectedAnswer,
+            keywords = question.keywords,
+            questionText = question.questionText
+        )
+    }
+
+    fun recordInternalSemanticCount(result: SemanticResult) {
+        when (result) {
+            SemanticResult.CORRECT -> classicCorrect += 1
+            SemanticResult.INCORRECT -> classicIncorrect += 1
+            SemanticResult.NOT_INTERPRETABLE -> classicNotInterpretable += 1
+            SemanticResult.NO_RESPONSE -> Unit
+        }
+    }
+
+    fun rememberAttemptMetric(
+        result: SemanticResult,
+        transcript: String?,
+        responded: Boolean,
+        timedOut: Boolean,
+        responseTimeMs: Long?
+    ) {
+        val question = currentQuestion()
+        val p = progress ?: return
+        val startedAt = p.questionStartedAt
+        val responseAt = if (responded) startedAt?.let { it + (responseTimeMs ?: 0L) } else null
+        classicAttemptMetrics = classicAttemptMetrics + ClassicAttemptMetric(
+            sessionId = logSessionId,
+            questionId = p.currentQuestionId,
+            questionOrder = p.currentQuestionIndex,
+            questionText = currentSpokenQuestionText().ifBlank { p.currentQuestionText },
+            referenceAnswer = question?.expectedAnswer.orEmpty(),
+            transcript = transcript?.ifBlank { null },
+            responded = responded,
+            timedOut = timedOut,
+            responseTimeMs = responseTimeMs,
+            semanticResult = result,
+            startedAtMs = startedAt,
+            responseReceivedAtMs = responseAt,
+            finishedAtMs = System.currentTimeMillis()
+        )
     }
 
     fun pauseByTeacher() {
@@ -887,7 +973,7 @@ private fun ClassicSession(
     LaunchedEffect(state == ClassicTimerState.SESSION_STARTING, resumeToken, isPausedByTeacher) {
         if (state != ClassicTimerState.SESSION_STARTING || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "SESSION_STARTING: frase apertura")
-        speakAndAwait(phraseBank.getSessionStart(), VoiceContext.GREETING)
+        speakAndAwait(ClassicTimerScript.intro(activity), VoiceContext.GREETING)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.SESSION_STARTING) {
             dispatch { runner.presentCurrentQuestion() }
         }
@@ -902,7 +988,7 @@ private fun ClassicSession(
     LaunchedEffect(presentKey, resumeToken, isPausedByTeacher) {
         if (presentKey == null || isPausedByTeacher) return@LaunchedEffect
         val isLast = progress?.isLastQuestion ?: false
-        val questionText = progress?.currentQuestionText ?: return@LaunchedEffect
+        val questionText = currentSpokenQuestionText().ifBlank { return@LaunchedEffect }
         val round = progress?.questionNumber ?: (presentKey + 1)
         val mediationKey = LocalMediationKey.fromKey(progress?.currentQuestionMediationKey)
         Log.d(CLASSIC_LOG_TAG, "PRESENTING_QUESTION round=$round isLast=$isLast key=$mediationKey")
@@ -928,9 +1014,9 @@ private fun ClassicSession(
                     questionOrder = progress?.currentQuestionIndex ?: 0,
                     attemptNumber = 1,
                     operationMode = "CLASSIC",
-                    questionText = progress?.currentQuestionText,
+                    questionText = currentSpokenQuestionText().ifBlank { progress?.currentQuestionText },
                     maxTimeMs = (progress?.effectiveMaxTimeSeconds ?: 10) * 1000L,
-                    usedSemanticEvaluation = false,
+                    usedSemanticEvaluation = true,
                     usedSpeechToText = true
                 )
             }.getOrElse { -1L }
@@ -953,24 +1039,39 @@ private fun ClassicSession(
         val classicAid = logAttemptId
         val classicSid = logSessionId
         val responseLatency = progress?.responseLatencyMs
+        val transcript = sttFinal.ifBlank { null }
+        val semanticStart = System.currentTimeMillis()
+        val semanticResult = evaluateClassicAnswer(transcript)
+        val semanticEnd = System.currentTimeMillis()
         classicTotalAttempts += 1
+        recordInternalSemanticCount(semanticResult)
+        rememberAttemptMetric(
+            result = semanticResult,
+            transcript = transcript,
+            responded = true,
+            timedOut = false,
+            responseTimeMs = responseLatency
+        )
         if (classicAid > 0L && classicSid > 0L) {
             runCatching {
                 dataLogger.finishClassicAttempt(
                     attemptId = classicAid,
                     finalAttemptState = "ANSWER_RECEIVED",
                     classicResult = "ANSWERED",
-                    transcript = sttFinal.ifBlank { null },
+                    transcript = transcript,
+                    semanticResult = semanticResult.name,
                     responseReceivedAtMs = progress?.questionStartedAt?.let { it + (responseLatency ?: 0L) },
                     realResponseTimeMs = responseLatency,
-                    usedStt = sttFinal.isNotBlank()
+                    usedStt = transcript != null,
+                    semanticStartAtMs = semanticStart,
+                    semanticEndAtMs = semanticEnd
                 )
             }
         }
 
         // Última ronda: frase de cierre de participación sin anunciar otra pregunta,
         // y avance inmediato al cierre (sin transición intermedia).
-        speakAndAwait(phraseBank.getAnswerReceived(isLast), VoiceContext.FEEDBACK_CORRECT)
+        speakAndAwait(phraseBank.getAnswerReceived(isLast), VoiceContext.UNKNOWN)
         if (!isLast) delay(ROUND_TRANSITION_DELAY_MS)
         if (!isPausedByTeacher && runner.state == ClassicTimerState.ANSWER_RECEIVED) {
             dispatch { runner.advanceQuestion() }
@@ -991,16 +1092,32 @@ private fun ClassicSession(
 
         val timeoutAid = logAttemptId
         val timeoutSid = logSessionId
+        val transcript = sttFinal.ifBlank { sttPartial }.ifBlank { null }
+        val semanticStart = System.currentTimeMillis()
+        val semanticResult = evaluateClassicAnswer(transcript)
+        val semanticEnd = System.currentTimeMillis()
         classicTotalAttempts += 1
-        if (hadPartial) classicTimeouts += 1 else classicNoResponse += 1
+        classicTimeouts += 1
+        if (transcript == null) classicNoResponse += 1
+        recordInternalSemanticCount(semanticResult)
+        rememberAttemptMetric(
+            result = semanticResult,
+            transcript = transcript,
+            responded = transcript != null,
+            timedOut = true,
+            responseTimeMs = null
+        )
         if (timeoutAid > 0L && timeoutSid > 0L) {
             runCatching {
                 dataLogger.finishClassicAttempt(
                     attemptId = timeoutAid,
                     finalAttemptState = "TIME_EXPIRED",
                     classicResult = if (hadPartial) "TIMEOUT_PARTIAL" else "TIMEOUT_NO_RESPONSE",
-                    transcript = sttFinal.ifBlank { null },
-                    usedStt = sttFinal.isNotBlank()
+                    transcript = transcript,
+                    semanticResult = semanticResult.name,
+                    usedStt = transcript != null,
+                    semanticStartAtMs = semanticStart,
+                    semanticEndAtMs = semanticEnd
                 )
             }
         }
@@ -1029,7 +1146,7 @@ private fun ClassicSession(
     LaunchedEffect(state == ClassicTimerState.SESSION_COMPLETED, isPausedByTeacher) {
         if (state != ClassicTimerState.SESSION_COMPLETED || isPausedByTeacher) return@LaunchedEffect
         Log.d(CLASSIC_LOG_TAG, "SESSION_COMPLETED")
-        speakAndAwait(phraseBank.getSessionCompleted(), VoiceContext.CLOSING)
+        speakAndAwait(ClassicTimerScript.closing(activity), VoiceContext.CLOSING)
     }
 
     // Registra el cierre de la sesion clasica cuando se alcanza un estado terminal.
@@ -1054,9 +1171,13 @@ private fun ClassicSession(
                 } ?: 0,
                 totalAttempts = classicTotalAttempts,
                 noResponseCount = classicNoResponse,
-                timeoutCount = classicTimeouts
+                timeoutCount = classicTimeouts,
+                correctCount = classicCorrect,
+                incorrectCount = classicIncorrect,
+                notInterpretableCount = classicNotInterpretable
             )
         }
+        completedSessionId = sid
         logSessionId = -1L
     }
 
@@ -1067,11 +1188,12 @@ private fun ClassicSession(
         classicTotalAttempts = 0
         classicNoResponse = 0
         classicTimeouts = 0
-        dispatch {
-            runner.loadActivity(activity)
-            runner.markActivityLoaded()
-            runner.startSession()
-        }
+        classicCorrect = 0
+        classicIncorrect = 0
+        classicNotInterpretable = 0
+        classicAttemptMetrics = emptyList()
+        completedSessionId = null
+        showTechnicalSummary = false
         val activityIdLong = activity.id.toLongOrNull() ?: return
         scope.launch {
             runCatching {
@@ -1089,6 +1211,11 @@ private fun ClassicSession(
                     )
                     startCommandLogPending = false
                 }
+            }
+            dispatch {
+                runner.loadActivity(activity)
+                runner.markActivityLoaded()
+                runner.startSession()
             }
         }
     }
@@ -1114,9 +1241,13 @@ private fun ClassicSession(
                         completedQuestions = progress?.currentQuestionIndex ?: 0,
                         totalAttempts = classicTotalAttempts,
                         noResponseCount = classicNoResponse,
-                        timeoutCount = classicTimeouts
+                        timeoutCount = classicTimeouts,
+                        correctCount = classicCorrect,
+                        incorrectCount = classicIncorrect,
+                        notInterpretableCount = classicNotInterpretable
                     )
                 }
+                completedSessionId = sid
                 logSessionId = -1L
             }
             onBack()
@@ -1348,7 +1479,7 @@ private fun ClassicSession(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = progress?.currentQuestionText ?: "—",
+                    text = currentSpokenQuestionText().ifBlank { "—" },
                     style = MaterialTheme.typography.bodyLarge
                 )
                 if (toyVoiceSpeaking) {
@@ -1591,12 +1722,128 @@ private fun ClassicSession(
             InfoBanner("Error: $errorMessage")
         }
 
+        if (sessionTerminal && completedSessionId != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { showTechnicalSummary = !showTechnicalSummary },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (showTechnicalSummary) "Ocultar resumen tecnico" else "Ver resumen tecnico")
+            }
+            AnimatedVisibility(showTechnicalSummary) {
+                ClassicTechnicalSummaryCard(
+                    sessionId = completedSessionId ?: -1L,
+                    activity = activity,
+                    attempts = classicAttemptMetrics,
+                    totalAttempts = classicTotalAttempts,
+                    noResponse = classicNoResponse,
+                    correct = classicCorrect,
+                    incorrect = classicIncorrect,
+                    notInterpretable = classicNotInterpretable,
+                    timeoutCount = classicTimeouts
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
         OutlinedButton(
             onClick = onChangeActivity,
             modifier = Modifier.fillMaxWidth()
         ) { Text("Cambiar de actividad") }
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun ClassicTechnicalSummaryCard(
+    sessionId: Long,
+    activity: LearningActivity,
+    attempts: List<ClassicAttemptMetric>,
+    totalAttempts: Int,
+    noResponse: Int,
+    correct: Int,
+    incorrect: Int,
+    notInterpretable: Int,
+    timeoutCount: Int
+) {
+    val answered = attempts.count { it.responded }
+    val totalDurationMs = attempts
+        .mapNotNull { attempt -> attempt.startedAtMs?.let { attempt.finishedAtMs - it } }
+        .takeIf { it.isNotEmpty() }
+        ?.sum()
+    val averageResponseMs = attempts
+        .mapNotNull { it.responseTimeMs }
+        .takeIf { it.isNotEmpty() }
+        ?.average()
+        ?.toLong()
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Resumen tecnico",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            InfoRow("ID ejecucion", sessionId.toString())
+            InfoRow("Sesion", activity.title)
+            InfoRow("Tema", activity.topic.ifBlank { "Sin tema" })
+            InfoRow("Duracion total", totalDurationMs?.let { formatClassicDuration(it) } ?: "Pendiente")
+            InfoRow("Preguntas", attempts.size.toString())
+            InfoRow("Respondidas", answered.toString())
+            InfoRow("Sin respuesta", noResponse.toString())
+            InfoRow("Timeouts", timeoutCount.toString())
+            InfoRow("Correctas internas", correct.toString())
+            InfoRow("Incorrectas internas", incorrect.toString())
+            InfoRow("No interpretables", notInterpretable.toString())
+            InfoRow("Tiempo promedio", averageResponseMs?.let { formatClassicDuration(it) } ?: "Sin respuestas")
+            InfoRow("Intentos guardados", totalAttempts.toString())
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Detalle por pregunta",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+            attempts.sortedBy { it.questionOrder }.forEach { attempt ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "${attempt.questionOrder + 1}. ${attempt.questionText}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Respuesta: ${attempt.transcript ?: "Sin respuesta"}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Referencia: ${attempt.referenceAnswer.ifBlank { "Sin referencia" }}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Tiempo: ${attempt.responseTimeMs?.let { formatClassicDuration(it) } ?: "Sin respuesta"}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Resultado interno: ${attempt.semanticResult.name}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1899,6 +2146,9 @@ private fun providerLabel(type: ToyVoiceProviderType): String = when (type) {
     ToyVoiceProviderType.GEMINI_TTS -> "Gemini"
     ToyVoiceProviderType.ELEVENLABS -> "ElevenLabs"
 }
+
+private fun formatClassicDuration(ms: Long): String =
+    if (ms < 1_000L) "$ms ms" else "${ms / 1_000}.${((ms % 1_000) / 100)} s"
 
 private fun classicStateLabel(state: ClassicTimerState): String = when (state) {
     ClassicTimerState.IDLE -> "Sin iniciar"

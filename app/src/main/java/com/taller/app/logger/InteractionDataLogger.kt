@@ -94,7 +94,10 @@ class InteractionDataLogger(
         completedQuestions: Int,
         totalAttempts: Int,
         noResponseCount: Int,
-        timeoutCount: Int
+        timeoutCount: Int,
+        correctCount: Int? = null,
+        incorrectCount: Int? = null,
+        notInterpretableCount: Int? = null
     ) {
         if (sessionId <= 0L) return
         val endedAt = now()
@@ -108,10 +111,10 @@ class InteractionDataLogger(
             completed = finalState == "SESSION_COMPLETED",
             completedQuestions = completedQuestions,
             totalAttempts = totalAttempts,
-            correctCount = null,
-            incorrectCount = null,
+            correctCount = correctCount,
+            incorrectCount = incorrectCount,
             noResponseCount = noResponseCount,
-            notInterpretableCount = null,
+            notInterpretableCount = notInterpretableCount,
             timeoutCount = timeoutCount,
             technicalErrorCount = 0
         )
@@ -199,9 +202,12 @@ class InteractionDataLogger(
         finalAttemptState: String,
         classicResult: String,
         transcript: String? = null,
+        semanticResult: String? = null,
         responseReceivedAtMs: Long? = null,
         realResponseTimeMs: Long? = null,
-        usedStt: Boolean = false
+        usedStt: Boolean = false,
+        semanticStartAtMs: Long? = null,
+        semanticEndAtMs: Long? = null
     ) {
         if (attemptId <= 0L) return
         attemptDao.updateFinished(
@@ -209,7 +215,7 @@ class InteractionDataLogger(
             finalState = finalAttemptState,
             wasFinal = true,
             transcript = transcript,
-            semanticResult = null,
+            semanticResult = semanticResult,
             classicResult = classicResult,
             responseReceivedAtMs = responseReceivedAtMs,
             finishedAtMs = now(),
@@ -218,8 +224,8 @@ class InteractionDataLogger(
             usedStt = usedStt,
             sttStart = null,
             sttFinalAt = null,
-            semStart = null,
-            semEnd = null,
+            semStart = semanticStartAtMs,
+            semEnd = semanticEndAtMs,
             logicAt = null,
             feedbackAt = null,
             responseLatency = null,
