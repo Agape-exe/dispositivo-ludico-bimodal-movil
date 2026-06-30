@@ -1,5 +1,6 @@
 package com.taller.app.voice.prep
 
+import com.taller.app.classic.ClassicTimerScript
 import com.taller.app.voice.ToyVoiceTextValidator
 
 /** Guion de una pregunta como fuente de lineas de voz (decoplado de Room). */
@@ -8,6 +9,8 @@ data class QuestionVoiceSource(
     val orderIndex: Int,
     val childFriendlyQuestionText: String?,
     val rawQuestionText: String,
+    val expectedAnswer: String = "",
+    val keywords: List<String> = emptyList(),
     val hint1: String?,
     val hint2: String?,
     val hint3: String?,
@@ -20,6 +23,8 @@ data class QuestionVoiceSource(
 data class SessionVoiceSource(
     val introText: String?,
     val closingText: String?,
+    val activityTitle: String = "",
+    val activityTopic: String = "",
     val questions: List<QuestionVoiceSource>
 )
 
@@ -47,11 +52,34 @@ object SessionVoiceLines {
         val raw = buildList {
             if (includeGeneric) addAll(SevenGenericVoiceBank.lines())
             addLine(VoiceLineRole.INTRO, source.introText)
+            if (source.activityTitle.isNotBlank() || source.activityTopic.isNotBlank() || !source.introText.isNullOrBlank()) {
+                addLine(
+                    VoiceLineRole.INTRO,
+                    ClassicTimerScript.intro(
+                        title = source.activityTitle,
+                        topic = source.activityTopic,
+                        generatedIntroText = source.introText
+                    )
+                )
+            }
             addLine(VoiceLineRole.CLOSING, source.closingText)
+            if (source.activityTitle.isNotBlank() || source.activityTopic.isNotBlank() || !source.closingText.isNullOrBlank()) {
+                addLine(VoiceLineRole.CLOSING, ClassicTimerScript.closing(source.closingText))
+            }
             source.questions.sortedBy { it.orderIndex }.forEach { q ->
                 val questionText = q.childFriendlyQuestionText?.takeIf { it.isNotBlank() }
                     ?: q.rawQuestionText
                 addLine(VoiceLineRole.QUESTION, questionText, q.questionId)
+                addLine(
+                    VoiceLineRole.QUESTION,
+                    ClassicTimerScript.questionText(
+                        rawQuestionText = q.rawQuestionText,
+                        childFriendlyQuestionText = q.childFriendlyQuestionText,
+                        expectedAnswer = q.expectedAnswer,
+                        keywords = q.keywords
+                    ),
+                    q.questionId
+                )
                 addLine(VoiceLineRole.HINT_1, q.hint1, q.questionId)
                 addLine(VoiceLineRole.HINT_2, q.hint2, q.questionId)
                 addLine(VoiceLineRole.HINT_3, q.hint3, q.questionId)

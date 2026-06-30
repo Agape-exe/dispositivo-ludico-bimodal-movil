@@ -39,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taller.app.data.local.AppDatabase
+import com.taller.app.export.ExportSessionDto
 import com.taller.app.export.MetricsCsvExporter
 import com.taller.app.export.MetricsExportRepository
 import com.taller.app.export.MetricsJsonExporter
@@ -68,12 +69,17 @@ fun MetricsExportScreen(onBack: () -> Unit) {
     var isExporting by remember { mutableStateOf(false) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportIsError by remember { mutableStateOf(false) }
+    var recentClassicRuns by remember { mutableStateOf(emptyList<ExportSessionDto>()) }
 
     LaunchedEffect(Unit) {
         isLoadingCounts = true
         sessionCount = repository.countSessions()
         attemptCount = repository.countAttempts()
         eventCount = repository.countTechnicalEvents()
+        recentClassicRuns = repository.buildExportSessions()
+            .asReversed()
+            .filter { it.operationMode == "CLASSIC" }
+            .take(8)
         isLoadingCounts = false
     }
 
@@ -220,6 +226,12 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+        ClassicRunsSection(
+            isLoading = isLoadingCounts,
+            sessions = recentClassicRuns
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
         HorizontalDivider(color = RecordsDivider, thickness = 1.dp)
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -357,6 +369,65 @@ private fun RecordsSummaryRow(label: String, value: Int) {
             fontWeight = FontWeight.Bold,
             color = RecordsText
         )
+    }
+}
+
+@Composable
+private fun ClassicRunsSection(
+    isLoading: Boolean,
+    sessions: List<ExportSessionDto>
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Ejecuciones del temporizador",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = RecordsPink
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        when {
+            isLoading -> CircularProgressIndicator(
+                color = RecordsPink,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(vertical = 8.dp)
+            )
+            sessions.isEmpty() -> Text(
+                text = "Aun no hay ejecuciones registradas del temporizador.",
+                fontSize = 14.sp,
+                color = RecordsText
+            )
+            else -> sessions.forEach { session ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "ID ${session.sessionId} - ${session.activityName ?: "Sesion sin nombre"}",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = RecordsText
+                    )
+                    Text(
+                        text = "Estado: ${session.finalState ?: "En curso"} | " +
+                            "Preguntas: ${session.summary.completedQuestions}/${session.summary.totalQuestions}",
+                        fontSize = 13.sp,
+                        color = RecordsSubtitle
+                    )
+                    Text(
+                        text = "Respondidas: ${session.attempts.count { it.transcription != null }} | " +
+                            "Sin respuesta: ${session.summary.noResponseCount} | " +
+                            "Correctas internas: ${session.summary.correctCount ?: 0} | " +
+                            "Incorrectas internas: ${session.summary.incorrectCount ?: 0}",
+                        fontSize = 13.sp,
+                        color = RecordsSubtitle
+                    )
+                }
+            }
+        }
     }
 }
 

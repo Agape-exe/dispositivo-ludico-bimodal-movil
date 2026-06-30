@@ -225,6 +225,57 @@ class ToyVoiceFallbackTest {
     }
 
     @Test
+    fun sevenVoiceService_cacheOnlyUsesCachedAudioWithoutLiveSpeak() = runBlocking {
+        val gemini = CacheCountingProvider(
+            cacheResult = VoicePlaybackResult.Success(cacheHit = true, cacheKey = "timer123")
+        )
+        val service = SevenVoiceService(
+            geminiProvider = gemini,
+            openAiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
+            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val outcome = service.speakFromCacheOnly(
+            text = "Pregunta cacheada",
+            mode = VoiceMode.TIMER,
+            voiceContext = VoiceContext.QUESTION
+        )
+
+        assertTrue(outcome is VoiceOutcome.Completed)
+        assertEquals(true, outcome.cacheHit)
+        assertEquals("timer123", outcome.cacheKey)
+        assertEquals(1, gemini.cacheCalls)
+        assertEquals(0, gemini.liveSpeakCalls)
+    }
+
+    @Test
+    fun sevenVoiceService_cacheOnlyMissDoesNotSynthesizeLiveAudio() = runBlocking {
+        val gemini = CacheCountingProvider(cacheResult = null)
+        val openAi = CacheCountingProvider(cacheResult = null)
+        val service = SevenVoiceService(
+            geminiProvider = gemini,
+            openAiProvider = openAi,
+            azureProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
+            localProvider = CountingProvider(VoicePlaybackResult.Success()),
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
+        )
+
+        val outcome = service.speakFromCacheOnly(
+            text = "Pregunta faltante",
+            mode = VoiceMode.TIMER,
+            voiceContext = VoiceContext.QUESTION
+        )
+
+        assertTrue(outcome is VoiceOutcome.Failed)
+        assertEquals(1, gemini.cacheCalls)
+        assertEquals(1, openAi.cacheCalls)
+        assertEquals(0, gemini.liveSpeakCalls)
+        assertEquals(0, openAi.liveSpeakCalls)
+    }
+
+    @Test
     fun voiceMetric_geminiSuccessIncludesRequestedUsedAndModel() = runBlocking {
         val service = SevenVoiceService(
             geminiProvider = CountingProvider(
@@ -461,6 +512,38 @@ class ToyVoiceFallbackTest {
             delay(40L)
             activeCalls -= 1
             return result
+        }
+
+        override fun isConfigured(): Boolean = true
+        override fun stop() = Unit
+        override fun release() = Unit
+    }
+
+    private class CacheCountingProvider(
+        private val cacheResult: VoicePlaybackResult?
+    ) : ToyVoiceProvider, CacheableVoiceProvider {
+        var liveSpeakCalls = 0
+            private set
+        var cacheCalls = 0
+            private set
+
+        override suspend fun speak(text: String, onPlaybackStart: () -> Unit): VoicePlaybackResult {
+            liveSpeakCalls += 1
+            return VoicePlaybackResult.Success(cacheHit = false)
+        }
+
+        override fun isCached(text: String): Boolean = cacheResult != null
+
+        override suspend fun synthesizeToCache(text: String): VoicePlaybackResult =
+            VoicePlaybackResult.Success(cacheHit = false)
+
+        override suspend fun speakFromCacheOrNull(
+            text: String,
+            onPlaybackStart: () -> Unit
+        ): VoicePlaybackResult? {
+            cacheCalls += 1
+            if (cacheResult is VoicePlaybackResult.Success) onPlaybackStart()
+            return cacheResult
         }
 
         override fun isConfigured(): Boolean = true
