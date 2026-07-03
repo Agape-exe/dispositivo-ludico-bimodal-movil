@@ -301,6 +301,72 @@ class HybridAnswerEvaluatorTest {
         assertTrue(result.usedFallback)
     }
 
+    // ----- MED02: equivalencias y categorias abiertas de varios temas ------------
+
+    @Test
+    fun openTransportThatFlies_judgeAcceptsHelicopter() = runBlocking {
+        // Pregunta abierta ("menciona"): el juez puede aceptar un equivalente valido.
+        val json = """{ "decision": "CORRECT", "confidence": 0.85, "acceptedAsEquivalent": true,
+            "acceptanceType": "EQUIVALENT" }"""
+        val (evaluator, client) = evaluatorWith({ success(json) })
+        val result = evaluator.evaluate(
+            transcription = "helicoptero",
+            question = question(text = "Menciona un transporte que vuela", expected = "avion"),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.JUDGE, result.decisionLayer)
+        assertEquals(SemanticResult.CORRECT, result.finalResult)
+        assertEquals("EQUIVALENT", result.acceptanceType)
+        assertEquals(1, client.generateCalls)
+    }
+
+    @Test
+    fun closedTransportThatFlies_bicycle_doesNotCallJudge() = runBlocking {
+        // Pregunta cerrada y referencia simple: contradiccion clara, sin juez.
+        val (evaluator, client) = evaluatorWith({ success("{}") })
+        val result = evaluator.evaluate(
+            transcription = "bicicleta",
+            question = question(text = "¿Qué transporte vuela?", expected = "avion"),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.LOCAL, result.decisionLayer)
+        assertEquals(SemanticResult.INCORRECT, result.finalResult)
+        assertEquals(0, client.generateCalls)
+    }
+
+    @Test
+    fun closedBodyQuestion_orejas_doesNotCallJudge() = runBlocking {
+        // "orejas" cuando se pregunta con que vemos: pregunta cerrada, sin juez.
+        val (evaluator, client) = evaluatorWith({ success("{}") })
+        val result = evaluator.evaluate(
+            transcription = "orejas",
+            question = question(text = "¿Con qué parte del cuerpo vemos?", expected = "ojos"),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.LOCAL, result.decisionLayer)
+        assertEquals(0, client.generateCalls)
+    }
+
+    @Test
+    fun openFood_judgeRejectsNonFood_noFalsePositive() = runBlocking {
+        // Pregunta abierta pero respuesta claramente no comestible: el juez rechaza.
+        val json = """{ "decision": "INCORRECT", "confidence": 0.9, "reason": "no se come" }"""
+        val (evaluator, _) = evaluatorWith({ success(json) })
+        val result = evaluator.evaluate(
+            transcription = "piedra",
+            question = question(text = "Menciona algo que se puede comer", expected = "pan"),
+            localResult = SemanticResult.INCORRECT,
+            context = context()
+        )
+        assertEquals(JudgeDecisionLayer.JUDGE, result.decisionLayer)
+        assertEquals(SemanticResult.INCORRECT, result.finalResult)
+        assertFalse(result.acceptedAsEquivalent)
+        assertNull(result.acceptanceType)
+    }
+
     @Test
     fun questionLooksLikeSoundPrompt_detectsSoundQuestions() {
         val (evaluator, _) = evaluatorWith({ success("{}") })

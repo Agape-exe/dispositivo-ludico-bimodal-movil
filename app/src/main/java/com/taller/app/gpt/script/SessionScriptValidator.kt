@@ -1,5 +1,8 @@
 package com.taller.app.gpt.script
 
+import com.taller.app.semantic.ChildAnswerEquivalences
+import java.text.Normalizer
+
 /**
  * GEN01: capa de validacion local del guion antes de aceptarlo o guardarlo.
  * No pretende ser perfecta; protege contra contenido vacio, pistas que revelan la
@@ -94,13 +97,33 @@ object SessionScriptValidator {
     /** True si el texto excede el largo recomendado para niños pequeños. */
     fun isTooLong(text: String): Boolean = text.length > MAX_SPOKEN_CHARS
 
-    /** Una pista revela la respuesta si la contiene como palabra completa. */
+    /**
+     * Una pista revela la respuesta si la contiene como palabra completa o si menciona
+     * una variante obvia de la referencia (plural/singular, diminutivo o sinonimo
+     * comun). La comparacion ignora tildes y signos para que "círculo" se detecte aunque
+     * la pista escriba "circulo".
+     */
     fun revealsAnswer(hint: String, reference: String): Boolean {
-        val normalizedHint = " ${normalize(hint)} "
-        return reference.split(",", ";", "/", " o ")
-            .map { normalize(it) }
+        if (hint.isBlank() || reference.isBlank()) return false
+        val normalizedHint = " ${stripAccents(normalize(hint))} "
+        val literalLeak = splitReference(reference)
+            .map { stripAccents(normalize(it)) }
             .filter { it.length >= 3 }
             .any { token -> normalizedHint.contains(" $token ") }
+        if (literalLeak) return true
+        // Variantes obvias: "perrito"/"perros" delatan "perro" aunque no sea textual.
+        return ChildAnswerEquivalences.textMentionsVariantOf(hint, reference)
+    }
+
+    /** Separa la referencia en opciones reconociendo comas, conectores y saltos de linea. */
+    private fun splitReference(reference: String): List<String> =
+        reference.split(Regex("(?i)[,;/\\n]| y | o | u | e "))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+    private fun stripAccents(text: String): String {
+        val decomposed = Normalizer.normalize(text, Normalizer.Form.NFD)
+        return decomposed.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
     }
 
     private fun checkForbidden(label: String, text: String, issues: MutableList<String>) {

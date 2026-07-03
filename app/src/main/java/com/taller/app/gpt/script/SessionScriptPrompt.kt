@@ -21,7 +21,9 @@ object SessionScriptPrompt {
             "- Usa frases breves y faciles para ninos pequenos. Nada de tono de examen ni de regano.\n" +
             "- Nunca culpes al nino. Siempre acompana con calidez.\n" +
             "- Convierte cada pregunta formal en una pregunta oral y ludica, conservando su sentido pedagogico.\n" +
-            "- Las pistas son escalonadas (de mas general a mas concreta) y NUNCA revelan la respuesta directa.\n" +
+            "- Las pistas son escalonadas: la pista 1 es muy general y NO obvia, la pista 2 orienta mas y la pista 3 " +
+            "acerca al concepto, pero NINGUNA revela la respuesta ni una variante obvia (plural, diminutivo o sinonimo) " +
+            "ni dice como empieza la palabra.\n" +
             "- Si la respuesta de referencia parece incorrecta, insuficiente, ambigua o demasiado cerrada, " +
             "describelo en answerReferenceWarning y propon una mejor referencia en suggestedReferenceAnswer.\n" +
             "- No reemplaces la respuesta original; solo sugieres. Si la referencia esta bien, deja " +

@@ -120,6 +120,36 @@ class IntelligentSessionReportTest {
     }
 
     @Test
+    fun reportShowsAcceptanceType() {
+        val voiceEvents = listOf(voice(VoicePlaybackSource.CACHE_HIT))
+        val evaluations = listOf(
+            AnswerEvaluationDebugInfo(
+                questionOrder = 3,
+                questionId = 12L,
+                questionTextShort = "Menciona una fruta",
+                expectedAnswerShort = "manzana",
+                sttFinalTranscriptShort = "una banana",
+                localEvaluationResult = "CORRECT",
+                localReason = "equivalencia infantil",
+                evaluationLatencyMs = 9L,
+                attemptNumber = 1,
+                decisionLayer = "LOCAL",
+                finalResult = "CORRECT",
+                acceptanceType = "EQUIVALENCIA"
+            )
+        )
+        val text = IntelligentSessionReport.buildReportText(voiceEvents, evaluations)
+
+        assertTrue(text.contains("Tipo de aceptacion: EQUIVALENCIA"))
+        // Compatibilidad: una evaluacion sin acceptanceType muestra el guion.
+        val legacy = IntelligentSessionReport.buildReportText(
+            voiceEvents,
+            evaluations.map { it.copy(acceptanceType = null) }
+        )
+        assertTrue(legacy.contains("Tipo de aceptacion: —"))
+    }
+
+    @Test
     fun shortSafeRedactsAndTruncates() {
         val redacted = IntelligentSessionReport.shortSafe("api_key=SECRET12345 hola")
         assertTrue(redacted!!.contains("credential_redacted"))

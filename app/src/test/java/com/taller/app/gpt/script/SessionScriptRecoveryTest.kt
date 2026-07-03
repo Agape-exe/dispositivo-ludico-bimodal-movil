@@ -96,6 +96,28 @@ class SessionScriptRecoveryTest {
     }
 
     @Test
+    fun hintWithVariantIsReplacedButRestKept() {
+        // Una sola pista delata la respuesta por variante ("perritos"): se repara solo
+        // esa pista y se conserva el resto del guion del modelo (reemplazo parcial).
+        val input = input()
+        val local = SessionScriptLocalFallback.build(input)
+        val model = modelScript(
+            question(1, 1L, hint1 = "Hay muchos perritos en casa"),
+            question(2, 2L)
+        )
+
+        val result = SessionScriptRecovery.recover(model, local, input)
+
+        assertTrue(result.usedModelContent)
+        assertFalse(
+            SessionScriptValidator.revealsAnswer(result.script.questions[0].hintLevel1, "perro")
+        )
+        // El resto del guion del modelo se conserva.
+        assertEquals("Pregunta amigable 1", result.script.questions[0].childFriendlyQuestionText)
+        assertEquals("Pista dos 1", result.script.questions[0].hintLevel2)
+    }
+
+    @Test
     fun emptyModelUsesLocalEntirely() {
         val input = input()
         val local = SessionScriptLocalFallback.build(input)

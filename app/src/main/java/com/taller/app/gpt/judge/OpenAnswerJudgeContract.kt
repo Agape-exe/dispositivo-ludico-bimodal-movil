@@ -26,6 +26,33 @@ enum class JudgeDecision {
     }
 }
 
+/**
+ * MED02: por que el juez acepto (o no) la respuesta. Orientativo para el reporte,
+ * nunca decide por si solo. Se sanea localmente al parsear.
+ */
+enum class JudgeAcceptanceType {
+    /** Coincide literalmente con el concepto esperado. */
+    LITERAL,
+    /** Respuesta equivalente o sinonimo valido del concepto. */
+    EQUIVALENT,
+    /** Probable error del reconocimiento de voz infantil (alias del sonido/palabra). */
+    STT_ALIAS,
+    /** Ejemplo valido de una categoria abierta ("menciona un animal"). */
+    OPEN_CATEGORY,
+    /** No aplica (respuesta rechazada o sin tipo declarado). */
+    NONE;
+
+    companion object {
+        fun parse(raw: String?): JudgeAcceptanceType = when (raw?.trim()?.uppercase()) {
+            "LITERAL" -> LITERAL
+            "EQUIVALENT", "EQUIVALENTE", "EQUIVALENCIA" -> EQUIVALENT
+            "STT_ALIAS", "ALIAS", "ALIAS_STT", "STT" -> STT_ALIAS
+            "OPEN_CATEGORY", "CATEGORIA", "CATEGORY", "CATEGORIA_ABIERTA" -> OPEN_CATEGORY
+            else -> NONE
+        }
+    }
+}
+
 /** Tipo de retroalimentacion sugerida por el juez (orientativa para el flujo). */
 enum class JudgeFeedbackType {
     POSITIVE,
@@ -91,6 +118,7 @@ data class OpenAnswerJudgeInput(
  *   false cuando quedan intentos.
  * @property normalizedChildAnswer respuesta del nino normalizada (corta).
  * @property normalizedExpectedConcept concepto esperado normalizado (corto).
+ * @property acceptanceType MED02: tipo de aceptacion declarado por el juez (orientativo).
  */
 data class OpenAnswerJudgeVerdict(
     val decision: JudgeDecision,
@@ -102,5 +130,6 @@ data class OpenAnswerJudgeVerdict(
     val safeHintLevel: Int,
     val revealsAnswer: Boolean,
     val normalizedChildAnswer: String,
-    val normalizedExpectedConcept: String
+    val normalizedExpectedConcept: String,
+    val acceptanceType: JudgeAcceptanceType = JudgeAcceptanceType.NONE
 )
