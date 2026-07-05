@@ -31,7 +31,11 @@ class PdfMetricsExporter(
             writer.section("Resumen")
             writer.summaryGrid(summaryRows(session))
             writer.section("Detalle por pregunta")
-            writer.attemptTable(session.details, session.isIntelligent)
+            writer.attemptTable(
+                session.details,
+                session.isIntelligent,
+                session.attentionTrackingEnabled
+            )
             writer.section("Privacidad")
             writer.paragraph(
                 "El reporte contiene texto transcrito y metricas de interaccion. " +
@@ -77,8 +81,22 @@ class PdfMetricsExporter(
             "Tiempo por pregunta" to formatDuration(session.configuredTimePerQuestionMs)
         )
         if (session.isIntelligent) {
-            base += "Distracciones / perdida de atencion" to session.attentionLossCount.toString()
-            base += "Recapturas de atencion" to session.recaptureCount.toString()
+            // FINAL-FLOW01: con la atencion por camara desactivada, el reporte lo
+            // dice de forma explicita ("Desactivada" / "No aplica") en lugar de
+            // mostrar ceros o guiones que se confundan con "sin distracciones".
+            if (session.attentionTrackingEnabled) {
+                base += "Atencion por camara" to "Activada"
+                base += "Distracciones / perdida de atencion" to
+                    session.attentionLossCount.toString()
+            } else {
+                base += "Atencion por camara" to "Desactivada"
+                base += "Distracciones / perdida de atencion" to "No aplica"
+            }
+            base += "Recapturas de atencion" to if (session.recaptureTrackingEnabled) {
+                session.recaptureCount.toString()
+            } else {
+                "No aplica"
+            }
             base += "Intentos totales" to session.totalAttempts.toString()
             base += "Promedio de intentos por pregunta" to averageAttempts(session)
             base += "Motivo de cierre" to session.closeReason
@@ -199,7 +217,11 @@ class PdfMetricsExporter(
             }
         }
 
-        fun attemptTable(details: List<MetricsQuestionAttemptReport>, intelligent: Boolean) {
+        fun attemptTable(
+            details: List<MetricsQuestionAttemptReport>,
+            intelligent: Boolean,
+            attentionApplicable: Boolean = true
+        ) {
             if (details.isEmpty()) {
                 paragraph("No hay intentos registrados para esta sesion.")
                 return
@@ -224,7 +246,7 @@ class PdfMetricsExporter(
                         row.result,
                         formatDuration(row.responseTimeMs),
                         row.attemptNumber.toString(),
-                        attentionText(row)
+                        if (attentionApplicable) attentionText(row) else "No aplica"
                     )
                 } else {
                     listOf(

@@ -88,8 +88,11 @@ import com.taller.app.bimodal.BimodalLatencyStats
 import com.taller.app.bimodal.BimodalLatencyTracker
 import com.taller.app.bimodal.BimodalSessionSummary
 import com.taller.app.bimodal.DEFAULT_MAX_TIME_SECONDS
+import com.taller.app.bimodal.EarlyAnswerPolicy
 import com.taller.app.bimodal.FacePausePhraseBank
 import com.taller.app.bimodal.HybridAnswerEvaluator
+import com.taller.app.bimodal.InitialConversationBank
+import com.taller.app.bimodal.SevenStartCommand
 import com.taller.app.bimodal.HybridSessionContext
 import com.taller.app.bimodal.IntelligentSessionReport
 import com.taller.app.bimodal.SemanticEvaluationAdapter
@@ -163,7 +166,8 @@ import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.text.Normalizer
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -256,26 +260,6 @@ private fun splitIntoSpeechSegments(text: String): List<String> {
     }
 }
 
-private fun normalizeIntelligentSevenCommand(text: String): String {
-    val withoutMarks = Normalizer.normalize(text, Normalizer.Form.NFD)
-        .replace("\\p{Mn}+".toRegex(), "")
-    return withoutMarks
-        .lowercase()
-        .replace("[^a-z0-9ñ ]".toRegex(), " ")
-        .replace("\\s+".toRegex(), " ")
-        .trim()
-}
-
-private fun isIntelligentSevenStartCommand(text: String): Boolean {
-    val normalized = normalizeIntelligentSevenCommand(text)
-    val words = normalized.split(" ").filter { it.isNotBlank() }
-    if (!words.contains("seven")) return false
-    return normalized.contains("seven empieza") ||
-        normalized.contains("seven empezar") ||
-        normalized.contains("seven comencemos") ||
-        normalized.contains("seven empecemos")
-}
-
 /**
  * Tiempo maximo que el flujo puede permanecer en "preparando la pregunta" antes de
  * que la salvaguarda fuerce la apertura de la escucha. Se fija por encima del tope
@@ -283,6 +267,13 @@ private fun isIntelligentSevenStartCommand(text: String): Boolean {
  * intro larga legitima: solo actua si la presentacion quedo realmente congelada.
  */
 private const val PRESENTING_WATCHDOG_MS = 50_000L
+
+/**
+ * FINAL-FLOW01: tiempo maximo que Seven espera a que el nino EMPIECE a hablar en
+ * cada turno de la conversacion inicial. Si no empieza, la conversacion se cierra
+ * con la frase de transicion y comienzan las preguntas.
+ */
+private const val INITIAL_CONVERSATION_LISTEN_WINDOW_MS = 6_000L
 
 /**
  * Pantalla inicial del modo bimodal inteligente.
@@ -788,6 +779,15 @@ private fun BimodalSession(
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    // FINAL-FLOW01: la camara/atencion es OPCIONAL y viene apagada por defecto.
+    // Con la atencion desactivada (o sin permiso de camara) la sesion inteligente
+    // funciona igual: no se inicia el detector facial, no se cuentan perdidas de
+    // atencion y jamas se interrumpe el flujo por recaptura. La recaptura por voz
+    // es una opcion avanzada aparte y solo actua si la atencion esta activa.
+    val attentionFeatureEnabled = appSettings.intelligentAttentionEnabled
+    val attentionActive = attentionFeatureEnabled && cameraGranted
+    val recaptureFeatureEnabled = attentionActive && appSettings.intelligentRecaptureEnabled
+
     // ----- Captura de voz real -------------------------------------------------
     // Reutiliza el servicio existente de reconocimiento de voz. Una sola instancia
     // por sesion; se libera al salir de la pantalla en el DisposableEffect.
@@ -809,7 +809,7 @@ private fun BimodalSession(
     var sttFinal by remember(activity) { mutableStateOf("") }
     var sttError by remember(activity) { mutableStateOf("") }
     var startCommandDetected by remember(activity) { mutableStateOf(false) }
-    var startCommandHint by remember(activity) { mutableStateOf("Di: Seven, empieza") }
+    var startCommandHint by remember(activity) { mutableStateOf(SevenStartCommand.PRIMARY_HINT) }
 
     // Banderas internas del intento de captura en curso (no dirigen la UI).
     val capturedAnyText = remember(activity) { mutableStateOf(false) }
@@ -927,27 +927,27 @@ private fun BimodalSession(
 
         speechService.startListening(
             onStateChange = { sttState = it },
-            onReady = { startCommandHint = "Di: Seven, empieza" },
+            onReady = { startCommandHint = SevenStartCommand.PRIMARY_HINT },
             onPartialResult = { text ->
-                if (isIntelligentSevenStartCommand(text)) {
+                if (SevenStartCommand.matches(text)) {
                     startCommandDetected = true
                     speechService.stopListening()
                 }
             },
             onFinalResult = { text ->
-                if (isIntelligentSevenStartCommand(text)) {
+                if (SevenStartCommand.matches(text)) {
                     startCommandDetected = true
                 } else {
-                    startCommandHint = "Di: Seven, empieza"
+                    startCommandHint = SevenStartCommand.PRIMARY_HINT
                 }
             },
             onStopped = { textAtStop ->
-                if (isIntelligentSevenStartCommand(textAtStop)) {
+                if (SevenStartCommand.matches(textAtStop)) {
                     startCommandDetected = true
                 }
             },
             onError = {
-                startCommandHint = "Di: Seven, empieza"
+                startCommandHint = SevenStartCommand.PRIMARY_HINT
             }
         )
     }
@@ -1068,8 +1068,12 @@ private fun BimodalSession(
     // Si el rostro ya esta presente cuando el flujo vuelve a esperar rostro (por
     // ejemplo al pasar a la siguiente pregunta sin que el nino se retire),
     // avanzamos sin exigir una nueva aparicion. Solo hace avanzar, nunca revierte.
-    LaunchedEffect(state) {
-        if (state == BimodalInteractionState.WAITING_FOR_FACE && facePresent) {
+    // Con la atencion desactivada no hay camara: el paso de "esperar rostro" se
+    // resuelve de inmediato para que la sesion nunca dependa de la deteccion facial.
+    LaunchedEffect(state, attentionActive) {
+        if (state == BimodalInteractionState.WAITING_FOR_FACE &&
+            (facePresent || !attentionActive)
+        ) {
             dispatch { orchestrator.onFaceDetected() }
         }
     }
@@ -1245,6 +1249,11 @@ private fun BimodalSession(
 
     // Indica si el juguete esta reproduciendo voz en este momento (para la UI).
     var toyVoiceSpeaking by remember(activity) { mutableStateOf(false) }
+
+    // FINAL-FLOW01: true mientras corre la conversacion inicial opcional. Evita que
+    // la salvaguarda de "preparando la pregunta" abra la escucha evaluada en medio
+    // de la conversacion (que tiene sus propios turnos de escucha no evaluados).
+    var initialConversationActive by remember(activity) { mutableStateOf(false) }
 
     // Ultima frase reproducida por el juguete (para mostrarla en la UI).
     var lastSpokenPhrase by remember(activity) { mutableStateOf<String?>(null) }
@@ -1442,6 +1451,97 @@ private fun BimodalSession(
         }
     }
 
+    // FINAL-FLOW01: captura de voz "cruda" de un solo uso, sin tocar el orquestador.
+    // La usan la ventana temprana de reintentos y la conversacion inicial: espera
+    // hasta [windowMs] a que el nino EMPIECE a hablar; si no empieza, apaga el
+    // microfono en silencio y devuelve null; si empieza, deja terminar la frase
+    // (con tope de seguridad) y devuelve el texto transcrito. Nunca entrega eventos
+    // al orquestador y nunca guarda audio: solo texto ya transcrito en memoria.
+    suspend fun captureChildSpeechOnce(windowMs: Long): String? {
+        if (!audioGranted) return null
+        if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) return null
+        val outcome = CompletableDeferred<String?>()
+        val speechStarted = AtomicBoolean(false)
+        speechService.startListening(
+            onStateChange = { sttState = it },
+            onReady = {},
+            onPartialResult = { speechStarted.set(true) },
+            onFinalResult = { text -> outcome.complete(text.takeIf { it.isNotBlank() }) },
+            onStopped = { text -> outcome.complete(text.takeIf { it.isNotBlank() }) },
+            onError = { outcome.complete(null) }
+        )
+        try {
+            val withinWindow = withTimeoutOrNull(windowMs) { outcome.await() }
+            if (withinWindow != null || outcome.isCompleted) return withinWindow
+            if (!speechStarted.get()) {
+                // Nadie empezo a hablar dentro de la ventana: cierre silencioso.
+                speechService.stopListening()
+            }
+            // El nino empezo a hablar (o se acaba de pedir el cierre): espera el
+            // desenlace real de la captura con un tope que nunca congela el flujo.
+            return withTimeoutOrNull(EarlyAnswerPolicy.COMPLETION_TIMEOUT_MS) { outcome.await() }
+        } finally {
+            if (!outcome.isCompleted) {
+                speechService.stopListening()
+            }
+        }
+    }
+
+    // FINAL-FLOW01: voz de la conversacion inicial. Sus frases salen de un banco
+    // local finito que NO forma parte del guion cacheado, por lo que se reproducen
+    // SIEMPRE con la voz local del dispositivo: jamas se sintetiza por red texto en
+    // vivo para la conversacion. Si la voz local fallara, el flujo continua.
+    suspend fun speakConversationAndAwait(text: String) {
+        lastSpokenPhrase = text
+        toyVoiceSpeaking = true
+        try {
+            withTimeoutOrNull(speechTimeoutMsFor(text)) {
+                runCatching { localVoiceProvider.speak(text) {} }
+            }
+        } finally {
+            localVoiceProvider.stop()
+            toyVoiceSpeaking = false
+        }
+    }
+
+    // FINAL-FLOW01: conversacion inicial opcional y limitada. Solo ocurre una vez,
+    // tras el saludo y antes de la primera pregunta evaluada. No usa camara, no usa
+    // GPT ni TTS de red, no guarda lo que dice el nino (solo un evento minimo con el
+    // numero de turno) y NUNCA cuenta como intento: no pasa por el orquestador.
+    suspend fun runInitialConversation() {
+        val maxTurns = appSettings.initialConversationMaxChildTurns
+        if (maxTurns <= 0) return
+        initialConversationActive = true
+        try {
+            val maxDurationMs = appSettings.initialConversationMaxDurationSeconds * 1000L
+            val startedAtMs = System.currentTimeMillis()
+            speakConversationAndAwait(InitialConversationBank.invitePhrase())
+            var turns = 0
+            while (turns < maxTurns &&
+                System.currentTimeMillis() - startedAtMs < maxDurationMs
+            ) {
+                val childText = captureChildSpeechOnce(INITIAL_CONVERSATION_LISTEN_WINDOW_MS)
+                if (childText.isNullOrBlank()) break
+                turns += 1
+                val sid = logSessionId
+                if (sid > 0L) {
+                    runCatching {
+                        dataLogger.logTechnicalEvent(
+                            sessionId = sid,
+                            operationMode = "ADVANCED",
+                            eventType = "INITIAL_CONVERSATION_TURN",
+                            message = "turn=$turns"
+                        )
+                    }
+                }
+                speakConversationAndAwait(InitialConversationBank.replyPhrase(turns))
+            }
+            speakConversationAndAwait(InitialConversationBank.transitionPhrase())
+        } finally {
+            initialConversationActive = false
+        }
+    }
+
     fun logRecaptureEvent(
         eventType: String,
         message: String? = null,
@@ -1482,8 +1582,13 @@ private fun BimodalSession(
         state,
         toyVoiceSpeaking,
         sttState,
-        recaptureJobActive
+        recaptureJobActive,
+        recaptureFeatureEnabled
     ) {
+        // FINAL-FLOW01: la recaptura es una opcion avanzada apagada por defecto.
+        // Sin ella (o con la atencion desactivada), la atencion solo se observa como
+        // metrica: no hay voz de recaptura ni cierre de la sesion por no-atencion.
+        if (!recaptureFeatureEnabled) return@LaunchedEffect
         val snapshot = latestAttentionSnapshot ?: return@LaunchedEffect
         val nowMs = System.currentTimeMillis()
 
@@ -1693,6 +1798,56 @@ private fun BimodalSession(
             }.getOrElse { -1L }
         }
 
+        // FINAL-FLOW01: ventana temprana de escucha en reintentos. Tras la frase de
+        // apoyo ("intentemos nuevamente"), muchos ninos responden ANTES de que Seven
+        // repita la pregunta completa. Si la captura temprana esta activada, se abre
+        // una escucha breve antes de releer la pregunta: si el nino responde, esa
+        // respuesta entra al flujo normal de evaluacion (sin repetir el enunciado);
+        // si no responde, la pregunta se lee como siempre y se abre el turno normal.
+        // Nunca se escucha mientras Seven habla (la politica lo impide sin control
+        // de eco).
+        val attemptNumberForWindow = progress?.currentAttempt ?: 1
+        if (EarlyAnswerPolicy.shouldOpenEarlyWindow(
+                enabled = appSettings.earlyAnswerCaptureEnabled,
+                attemptNumber = attemptNumberForWindow,
+                audioGranted = audioGranted,
+                toyVoiceSpeaking = toyVoiceSpeaking
+            )
+        ) {
+            delay(EarlyAnswerPolicy.PRE_LISTEN_PAUSE_MS)
+            latencyTracker.beginCapture()
+            val earlyAnswer = captureChildSpeechOnce(
+                EarlyAnswerPolicy.effectiveWindowMs(appSettings.earlyAnswerWindowMs)
+            )
+            val earlyCaptured = !earlyAnswer.isNullOrBlank() &&
+                orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION
+            if (sid > 0L) {
+                runCatching {
+                    dataLogger.logTechnicalEvent(
+                        sessionId = sid,
+                        questionId = progress?.currentQuestionId?.toLongOrNull(),
+                        attemptId = logAttemptId.takeIf { it > 0L },
+                        operationMode = "ADVANCED",
+                        eventType = if (earlyCaptured) {
+                            "EARLY_ANSWER_CAPTURED"
+                        } else {
+                            "EARLY_ANSWER_WINDOW_EMPTY"
+                        },
+                        message = "earlyAnswerCaptured=$earlyCaptured " +
+                            "responseTiming=${if (earlyCaptured) "EARLY" else "NORMAL"} " +
+                            "attempt=$attemptNumberForWindow"
+                    )
+                }
+            }
+            if (earlyCaptured) {
+                sttPartial = ""
+                sttFinal = earlyAnswer.orEmpty()
+                dispatch { orchestrator.startListening() }
+                dispatch { orchestrator.onSpeechCaptured(earlyAnswer.orEmpty()) }
+                return@LaunchedEffect
+            }
+        }
+
         val questionText = currentQuestion?.questionText ?: return@LaunchedEffect
         val mediationKey = currentQuestion?.mediationKey
         val keyName = LocalMediationKey.fromKey(mediationKey).name
@@ -1793,17 +1948,31 @@ private fun BimodalSession(
             "preparacion: reproduccion intro inicio (${presentationSegments.size} segmentos) preparada=$preparedVoice"
         )
         var interruptedByFaceLost = false
-        for ((index, segment) in presentationSegments.withIndex()) {
+        val greetingSegments = presentationSegments.take(greetingSegmentCount)
+        val questionSegments = presentationSegments.drop(greetingSegmentCount)
+        for (segment in greetingSegments) {
             if (faceLostJobVersion != versionAtStart) {
                 interruptedByFaceLost = true
                 break
             }
-            val segmentContext = if (index < greetingSegmentCount) {
-                VoiceContext.GREETING
-            } else {
-                VoiceContext.QUESTION
+            speakAndAwait(segment, VoiceContext.GREETING)
+        }
+        // FINAL-FLOW01: conversacion inicial opcional. Solo en el arranque real de
+        // la sesion (con el saludo inicial), tras saludar y antes de la primera
+        // pregunta evaluada. Sus turnos usan escucha propia no evaluada y voz local.
+        if (!interruptedByFaceLost &&
+            playInitialGreeting &&
+            appSettings.initialConversationEnabled &&
+            audioGranted
+        ) {
+            runInitialConversation()
+        }
+        for (segment in questionSegments) {
+            if (faceLostJobVersion != versionAtStart) {
+                interruptedByFaceLost = true
+                break
             }
-            speakAndAwait(segment, segmentContext)
+            speakAndAwait(segment, VoiceContext.QUESTION)
         }
         Log.d(BIMODAL_VOICE_TAG, "preparacion: reproduccion intro fin estado=${orchestrator.state}")
 
@@ -1830,6 +1999,7 @@ private fun BimodalSession(
         delay(PRESENTING_WATCHDOG_MS)
         if (orchestrator.state == BimodalInteractionState.PRESENTING_QUESTION &&
             audioGranted &&
+            !initialConversationActive &&
             sttState != SttState.LISTENING &&
             sttState != SttState.STOPPING
         ) {
@@ -2133,6 +2303,35 @@ private fun BimodalSession(
                     operationMode = "ADVANCED",
                     totalQuestions = activity.questions.size
                 )
+                // FINAL-FLOW01: deja constancia de la configuracion de atencion de
+                // ESTA sesion, para que reportes y PDF distingan "sin distracciones"
+                // de "atencion desactivada / no aplica". Solo banderas, sin datos
+                // del nino.
+                dataLogger.logTechnicalEvent(
+                    sessionId = logSessionId,
+                    questionId = null,
+                    attemptId = null,
+                    operationMode = "ADVANCED",
+                    eventType = if (attentionActive) {
+                        "ATTENTION_TRACKING_ENABLED"
+                    } else {
+                        "ATTENTION_TRACKING_DISABLED"
+                    },
+                    message = "attentionSettingEnabled=$attentionFeatureEnabled " +
+                        "cameraGranted=$cameraGranted " +
+                        "recaptureEnabled=$recaptureFeatureEnabled"
+                )
+                dataLogger.logTechnicalEvent(
+                    sessionId = logSessionId,
+                    questionId = null,
+                    attemptId = null,
+                    operationMode = "ADVANCED",
+                    eventType = if (recaptureFeatureEnabled) {
+                        "RECAPTURE_TRACKING_ENABLED"
+                    } else {
+                        "RECAPTURE_TRACKING_DISABLED"
+                    }
+                )
             }
         }
     }
@@ -2305,18 +2504,23 @@ private fun BimodalSession(
             )
             .padding(horizontal = 4.dp, vertical = 4.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(1.dp)
-                .clipToBounds()
-                .align(Alignment.TopStart)
-        ) {
-            FacePresenceCard(
-                cameraGranted = cameraGranted,
-                facePresent = facePresent,
-                onPresenceChanged = { onPresenceTransition(it) },
-                onAttentionSnapshot = { onAttentionSnapshot(it) }
-            )
+        // La camara y el detector facial SOLO se montan si la atencion esta activada
+        // en configuracion y hay permiso. Con la atencion apagada no se abre la
+        // camara, no corre ML Kit y no se generan senales de atencion.
+        if (attentionActive) {
+            Box(
+                modifier = Modifier
+                    .size(1.dp)
+                    .clipToBounds()
+                    .align(Alignment.TopStart)
+            ) {
+                FacePresenceCard(
+                    cameraGranted = cameraGranted,
+                    facePresent = facePresent,
+                    onPresenceChanged = { onPresenceTransition(it) },
+                    onAttentionSnapshot = { onAttentionSnapshot(it) }
+                )
+            }
         }
 
         IntelligentSevenFace(

@@ -124,6 +124,13 @@ fun SettingsScreen(
     var draftGptSettings by remember { mutableStateOf(savedGptSettings) }
     var classicTimeText by remember { mutableStateOf(appSettings.classicResponseTimeSeconds.toString()) }
     var recapturesText by remember { mutableStateOf(appSettings.intelligentMaxRecaptures.toString()) }
+    var conversationTurnsText by remember {
+        mutableStateOf(appSettings.initialConversationMaxChildTurns.toString())
+    }
+    var conversationDurationText by remember {
+        mutableStateOf(appSettings.initialConversationMaxDurationSeconds.toString())
+    }
+    var earlyWindowText by remember { mutableStateOf(appSettings.earlyAnswerWindowMs.toString()) }
     var modeSettingsMessage by remember { mutableStateOf<String?>(null) }
     var limiterFiles by remember { mutableStateOf<List<MarkdownLimiterFile>>(emptyList()) }
     var limiterMessage by remember { mutableStateOf<String?>(null) }
@@ -137,6 +144,9 @@ fun SettingsScreen(
     LaunchedEffect(appSettings) {
         classicTimeText = appSettings.classicResponseTimeSeconds.toString()
         recapturesText = appSettings.intelligentMaxRecaptures.toString()
+        conversationTurnsText = appSettings.initialConversationMaxChildTurns.toString()
+        conversationDurationText = appSettings.initialConversationMaxDurationSeconds.toString()
+        earlyWindowText = appSettings.earlyAnswerWindowMs.toString()
     }
 
     fun refreshLimiters() {
@@ -278,11 +288,107 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // FINAL-FLOW01: configuracion agrupada por secciones. Los interruptores
+            // se guardan al instante; los valores numericos se validan y guardan con
+            // el boton de la seccion del temporizador.
+            InteractionSettingsSection(
+                conversationEnabled = appSettings.initialConversationEnabled,
+                conversationTurnsText = conversationTurnsText,
+                conversationDurationText = conversationDurationText,
+                earlyAnswerEnabled = appSettings.earlyAnswerCaptureEnabled,
+                earlyWindowText = earlyWindowText,
+                onConversationEnabledChange = { enabled ->
+                    coroutineScope.launch {
+                        appSettingsRepository.saveInitialConversationEnabled(enabled)
+                    }
+                },
+                onConversationTurnsChange = {
+                    conversationTurnsText = it.filter(Char::isDigit).take(1)
+                },
+                onConversationDurationChange = {
+                    conversationDurationText = it.filter(Char::isDigit).take(3)
+                },
+                onEarlyAnswerEnabledChange = { enabled ->
+                    coroutineScope.launch {
+                        appSettingsRepository.saveEarlyAnswerCaptureEnabled(enabled)
+                    }
+                },
+                onEarlyWindowChange = {
+                    earlyWindowText = it.filter(Char::isDigit).take(4)
+                }
+            )
+
+            IntelligentModeSettingsSection(
+                attentionEnabled = appSettings.intelligentAttentionEnabled,
+                recaptureEnabled = appSettings.intelligentRecaptureEnabled,
+                recapturesText = recapturesText,
+                onAttentionEnabledChange = { enabled ->
+                    coroutineScope.launch {
+                        appSettingsRepository.saveIntelligentAttentionEnabled(enabled)
+                    }
+                },
+                onRecaptureEnabledChange = { enabled ->
+                    coroutineScope.launch {
+                        appSettingsRepository.saveIntelligentRecaptureEnabled(enabled)
+                    }
+                },
+                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) }
+            )
+
+            ClassicModeSettingsSection(
+                classicTimeText = classicTimeText,
+                message = modeSettingsMessage,
+                onClassicTimeChange = { classicTimeText = it.filter(Char::isDigit).take(3) },
+                onSave = {
+                    val classicSeconds = classicTimeText.toIntOrNull()
+                    val recaptures = recapturesText.toIntOrNull()
+                    val turns = conversationTurnsText.toIntOrNull()
+                    val durationSeconds = conversationDurationText.toIntOrNull()
+                    val windowMs = earlyWindowText.toIntOrNull()
+                    when {
+                        turns == null ||
+                            !AppSettings.isValidInitialConversationTurns(turns) ->
+                            modeSettingsMessage =
+                                "Los turnos de conversacion deben estar entre 0 y 3."
+                        durationSeconds == null ||
+                            !AppSettings.isValidInitialConversationDurationSeconds(durationSeconds) ->
+                            modeSettingsMessage =
+                                "La duracion de conversacion debe estar entre 15 y 120 segundos."
+                        windowMs == null ||
+                            !AppSettings.isValidEarlyAnswerWindowMs(windowMs) ->
+                            modeSettingsMessage =
+                                "La ventana temprana debe estar entre 500 y 4000 ms."
+                        recaptures == null ||
+                            !AppSettings.isValidIntelligentMaxRecaptures(recaptures) ->
+                            modeSettingsMessage = "Las recapturas deben estar entre 0 y 10."
+                        classicSeconds == null ||
+                            !AppSettings.isValidClassicResponseTime(classicSeconds) ->
+                            modeSettingsMessage = "El tiempo debe estar entre 5 y 120 segundos."
+                        else -> coroutineScope.launch {
+                            appSettingsRepository.save(
+                                appSettings.copy(
+                                    classicResponseTimeSeconds = classicSeconds,
+                                    intelligentMaxRecaptures = recaptures,
+                                    initialConversationMaxChildTurns = turns,
+                                    initialConversationMaxDurationSeconds = durationSeconds,
+                                    earlyAnswerWindowMs = windowMs
+                                )
+                            )
+                            modeSettingsMessage = "Configuracion guardada."
+                        }
+                    }
+                }
+            )
+
+            SettingsSectionHeader(
+                title = "Voz",
+                description = "Proveedores, voces y pruebas de la voz de Seven."
+            )
             Button(
                 onClick = onNavigateToToyVoiceSettings,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp),
+                    .padding(top = 8.dp, bottom = 8.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFB8B3DF),
                     contentColor = Color(0xFF3D2B8A)
@@ -290,35 +396,6 @@ fun SettingsScreen(
             ) {
                 Text("Configurar voz del juguete")
             }
-
-            ModeSettingsSection(
-                classicTimeText = classicTimeText,
-                recapturesText = recapturesText,
-                message = modeSettingsMessage,
-                onClassicTimeChange = { classicTimeText = it.filter(Char::isDigit).take(3) },
-                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) },
-                onSave = {
-                    val classicSeconds = classicTimeText.toIntOrNull()
-                    val recaptures = recapturesText.toIntOrNull()
-                    when {
-                        classicSeconds == null ||
-                            !AppSettings.isValidClassicResponseTime(classicSeconds) ->
-                            modeSettingsMessage = "El tiempo debe estar entre 5 y 120 segundos."
-                        recaptures == null ||
-                            !AppSettings.isValidIntelligentMaxRecaptures(recaptures) ->
-                            modeSettingsMessage = "Las recapturas deben estar entre 0 y 10."
-                        else -> coroutineScope.launch {
-                            appSettingsRepository.save(
-                                appSettings.copy(
-                                    classicResponseTimeSeconds = classicSeconds,
-                                    intelligentMaxRecaptures = recaptures
-                                )
-                            )
-                            modeSettingsMessage = "Configuracion de modos guardada."
-                        }
-                    }
-                }
-            )
 
             MarkdownLimitersSection(
                 files = limiterFiles,
@@ -339,18 +416,11 @@ fun SettingsScreen(
                 onDelete = { limiterDeleteTarget = it }
             )
 
-            Button(
-                onClick = onNavigateToFaceDetection,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF96CEC6),
-                    contentColor = Color(0xFF0D4D50)
-                )
-            ) {
-                Text("Prueba de detección facial")
-            }
+            SettingsSectionHeader(
+                title = "Depuracion",
+                description = "Paneles tecnicos y pruebas de camara, voz y evaluacion. " +
+                    "No afectan el flujo del nino."
+            )
 
             AttentionDebugSettingsSection(
                 attentionVisualDebugEnabled =
@@ -393,6 +463,19 @@ fun SettingsScreen(
                     }
                 }
             )
+
+            Button(
+                onClick = onNavigateToFaceDetection,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF96CEC6),
+                    contentColor = Color(0xFF0D4D50)
+                )
+            ) {
+                Text("Prueba de detección facial")
+            }
 
             Button(
                 onClick = onNavigateToSpeechTest,
@@ -559,27 +642,171 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun ModeSettingsSection(
-    classicTimeText: String,
-    recapturesText: String,
-    message: String?,
-    onClassicTimeChange: (String) -> Unit,
-    onRecapturesChange: (String) -> Unit,
-    onSave: () -> Unit
-) {
+private fun SettingsSectionHeader(title: String, description: String? = null) {
     Spacer(modifier = Modifier.height(16.dp))
     Text(
-        text = "Configuracion de modos",
+        text = title,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         modifier = Modifier.fillMaxWidth()
     )
-    Spacer(modifier = Modifier.height(4.dp))
-    Text(
-        text = "Valores generales para todas las actividades. No dependen del formulario de sesion ni de pregunta.",
-        fontSize = 13.sp,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-        modifier = Modifier.fillMaxWidth()
+    if (description != null) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = description,
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+/**
+ * FINAL-FLOW01: seccion "Interaccion". Agrupa la activacion por voz, la
+ * conversacion inicial opcional y la captura temprana de respuestas.
+ */
+@Composable
+private fun InteractionSettingsSection(
+    conversationEnabled: Boolean,
+    conversationTurnsText: String,
+    conversationDurationText: String,
+    earlyAnswerEnabled: Boolean,
+    earlyWindowText: String,
+    onConversationEnabledChange: (Boolean) -> Unit,
+    onConversationTurnsChange: (String) -> Unit,
+    onConversationDurationChange: (String) -> Unit,
+    onEarlyAnswerEnabledChange: (Boolean) -> Unit,
+    onEarlyWindowChange: (String) -> Unit
+) {
+    SettingsSectionHeader(
+        title = "Interaccion",
+        description = "Activacion por voz: el nino dice \"Hola Seven\" para empezar " +
+            "(tambien se aceptan \"oye Seven\" y la frase antigua \"Seven empieza\")."
+    )
+    SettingsSwitchRow(
+        label = "Conversacion inicial con Seven",
+        description = "Antes de las preguntas, el nino puede decirle algo breve a Seven. " +
+            "No cuenta como pregunta evaluada y usa solo respuestas locales seguras.",
+        checked = conversationEnabled,
+        onCheckedChange = onConversationEnabledChange
+    )
+    OutlinedTextField(
+        value = conversationTurnsText,
+        onValueChange = onConversationTurnsChange,
+        label = { Text("Max. preguntas del nino en la conversacion") },
+        supportingText = { Text("0 a 3; recomendado 1") },
+        isError = conversationTurnsText.toIntOrNull()?.let {
+            !AppSettings.isValidInitialConversationTurns(it)
+        } ?: true,
+        enabled = conversationEnabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    )
+    OutlinedTextField(
+        value = conversationDurationText,
+        onValueChange = onConversationDurationChange,
+        label = { Text("Duracion maxima de la conversacion (segundos)") },
+        supportingText = { Text("15 a 120 segundos; recomendado 60") },
+        isError = conversationDurationText.toIntOrNull()?.let {
+            !AppSettings.isValidInitialConversationDurationSeconds(it)
+        } ?: true,
+        enabled = conversationEnabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    )
+    SettingsSwitchRow(
+        label = "Captura temprana de respuesta",
+        description = "En los reintentos, Seven escucha un momento antes de repetir la " +
+            "pregunta, para no perder respuestas anticipadas del nino.",
+        checked = earlyAnswerEnabled,
+        onCheckedChange = onEarlyAnswerEnabledChange
+    )
+    OutlinedTextField(
+        value = earlyWindowText,
+        onValueChange = onEarlyWindowChange,
+        label = { Text("Ventana temprana (milisegundos)") },
+        supportingText = { Text("500 a 4000 ms; recomendado 2000") },
+        isError = earlyWindowText.toIntOrNull()?.let {
+            !AppSettings.isValidEarlyAnswerWindowMs(it)
+        } ?: true,
+        enabled = earlyAnswerEnabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    )
+}
+
+/**
+ * FINAL-FLOW01: seccion "Modo inteligente". La camara/atencion es opcional y viene
+ * apagada; la recaptura es una opcion avanzada que requiere la atencion activa.
+ */
+@Composable
+private fun IntelligentModeSettingsSection(
+    attentionEnabled: Boolean,
+    recaptureEnabled: Boolean,
+    recapturesText: String,
+    onAttentionEnabledChange: (Boolean) -> Unit,
+    onRecaptureEnabledChange: (Boolean) -> Unit,
+    onRecapturesChange: (String) -> Unit
+) {
+    SettingsSectionHeader(
+        title = "Modo inteligente",
+        description = "La sesion funciona sin camara. Si activas la atencion por camara, " +
+            "se registran metricas de atencion sin interrumpir al nino; la recaptura por " +
+            "voz es una opcion avanzada aparte."
+    )
+    SettingsSwitchRow(
+        label = "Atencion por camara",
+        description = "Detecta presencia y atencion con la camara frontal (todo local, " +
+            "sin guardar imagenes). Apagada, los reportes muestran \"No aplica\".",
+        checked = attentionEnabled,
+        onCheckedChange = onAttentionEnabledChange
+    )
+    SettingsSwitchRow(
+        label = "Recaptura de atencion por voz",
+        description = "Solo con la atencion activa: Seven invita a volver si el nino se " +
+            "distrae. Puede interrumpir la sesion al agotar los intentos; usar con cuidado.",
+        checked = recaptureEnabled,
+        onCheckedChange = onRecaptureEnabledChange
+    )
+    OutlinedTextField(
+        value = recapturesText,
+        onValueChange = onRecapturesChange,
+        label = { Text("Max. recapturas por sesion") },
+        supportingText = { Text("0 a 10 por sesion; recomendado 5") },
+        isError = recapturesText.toIntOrNull()?.let {
+            !AppSettings.isValidIntelligentMaxRecaptures(it)
+        } ?: true,
+        enabled = recaptureEnabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+    )
+}
+
+/** FINAL-FLOW01: seccion "Modo temporizador" + guardado de los valores numericos. */
+@Composable
+private fun ClassicModeSettingsSection(
+    classicTimeText: String,
+    message: String?,
+    onClassicTimeChange: (String) -> Unit,
+    onSave: () -> Unit
+) {
+    SettingsSectionHeader(
+        title = "Modo temporizador",
+        description = "Valores generales para todas las actividades. No dependen del " +
+            "formulario de sesion ni de pregunta."
     )
     OutlinedTextField(
         value = classicTimeText,
@@ -588,20 +815,6 @@ private fun ModeSettingsSection(
         supportingText = { Text("5 a 120 segundos; recomendado 10") },
         isError = classicTimeText.toIntOrNull()?.let {
             !AppSettings.isValidClassicResponseTime(it)
-        } ?: true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        singleLine = true,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp)
-    )
-    OutlinedTextField(
-        value = recapturesText,
-        onValueChange = onRecapturesChange,
-        label = { Text("Max. recapturas en modo inteligente") },
-        supportingText = { Text("0 a 10 por sesion; recomendado 5") },
-        isError = recapturesText.toIntOrNull()?.let {
-            !AppSettings.isValidIntelligentMaxRecaptures(it)
         } ?: true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,

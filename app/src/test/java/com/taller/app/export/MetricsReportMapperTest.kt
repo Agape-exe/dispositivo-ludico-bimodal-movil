@@ -31,6 +31,40 @@ class MetricsReportMapperTest {
         assertTrue(report.isIntelligent)
         assertTrue(report.details.first().attentionLost)
         assertTrue(report.details.first().recaptured)
+        // Sin marcador de desactivacion, la atencion se considera activa (sesiones
+        // antiguas conservan su lectura historica).
+        assertTrue(report.attentionTrackingEnabled)
+        assertTrue(report.recaptureTrackingEnabled)
+    }
+
+    @Test
+    fun intelligentSession_withAttentionDisabledMarker_flagsAttentionAsNotApplicable() {
+        val session = intelligentSession().copy(
+            technicalEvents = listOf(
+                technicalEvent(eventType = "ATTENTION_TRACKING_DISABLED")
+            )
+        )
+
+        val report = MetricsReportMapper.mapSession(session)
+
+        assertFalse(report.attentionTrackingEnabled)
+        // Con la atencion apagada, la recaptura tampoco aplica.
+        assertFalse(report.recaptureTrackingEnabled)
+    }
+
+    @Test
+    fun intelligentSession_withRecaptureDisabledMarker_keepsAttentionButNotRecapture() {
+        val session = intelligentSession().copy(
+            technicalEvents = listOf(
+                technicalEvent(eventType = "ATTENTION_TRACKING_ENABLED"),
+                technicalEvent(eventType = "RECAPTURE_TRACKING_DISABLED")
+            )
+        )
+
+        val report = MetricsReportMapper.mapSession(session)
+
+        assertTrue(report.attentionTrackingEnabled)
+        assertFalse(report.recaptureTrackingEnabled)
     }
 
     @Test
@@ -140,6 +174,17 @@ class MetricsReportMapperTest {
             )
         ),
         activityTopic = "Primarios"
+    )
+
+    private fun technicalEvent(eventType: String) = ExportTechnicalEventDto(
+        eventId = 99L,
+        questionId = null,
+        attemptId = null,
+        operationMode = "ADVANCED",
+        eventType = eventType,
+        message = null,
+        timestampMs = 10_100L,
+        latencyMs = null
     )
 
     private fun classicAttempt() = ExportAttemptDto(

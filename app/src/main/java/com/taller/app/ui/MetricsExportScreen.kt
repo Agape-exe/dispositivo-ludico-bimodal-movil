@@ -21,6 +21,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +83,11 @@ fun MetricsExportScreen(onBack: () -> Unit) {
     var recentSessions by remember { mutableStateOf(emptyList<ExportSessionDto>()) }
     var pendingPdfSessionId by remember { mutableStateOf<Long?>(null) }
 
+    // FINAL-FLOW01: filtros basicos de la lista de sesiones recientes. Solo afectan
+    // la vista; las exportaciones JSON/CSV/PDF general siguen incluyendo todo.
+    var sessionModeFilter by remember { mutableStateOf(SessionModeFilter.ALL) }
+    var sessionSearchText by remember { mutableStateOf("") }
+
     LaunchedEffect(Unit) {
         isLoadingCounts = true
         sessionCount = repository.countSessions()
@@ -88,8 +95,24 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         eventCount = repository.countTechnicalEvents()
         recentSessions = repository.buildExportSessions()
             .asReversed()
-            .take(8)
+            .take(30)
         isLoadingCounts = false
+    }
+
+    val filteredSessions = remember(recentSessions, sessionModeFilter, sessionSearchText) {
+        val query = sessionSearchText.trim().lowercase()
+        recentSessions.filter { session ->
+            val modeOk = when (sessionModeFilter) {
+                SessionModeFilter.ALL -> true
+                SessionModeFilter.INTELLIGENT -> session.operationMode != "CLASSIC"
+                SessionModeFilter.CLASSIC -> session.operationMode == "CLASSIC"
+            }
+            val textOk = query.isEmpty() ||
+                session.sessionId.toString().contains(query) ||
+                session.activityName.orEmpty().lowercase().contains(query) ||
+                session.activityTopic.orEmpty().lowercase().contains(query)
+            modeOk && textOk
+        }.take(10)
     }
 
     val jsonLauncher = rememberLauncherForActivityResult(
@@ -291,9 +314,17 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+        SessionFiltersSection(
+            modeFilter = sessionModeFilter,
+            searchText = sessionSearchText,
+            onModeFilterChange = { sessionModeFilter = it },
+            onSearchTextChange = { sessionSearchText = it.take(40) }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
         RecentSessionsSection(
             isLoading = isLoadingCounts,
-            sessions = recentSessions,
+            sessions = filteredSessions,
             isExporting = isExporting,
             onExportPdf = { session ->
                 pendingPdfSessionId = session.sessionId
@@ -453,6 +484,66 @@ private fun RecordsSummaryRow(label: String, value: Int) {
     }
 }
 
+/** FINAL-FLOW01: filtro de modo para la lista de sesiones recientes. */
+private enum class SessionModeFilter(val label: String) {
+    ALL("Todas"),
+    INTELLIGENT("Inteligente"),
+    CLASSIC("Temporizador")
+}
+
+@Composable
+private fun SessionFiltersSection(
+    modeFilter: SessionModeFilter,
+    searchText: String,
+    onModeFilterChange: (SessionModeFilter) -> Unit,
+    onSearchTextChange: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Filtrar sesiones",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = RecordsPink
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SessionModeFilter.entries.forEach { option ->
+                val selected = option == modeFilter
+                if (selected) {
+                    Button(
+                        onClick = { onModeFilterChange(option) },
+                        shape = RoundedCornerShape(18.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RecordsBackPink,
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text(option.label, fontSize = 13.sp)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { onModeFilterChange(option) },
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text(option.label, fontSize = 13.sp, color = RecordsText)
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = searchText,
+            onValueChange = onSearchTextChange,
+            label = { Text("Buscar por ID, nombre o tema") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
 @Composable
 private fun RecentSessionsSection(
     isLoading: Boolean,
@@ -478,7 +569,7 @@ private fun RecentSessionsSection(
                     .padding(vertical = 8.dp)
             )
             sessions.isEmpty() -> Text(
-                text = "Aun no hay sesiones registradas.",
+                text = "No hay sesiones que coincidan con el filtro.",
                 fontSize = 14.sp,
                 color = RecordsText
             )
