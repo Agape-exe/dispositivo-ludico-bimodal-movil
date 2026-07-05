@@ -1,5 +1,6 @@
 package com.taller.app.bimodal
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,6 +15,18 @@ class SevenStartCommandTest {
         assertTrue(SevenStartCommand.matches("oye Seven"))
         assertTrue(SevenStartCommand.matches("oye seven"))
         assertTrue(SevenStartCommand.matches("hola amigo"))
+    }
+
+    @Test
+    fun acceptsCommonSttMisspellings() {
+        // El STT infantil confunde "seven" con "seben" o lo parte en "se ven",
+        // y "hola" con "ola". La activacion debe tolerar estos errores.
+        assertTrue(SevenStartCommand.matches("hola seben"))
+        assertTrue(SevenStartCommand.matches("hola se ven"))
+        assertTrue(SevenStartCommand.matches("ola seven"))
+        assertTrue(SevenStartCommand.matches("ola seben"))
+        assertTrue(SevenStartCommand.matches("oye seben"))
+        assertTrue(SevenStartCommand.matches("seben"))
     }
 
     @Test
@@ -38,21 +51,38 @@ class SevenStartCommandTest {
     }
 
     @Test
+    fun acceptsLongPhraseOnlyWithStartVerb() {
+        // Frase larga con "seven" + verbo de inicio: activa.
+        assertTrue(SevenStartCommand.matches("ahora seven vamos"))
+        // Frase larga con "seven" pero sin verbo de inicio ni saludo: no activa.
+        assertFalse(SevenStartCommand.matches("el numero seven es grande"))
+    }
+
+    @Test
     fun rejectsUnrelatedPhrases() {
         assertFalse(SevenStartCommand.matches(""))
         assertFalse(SevenStartCommand.matches("quiero jugar"))
         assertFalse(SevenStartCommand.matches("el perro hace guau"))
         assertFalse(SevenStartCommand.matches("empieza ya"))
-        // "se ven" no es "seven": la comparacion respeta palabras completas.
+        // "se ven bonitos" no es "hola seven": aunque contenga "se ven", el resto
+        // es contenido ajeno y no hay saludo ni verbo de inicio.
         assertFalse(SevenStartCommand.matches("se ven bonitos"))
-        // "seven" dentro de una frase cualquiera no activa sin saludo.
+        // "seven" dentro de una frase cualquiera no activa sin saludo/verbo.
         assertFalse(SevenStartCommand.matches("el numero seven es grande"))
+        // "hola mama" tiene saludo pero no nombra a Seven.
+        assertFalse(SevenStartCommand.matches("hola mama"))
         // "amigo" sin saludo tampoco activa.
         assertFalse(SevenStartCommand.matches("mi amigo vino ayer"))
     }
 
     @Test
+    fun isStartCommandIsAliasOfMatches() {
+        assertTrue(SevenStartCommand.isStartCommand("Hola Seven"))
+        assertFalse(SevenStartCommand.isStartCommand("hola mama"))
+    }
+
+    @Test
     fun normalizeRemovesAccentsCaseAndSymbols() {
-        org.junit.Assert.assertEquals("hola seven", SevenStartCommand.normalize("¡HOLÁ, Seven!"))
+        assertEquals("hola seven", SevenStartCommand.normalize("¡HOLÁ, Seven!"))
     }
 }

@@ -92,6 +92,7 @@ import com.taller.app.bimodal.EarlyAnswerPolicy
 import com.taller.app.bimodal.FacePausePhraseBank
 import com.taller.app.bimodal.HybridAnswerEvaluator
 import com.taller.app.bimodal.InitialConversationBank
+import com.taller.app.bimodal.InitialConversationResponder
 import com.taller.app.bimodal.SevenStartCommand
 import com.taller.app.bimodal.HybridSessionContext
 import com.taller.app.bimodal.IntelligentSessionReport
@@ -696,6 +697,13 @@ private fun BimodalSession(
     }
     val hybridEvaluator = remember(openAnswerJudge) {
         HybridAnswerEvaluator(judge = openAnswerJudge)
+    }
+
+    // FINAL-FLOW01-FIX01: responder de la conversacion inicial. Resuelve local primero
+    // (banco de Seven), luego juez conversacional limitado (reutiliza el cliente GPT ya
+    // existente, sin crear uno nuevo) y, ante cualquier fallo/timeout, respaldo local.
+    val initialConversationResponder = remember(recaptureGptClient) {
+        InitialConversationResponder(gptClient = recaptureGptClient)
     }
 
     // Diagnostico de la ultima mediacion para la interfaz tecnica: origen efectivo
@@ -1504,10 +1512,15 @@ private fun BimodalSession(
         }
     }
 
-    // FINAL-FLOW01: conversacion inicial opcional y limitada. Solo ocurre una vez,
-    // tras el saludo y antes de la primera pregunta evaluada. No usa camara, no usa
-    // GPT ni TTS de red, no guarda lo que dice el nino (solo un evento minimo con el
-    // numero de turno) y NUNCA cuenta como intento: no pasa por el orquestador.
+    // FINAL-FLOW01 / FINAL-FLOW01-FIX01: conversacion inicial opcional y limitada.
+    // Solo ocurre una vez, tras el saludo y antes de la primera pregunta evaluada.
+    // Cada turno del nino se responde localmente cuando es una pregunta comun (banco
+    // de Seven) y, si no, con el juez conversacional limitado (GPT breve y seguro,
+    // con tope de tiempo y respaldo local). La voz siempre es local del dispositivo:
+    // no se sintetiza por red texto dinamico ni se toca la voz cacheada de la sesion.
+    // No usa camara, no envia audio a GPT y no guarda el contenido de lo que dice el
+    // nino: solo un evento minimo con el numero de turno y el origen de la respuesta.
+    // NUNCA cuenta como intento: no pasa por el orquestador.
     suspend fun runInitialConversation() {
         val maxTurns = appSettings.initialConversationMaxChildTurns
         if (maxTurns <= 0) return
@@ -1523,18 +1536,27 @@ private fun BimodalSession(
                 val childText = captureChildSpeechOnce(INITIAL_CONVERSATION_LISTEN_WINDOW_MS)
                 if (childText.isNullOrBlank()) break
                 turns += 1
+                val remainingTurns = maxTurns - turns + 1
+                val reply = initialConversationResponder.respond(
+                    childQuestion = childText,
+                    sessionTopic = activity.topic,
+                    sessionName = activity.title,
+                    remainingTurns = remainingTurns
+                )
                 val sid = logSessionId
                 if (sid > 0L) {
+                    // Evento minimo y seguro: turno + origen de la respuesta, sin la
+                    // pregunta del nino ni el texto hablado.
                     runCatching {
                         dataLogger.logTechnicalEvent(
                             sessionId = sid,
                             operationMode = "ADVANCED",
                             eventType = "INITIAL_CONVERSATION_TURN",
-                            message = "turn=$turns"
+                            message = "turn=$turns source=${reply.source.name} timedOut=${reply.timedOut}"
                         )
                     }
                 }
-                speakConversationAndAwait(InitialConversationBank.replyPhrase(turns))
+                speakConversationAndAwait(reply.text)
             }
             speakConversationAndAwait(InitialConversationBank.transitionPhrase())
         } finally {
@@ -2594,6 +2616,26 @@ private fun BimodalSession(
                     onClick = { audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
                 ) {
                     Text("Conceder microfono")
+                }
+            }
+            // FINAL-FLOW01-FIX01: inicio manual sin depender del STT. Cuando el flujo
+            // espera la activacion por voz y hay microfono, el docente puede tocar
+            // "Iniciar" para arrancar el mismo flujo aunque "Hola Seven" no se detecte
+            // (util en pruebas reales con ninos cuando el reconocimiento de voz falla).
+            if (audioGranted && !startCommandDetected &&
+                (state == BimodalInteractionState.IDLE ||
+                    state == BimodalInteractionState.READY)
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) {
+                            speechService.stopListening()
+                        }
+                        startCommandDetected = true
+                    }
+                ) {
+                    Text("Iniciar")
                 }
             }
             if (state == BimodalInteractionState.SESSION_COMPLETED ||
