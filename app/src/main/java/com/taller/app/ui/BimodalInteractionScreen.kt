@@ -933,18 +933,40 @@ private fun BimodalSession(
         ) return
         if (sttState == SttState.LISTENING || sttState == SttState.STOPPING) return
 
+        // FINAL-FLOW01-FIX02: la activacion usa el MISMO servicio de STT (Android
+        // SpeechRecognizer) que las respuestas del modo inteligente. Acepta el comando
+        // desde un parcial claro (sin esperar el final) y, ante error, deja el boton
+        // manual "Iniciar" disponible y reintenta la escucha automaticamente.
+        fun logStartCommandEvent(eventType: String) {
+            val sid = logSessionId
+            if (sid > 0L) {
+                scope.launch {
+                    runCatching {
+                        dataLogger.logTechnicalEvent(
+                            sessionId = sid,
+                            operationMode = "ADVANCED",
+                            eventType = eventType
+                        )
+                    }
+                }
+            }
+            Log.d(BIMODAL_VOICE_TAG, "activacion: $eventType")
+        }
+
         speechService.startListening(
             onStateChange = { sttState = it },
             onReady = { startCommandHint = SevenStartCommand.PRIMARY_HINT },
             onPartialResult = { text ->
                 if (SevenStartCommand.matches(text)) {
                     startCommandDetected = true
+                    logStartCommandEvent("START_COMMAND_DETECTED")
                     speechService.stopListening()
                 }
             },
             onFinalResult = { text ->
                 if (SevenStartCommand.matches(text)) {
                     startCommandDetected = true
+                    logStartCommandEvent("START_COMMAND_DETECTED")
                 } else {
                     startCommandHint = SevenStartCommand.PRIMARY_HINT
                 }
@@ -952,10 +974,12 @@ private fun BimodalSession(
             onStopped = { textAtStop ->
                 if (SevenStartCommand.matches(textAtStop)) {
                     startCommandDetected = true
+                    logStartCommandEvent("START_COMMAND_DETECTED")
                 }
             },
             onError = {
                 startCommandHint = SevenStartCommand.PRIMARY_HINT
+                logStartCommandEvent("START_COMMAND_STT_ERROR")
             }
         )
     }
@@ -2380,11 +2404,15 @@ private fun BimodalSession(
         }
     }
 
+    // FINAL-FLOW01-FIX02: la expresion visual depende de la atencion FUNCIONAL
+    // (camara/atencion realmente activa), no del panel de depuracion. Con la atencion
+    // apagada, Seven sigue el flujo normal sin camara; el toggle de "mostrar panel de
+    // atencion" solo controla el overlay tecnico y no altera la cara ni el flujo.
     val targetSevenExpression = state.toIntelligentSevenExpression(
         facePresent = facePresent,
         toyVoiceSpeaking = toyVoiceSpeaking,
         attentionSnapshot = latestAttentionSnapshot,
-        attentionVisualDebugEnabled = attentionVisualDebugEnabled
+        attentionDrivenVisualsEnabled = attentionActive
     )
     var sevenExpression by remember(activity) {
         mutableStateOf(IntelligentSevenExpression.READY)
@@ -2451,6 +2479,14 @@ private fun BimodalSession(
                 sttState = sttState,
                 hasProgress = progress != null
             )
+        ),
+        sttDebug = sttDebugLabel(
+            available = SpeechToTextService.isAvailable(context),
+            language = SpeechToTextService.LANGUAGE_TAG,
+            lastStateLabel = sttStatusLabel(sttState),
+            receivedPartial = sttPartial.isNotBlank() || sttFinal.isNotBlank(),
+            receivedFinal = sttFinal.isNotBlank(),
+            lastErrorShort = sttError.takeIf { it.isNotBlank() }
         ),
         showTts = ttsDebugInIntelligentModeEnabled,
         ttsProviderConfigured = voiceSettings.provider,
@@ -3856,10 +3892,40 @@ internal fun attentionDebugLabel(snapshot: AttentionSnapshot?): String {
     return "Atencion: $state\nRostro: $face\nMirando: $looking"
 }
 
+/**
+ * FINAL-FLOW01-FIX02: etiqueta de depuracion del reconocimiento de voz. Deja claro
+ * que todas las rutas del modo inteligente usan el mismo STT del sistema (Android
+ * SpeechRecognizer, normalmente Google). Solo metadatos tecnicos: nunca la
+ * transcripcion, ni audio, ni datos del nino.
+ */
+internal fun sttDebugLabel(
+    available: Boolean,
+    language: String,
+    lastStateLabel: String,
+    receivedPartial: Boolean,
+    receivedFinal: Boolean,
+    lastErrorShort: String?
+): String {
+    val availableText = if (available) "Si" else "No"
+    val partialText = if (receivedPartial) "Si" else "No"
+    val finalText = if (receivedFinal) "Si" else "No"
+    val errorText = lastErrorShort?.take(60)?.takeIf { it.isNotBlank() } ?: "—"
+    return buildString {
+        append("STT: ").append(com.taller.app.speech.SpeechToTextService.PROVIDER_LABEL).append('\n')
+        append(com.taller.app.speech.SpeechToTextService.SYSTEM_PROVIDER_NOTE).append('\n')
+        append("Disponible: ").append(availableText).append('\n')
+        append("Idioma: ").append(language).append('\n')
+        append("Ultimo estado: ").append(lastStateLabel).append('\n')
+        append("Parcial: ").append(partialText).append(" / Final: ").append(finalText).append('\n')
+        append("Error STT: ").append(errorText)
+    }
+}
+
 internal fun intelligentDebugPanelText(
     showAttention: Boolean,
     attentionSnapshot: AttentionSnapshot?,
     recaptureLabel: String? = null,
+    sttDebug: String? = null,
     showTts: Boolean,
     ttsProviderConfigured: ToyVoiceProviderType,
     ttsProviderUsedLabel: String?,
@@ -3888,7 +3954,8 @@ internal fun intelligentDebugPanelText(
         add(
             listOfNotNull(
                 attentionDebugLabel(attentionSnapshot),
-                recaptureLabel
+                recaptureLabel,
+                sttDebug
             ).joinToString("\n")
         )
     }

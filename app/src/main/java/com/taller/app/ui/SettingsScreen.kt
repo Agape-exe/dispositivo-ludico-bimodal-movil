@@ -760,23 +760,24 @@ private fun IntelligentModeSettingsSection(
 ) {
     SettingsSectionHeader(
         title = "Modo inteligente",
-        description = "La sesion funciona sin camara. Si activas la atencion por camara, " +
-            "se registran metricas de atencion sin interrumpir al nino; la recaptura por " +
-            "voz es una opcion avanzada aparte."
+        description = "La sesion funciona sin camara. Estas opciones controlan el " +
+            "comportamiento real; la depuracion se configura mas abajo."
     )
     SettingsSwitchRow(
-        label = "Atencion por camara",
-        description = "Detecta presencia y atencion con la camara frontal (todo local, " +
-            "sin guardar imagenes). Apagada, los reportes muestran \"No aplica\".",
+        label = "Usar camara/atencion en modo inteligente",
+        description = "Activa la camara solo para observar presencia/atencion. No es " +
+            "obligatoria para la sesion y no guarda imagenes. Apagada, los reportes " +
+            "muestran \"No aplica\".",
         checked = attentionEnabled,
         onCheckedChange = onAttentionEnabledChange
     )
     SettingsSwitchRow(
-        label = "Recaptura de atencion por voz",
-        description = "Solo con la atencion activa: Seven invita a volver si el nino se " +
-            "distrae. Puede interrumpir la sesion al agotar los intentos; usar con cuidado.",
-        checked = recaptureEnabled,
-        onCheckedChange = onRecaptureEnabledChange
+        label = "Usar recaptura por atencion",
+        description = "Si esta activada, Seven puede intentar recuperar la atencion. " +
+            "Recomendado solo para pruebas especificas. Requiere la camara/atencion activa.",
+        checked = recaptureEnabled && attentionEnabled,
+        onCheckedChange = onRecaptureEnabledChange,
+        enabled = attentionEnabled
     )
     OutlinedTextField(
         value = recapturesText,
@@ -786,7 +787,7 @@ private fun IntelligentModeSettingsSection(
         isError = recapturesText.toIntOrNull()?.let {
             !AppSettings.isValidIntelligentMaxRecaptures(it)
         } ?: true,
-        enabled = recaptureEnabled,
+        enabled = attentionEnabled && recaptureEnabled,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
         modifier = Modifier
@@ -984,36 +985,38 @@ private fun AttentionDebugSettingsSection(
 ) {
     Spacer(modifier = Modifier.height(16.dp))
     Text(
-        text = "Pruebas de atencion en modo inteligente",
+        text = "Depuracion de atencion",
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         modifier = Modifier.fillMaxWidth()
     )
     Spacer(modifier = Modifier.height(4.dp))
     Text(
-        text = "Cuando esta activado, Seven cambia su expresion segun el estado " +
-            "de atencion detectado durante el modo inteligente. Util para validar " +
-            "camara, mirada y estados de atencion.",
+        text = "Cuando esta activado, se muestra informacion tecnica de atencion y " +
+            "reconocimiento de voz durante el modo inteligente. No modifica el flujo " +
+            "de la sesion, ni la camara, ni la recaptura, ni la cara de Seven.",
         fontSize = 13.sp,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
         modifier = Modifier.fillMaxWidth()
     )
     SettingsSwitchRow(
-        label = "Mostrar atencion en modo inteligente",
+        label = "Mostrar panel de atencion",
+        description = "Solo muestra datos tecnicos de atencion y del reconocimiento de voz. " +
+            "No cambia el comportamiento de Seven.",
         checked = attentionVisualDebugEnabled,
         onCheckedChange = onAttentionVisualDebugChanged
     )
     SettingsSwitchRow(
         label = "Mostrar TTS en modo inteligente",
-        description = "Muestra durante el modo inteligente que proveedor de voz esta usando Seven. " +
-            "Util para validar Gemini, OpenAI, Azure o voz local.",
+        description = "Solo muestra datos tecnicos de voz (proveedor usado, fallback, latencia). " +
+            "No cambia el comportamiento de Seven.",
         checked = showTtsDebugInIntelligentMode,
         onCheckedChange = onTtsDebugInIntelligentModeChanged
     )
     SettingsSwitchRow(
         label = "Mostrar GPT en modo inteligente",
-        description = "Muestra durante el modo inteligente si GPT esta activado y configurado. " +
-            "Util para validar recaptura y mediacion.",
+        description = "Solo muestra datos tecnicos de evaluacion/GPT (juez, recaptura, mediacion). " +
+            "No cambia el comportamiento de Seven.",
         checked = showGptDebugInIntelligentMode,
         onCheckedChange = onGptDebugInIntelligentModeChanged
     )
@@ -1209,8 +1212,12 @@ private fun SettingsSwitchRow(
     label: String,
     description: String? = null,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true
 ) {
+    // Cuando la fila esta subordinada (enabled=false) se atenua para dejar claro que
+    // depende de otra opcion superior (por ejemplo, la recaptura depende de la atencion).
+    val contentAlpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1219,18 +1226,22 @@ private fun SettingsSwitchRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = label, fontSize = 14.sp)
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha)
+            )
             if (description != null) {
                 Text(
                     text = description,
                     fontSize = 12.sp,
                     lineHeight = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f * contentAlpha)
                 )
             }
         }
         Spacer(modifier = Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 

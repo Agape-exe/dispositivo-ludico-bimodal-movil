@@ -289,19 +289,41 @@ internal fun IntelligentSevenFace(
     }
 }
 
+/**
+ * Expresion visual de Seven para el estado actual.
+ *
+ * FINAL-FLOW01-FIX02: la expresion depende del FLUJO de la sesion (base) y, solo si
+ * la atencion funcional esta activa ([attentionDrivenVisualsEnabled] = configuracion
+ * de camara/atencion real), la atencion observada puede matizar la expresion en los
+ * estados de baja prioridad (esperar rostro, listo, etc.). El panel de depuracion de
+ * atencion NUNCA influye aqui: mostrar/ocultar el panel tecnico no cambia la cara de
+ * Seven, la camara, la recaptura ni el flujo.
+ */
 internal fun BimodalInteractionState.toIntelligentSevenExpression(
     facePresent: Boolean,
     toyVoiceSpeaking: Boolean,
     attentionSnapshot: AttentionSnapshot? = null,
-    attentionVisualDebugEnabled: Boolean = false
-): IntelligentSevenExpression = when {
-    attentionVisualDebugEnabled -> resolveSevenAttentionVisualExpression(
-        interactionState = this,
-        attentionSnapshot = attentionSnapshot,
-        toyVoiceSpeaking = toyVoiceSpeaking,
-        attentionVisualDebugEnabled = true
-    )?.toIntelligentSevenExpression() ?: IntelligentSevenExpression.READY
+    attentionDrivenVisualsEnabled: Boolean = false
+): IntelligentSevenExpression {
+    // Solo cuando la atencion FUNCIONAL esta activa, la atencion real puede matizar la
+    // expresion. Se respeta la prioridad del flujo: mientras Seven habla, escucha,
+    // piensa o da feedback, la atencion no pisa esa expresion (guard interno).
+    if (attentionDrivenVisualsEnabled) {
+        resolveSevenAttentionVisualExpression(
+            interactionState = this,
+            attentionSnapshot = attentionSnapshot,
+            toyVoiceSpeaking = toyVoiceSpeaking,
+            attentionVisualDebugEnabled = false
+        )?.toIntelligentSevenExpression()?.let { return it }
+    }
+    return flowSevenExpression(facePresent, toyVoiceSpeaking)
+}
 
+/** Expresion segun el flujo de la sesion, independiente de camara y depuracion. */
+private fun BimodalInteractionState.flowSevenExpression(
+    facePresent: Boolean,
+    toyVoiceSpeaking: Boolean
+): IntelligentSevenExpression = when {
     toyVoiceSpeaking -> IntelligentSevenExpression.SPEAKING
 
     this == BimodalInteractionState.FEEDBACK_CORRECT -> IntelligentSevenExpression.HAPPY

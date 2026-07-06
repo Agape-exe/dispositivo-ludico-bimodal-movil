@@ -68,7 +68,7 @@ class SpeechToTextService(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-PE")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, LANGUAGE_TAG)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
@@ -209,5 +209,22 @@ class SpeechToTextService(
 
     companion object {
         private const val TAG = "SpeechToTextService"
+
+        /**
+         * FINAL-FLOW01-FIX02: infraestructura de reconocimiento de voz UNIFICADA del
+         * modo inteligente. Activacion ("Hola Seven"), conversacion inicial, ventana
+         * temprana y respuestas normales comparten esta misma clase y configuracion.
+         *
+         * Es Android [SpeechRecognizer]; el proveedor real lo aporta el sistema
+         * (normalmente Google, si esta disponible en el dispositivo). No hay STT de
+         * red propio ni de Gemini: aqui no se sintetiza ni se guarda audio.
+         */
+        const val PROVIDER_LABEL = "Android SpeechRecognizer"
+        const val SYSTEM_PROVIDER_NOTE = "Proveedor del sistema: Google si esta disponible"
+        const val LANGUAGE_TAG = "es-PE"
+
+        /** True si el dispositivo ofrece reconocimiento de voz. */
+        fun isAvailable(context: Context): Boolean =
+            SpeechRecognizer.isRecognitionAvailable(context)
     }
 }
