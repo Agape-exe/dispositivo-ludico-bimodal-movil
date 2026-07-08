@@ -69,10 +69,20 @@ object OnomatopoeiaNormalizer {
             canonical = "bee",
             aliases = setOf("be", "bee", "beee", "mee", "meee", "baa"),
             animalMarkers = setOf("oveja", "ovejita", "ovejas", "borrego", "cordero", "corderito")
+        ),
+        // FINAL-FLOW01: gallina/pollo con variantes claras y poco ambiguas. Se evita
+        // "coco" (fruta) y otras formas que el STT confunde con palabras reales.
+        SoundGroup(
+            canonical = "pio pio",
+            aliases = setOf(
+                "pio", "piopio", "pi", "pipi", "clo", "cloclo", "cocoroco", "kokoroko", "coroco"
+            ),
+            animalMarkers = setOf(
+                "gallina", "gallinita", "gallinas", "pollo", "pollito", "pollitos", "gallo"
+            )
         )
-        // Pendientes (menos seguros de aislar por STT): cerdo (oink/oinc),
-        // gallina/pollo (pio pio, cocoroco, clo clo). Se anaden cuando haya datos
-        // reales que confirmen las transcripciones tipicas.
+        // Pendientes (menos seguros de aislar por STT): cerdo (oink/oinc). Se anaden
+        // cuando haya datos reales que confirmen las transcripciones tipicas.
     )
 
     /** Conectores y artículos que se descartan para aislar el sonido. */

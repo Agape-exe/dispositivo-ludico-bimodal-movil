@@ -24,6 +24,15 @@ data class MetricsSessionReport(
     val averageResponseTimeMs: Long?,
     val attentionLossCount: Int,
     val recaptureCount: Int,
+    /**
+     * FINAL-FLOW01: si la sesion corrio con la atencion por camara activa. Cuando es
+     * false, los reportes muestran "Desactivada" / "No aplica" en lugar de conteos
+     * que sugieran cero distracciones. Las sesiones antiguas (sin marcador) se
+     * consideran con atencion activa para no cambiar su lectura historica.
+     */
+    val attentionTrackingEnabled: Boolean = true,
+    /** FINAL-FLOW01: si la recaptura por voz estaba activa en la sesion. */
+    val recaptureTrackingEnabled: Boolean = true,
     val closeReason: String,
     val configuredTimePerQuestionMs: Long?,
     val details: List<MetricsQuestionAttemptReport>

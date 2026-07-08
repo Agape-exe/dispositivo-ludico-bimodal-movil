@@ -51,68 +51,83 @@ class IntelligentSevenExpressionResolverTest {
     }
 
     @Test
-    fun debugDisabledKeepsNormalVisualFlow() {
+    fun attentionOffKeepsPureVisualFlow() {
+        // Sin atencion funcional, la cara sigue el flujo aunque haya snapshot de atencion.
         val expression = BimodalInteractionState.WAITING_FOR_FACE
             .toIntelligentSevenExpression(
                 facePresent = true,
                 toyVoiceSpeaking = false,
                 attentionSnapshot = snapshot(AttentionState.TEMPORARILY_LOST),
-                attentionVisualDebugEnabled = false
+                attentionDrivenVisualsEnabled = false
             )
 
         assertEquals(IntelligentSevenExpression.READY, expression)
     }
 
     @Test
-    fun debugEnabledFaceAbsentUsesSearching() {
-        val expression = BimodalInteractionState.LISTENING
+    fun functionalAttentionRefinesLowPriorityStates() {
+        // Con atencion funcional activa, un estado de baja prioridad (esperar rostro)
+        // se matiza segun la atencion real observada.
+        val absent = BimodalInteractionState.WAITING_FOR_FACE
             .toIntelligentSevenExpression(
                 facePresent = false,
                 toyVoiceSpeaking = false,
                 attentionSnapshot = snapshot(AttentionState.FACE_ABSENT),
-                attentionVisualDebugEnabled = true
+                attentionDrivenVisualsEnabled = true
             )
+        assertEquals(IntelligentSevenExpression.SEARCHING_FACE, absent)
 
-        assertEquals(IntelligentSevenExpression.SEARCHING_FACE, expression)
+        val stable = BimodalInteractionState.WAITING_FOR_FACE
+            .toIntelligentSevenExpression(
+                facePresent = true,
+                toyVoiceSpeaking = false,
+                attentionSnapshot = snapshot(AttentionState.ATTENTION_STABLE),
+                attentionDrivenVisualsEnabled = true
+            )
+        assertEquals(IntelligentSevenExpression.HAPPY, stable)
     }
 
     @Test
-    fun debugEnabledAttentionStableUsesReadyHappyExpression() {
+    fun functionalAttentionDoesNotOverrideListening() {
+        // La prioridad del flujo manda: escuchar no se pisa por la atencion.
         val expression = BimodalInteractionState.LISTENING
             .toIntelligentSevenExpression(
                 facePresent = true,
                 toyVoiceSpeaking = false,
                 attentionSnapshot = snapshot(AttentionState.ATTENTION_STABLE),
-                attentionVisualDebugEnabled = true
+                attentionDrivenVisualsEnabled = true
             )
 
-        assertEquals(IntelligentSevenExpression.HAPPY, expression)
+        assertEquals(IntelligentSevenExpression.LISTENING, expression)
     }
 
     @Test
-    fun debugEnabledTemporarilyLostUsesSoftConfusedExpression() {
-        val expression = BimodalInteractionState.LISTENING
+    fun functionalAttentionDoesNotOverrideSpeaking() {
+        val expression = BimodalInteractionState.PRESENTING_QUESTION
             .toIntelligentSevenExpression(
                 facePresent = true,
-                toyVoiceSpeaking = false,
-                attentionSnapshot = snapshot(AttentionState.TEMPORARILY_LOST),
-                attentionVisualDebugEnabled = true
+                toyVoiceSpeaking = true,
+                attentionSnapshot = snapshot(AttentionState.ATTENTION_LOST),
+                attentionDrivenVisualsEnabled = true
             )
 
-        assertEquals(IntelligentSevenExpression.CONFUSED, expression)
+        assertEquals(IntelligentSevenExpression.SPEAKING, expression)
     }
 
     @Test
-    fun debugEnabledAttentionLostUsesSearchingExpression() {
-        val expression = BimodalInteractionState.LISTENING
+    fun debugPanelToggleDoesNotAffectExpression() {
+        // El panel de depuracion ya no es un parametro de la expresion: la misma
+        // entrada (atencion funcional apagada) produce siempre la expresion del flujo,
+        // sin importar si el overlay tecnico esta visible o no.
+        val expression = BimodalInteractionState.WAITING_FOR_RESPONSE
             .toIntelligentSevenExpression(
                 facePresent = true,
                 toyVoiceSpeaking = false,
                 attentionSnapshot = snapshot(AttentionState.ATTENTION_LOST),
-                attentionVisualDebugEnabled = true
+                attentionDrivenVisualsEnabled = false
             )
 
-        assertEquals(IntelligentSevenExpression.SEARCHING_FACE, expression)
+        assertEquals(IntelligentSevenExpression.LISTENING, expression)
     }
 
     @Test
@@ -131,6 +146,81 @@ class IntelligentSevenExpressionResolverTest {
             "Atencion: UNKNOWN\nRostro: No\nMirando: No",
             attentionDebugLabel(null)
         )
+    }
+
+    @Test
+    fun sttDebugLabel_showsProviderLanguageAndFlagsWithoutTranscript() {
+        val label = sttDebugLabel(
+            available = true,
+            language = "es-PE",
+            lastStateLabel = "Escuchando",
+            receivedPartial = true,
+            receivedFinal = false,
+            lastErrorShort = null
+        )
+        assertTrue(label.contains("STT: Android SpeechRecognizer"))
+        assertTrue(label.contains("Proveedor del sistema: Google si esta disponible"))
+        assertTrue(label.contains("Disponible: Si"))
+        assertTrue(label.contains("Idioma: es-PE"))
+        assertTrue(label.contains("Parcial: Si / Final: No"))
+        assertTrue(label.contains("Error STT: —"))
+    }
+
+    @Test
+    fun sttDebugLabel_showsShortErrorWhenPresent() {
+        val label = sttDebugLabel(
+            available = false,
+            language = "es-PE",
+            lastStateLabel = "Error",
+            receivedPartial = false,
+            receivedFinal = false,
+            lastErrorShort = "No se detecto voz dentro del tiempo esperado."
+        )
+        assertTrue(label.contains("Disponible: No"))
+        assertTrue(label.contains("Error STT: No se detecto voz"))
+    }
+
+    @Test
+    fun debugPanelShowsSttOnlyWhenAttentionPanelIsOn() {
+        val stt = sttDebugLabel(
+            available = true,
+            language = "es-PE",
+            lastStateLabel = "Listo para escuchar",
+            receivedPartial = false,
+            receivedFinal = false,
+            lastErrorShort = null
+        )
+        val withPanel = intelligentDebugPanelText(
+            showAttention = true,
+            attentionSnapshot = snapshot(AttentionState.ATTENTION_STABLE),
+            sttDebug = stt,
+            showTts = false,
+            ttsProviderConfigured = ToyVoiceProviderType.LOCAL,
+            ttsProviderUsedLabel = null,
+            ttsVoice = null,
+            ttsFallbackUsed = null,
+            ttsStatus = "Sin probar",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+        assertTrue(withPanel.contains("STT: Android SpeechRecognizer"))
+
+        val withoutPanel = intelligentDebugPanelText(
+            showAttention = false,
+            attentionSnapshot = null,
+            sttDebug = stt,
+            showTts = false,
+            ttsProviderConfigured = ToyVoiceProviderType.LOCAL,
+            ttsProviderUsedLabel = null,
+            ttsVoice = null,
+            ttsFallbackUsed = null,
+            ttsStatus = "Sin probar",
+            showGpt = false,
+            gptConfig = gptConfig(),
+            lastGptUsageStatus = "sin datos"
+        )
+        assertFalse(withoutPanel.contains("STT: Android SpeechRecognizer"))
     }
 
     @Test

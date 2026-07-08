@@ -110,6 +110,37 @@ class OnomatopoeiaNormalizerTest {
         assertTrue(match.contradictorySound)
     }
 
+    // ----- FINAL-FLOW01: gallina/pollo -------------------------------------------
+
+    private val henQuestion = "¿Qué sonido hace la gallina?"
+    private val chickQuestion = "¿Qué sonido hace el pollito?"
+
+    @Test
+    fun match_henAliasesWithHenContext() {
+        for (alias in listOf("pio", "pio pio", "clo clo", "cocoroco")) {
+            val match = OnomatopoeiaNormalizer.match(alias, "pio pio", henQuestion)
+            assertTrue("'$alias' debería ser alias de pio pio", match.matchedAlias)
+        }
+    }
+
+    @Test
+    fun match_chickContextByQuestionMarkerAlone() {
+        // La referencia no es onomatopeya, pero la pregunta pide el sonido del pollito.
+        val match = OnomatopoeiaNormalizer.match("pio pio", "canta", chickQuestion)
+        assertTrue(match.matchedAlias)
+    }
+
+    @Test
+    fun match_henDoesNotAcceptDogOrCatSound() {
+        val dog = OnomatopoeiaNormalizer.match("guau", "pio pio", henQuestion)
+        assertFalse(dog.matchedAlias)
+        assertTrue(dog.contradictorySound)
+
+        val cat = OnomatopoeiaNormalizer.match("miau", "pio pio", henQuestion)
+        assertFalse(cat.matchedAlias)
+        assertTrue(cat.contradictorySound)
+    }
+
     @Test
     fun helpers_detectSoundContextAndShortSounds() {
         assertTrue(OnomatopoeiaNormalizer.isSoundQuestion(dogQuestion))

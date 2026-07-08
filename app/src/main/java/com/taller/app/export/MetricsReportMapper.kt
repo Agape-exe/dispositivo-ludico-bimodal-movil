@@ -13,6 +13,15 @@ object MetricsReportMapper {
             attempt.realResponseTimeMs?.takeIf { it >= 0L && !isNoResponse(attempt) }
         }
         val avgMs = answeredTimes.takeIf { it.isNotEmpty() }?.average()?.toLong()
+        // FINAL-FLOW01: la sesion deja un marcador tecnico con su configuracion de
+        // atencion. Sin marcador (sesiones antiguas) se asume atencion activa para
+        // conservar la lectura historica de los conteos.
+        val attentionDisabled = session.technicalEvents.any {
+            it.eventType == "ATTENTION_TRACKING_DISABLED"
+        }
+        val recaptureDisabled = attentionDisabled || session.technicalEvents.any {
+            it.eventType == "RECAPTURE_TRACKING_DISABLED"
+        }
         return MetricsSessionReport(
             sessionId = session.sessionId,
             activityName = session.activityName?.takeIf { it.isNotBlank() } ?: NOT_RECORDED,
@@ -33,6 +42,8 @@ object MetricsReportMapper {
             averageResponseTimeMs = avgMs,
             attentionLossCount = session.technicalEvents.count { it.isAttentionLoss() },
             recaptureCount = session.technicalEvents.count { it.isRecaptureExecuted() },
+            attentionTrackingEnabled = !attentionDisabled,
+            recaptureTrackingEnabled = !recaptureDisabled,
             closeReason = closeReason(session),
             configuredTimePerQuestionMs = session.attempts
                 .map { it.maxTimeMs }
