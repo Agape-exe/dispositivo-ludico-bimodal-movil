@@ -11,13 +11,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,12 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -86,6 +74,10 @@ import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
+import com.taller.app.ui.face.SevenDogFace
+import com.taller.app.ui.face.SevenFaceScaffold
+import com.taller.app.ui.face.SevenFaceState
+import com.taller.app.ui.face.classicSevenFaceState
 import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.SevenVoiceService
 import com.taller.app.voice.ToySpeechService
@@ -122,25 +114,7 @@ private val ClassicTimerPrimaryText = Color(0xFF2E2535)
 private val ClassicTimerSecondaryText = Color(0xFF3F3A4A)
 private val ClassicTimerBackground = Color(0xFFFFFFFF)
 private val SevenFaceBackground = Color(0xFFF6F1FF)
-private val SevenFaceBackgroundAlt = Color(0xFFEAFBFA)
 private val SevenFaceAccent = Color(0xFF7C4DFF)
-private val SevenCountdownOrange = Color(0xFFFF8A00)
-private val SevenEyeWhite = Color(0xFFFFFCF6)
-private val SevenEyeIris = Color(0xFF4B74A8)
-private val SevenEyePupil = Color(0xFF183247)
-private val SevenEyeLid = Color(0xFFBFA8F4)
-private val SevenCheek = Color(0xFFFFA7C2)
-
-private enum class SevenVisualState {
-    IDLE,
-    WAITING_START_COMMAND,
-    SPEAKING,
-    COUNTDOWN,
-    LISTENING,
-    PAUSED,
-    COMPLETED,
-    ERROR
-}
 
 private const val SPEECH_TIMEOUT_MIN_MS = 12_000L
 private const val SPEECH_TIMEOUT_MAX_MS = 45_000L
@@ -317,8 +291,8 @@ private fun ClassicSevenLoadingOrError(
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            SevenFace(
-                state = SevenVisualState.ERROR,
+            SevenDogFace(
+                state = if (isLoading) SevenFaceState.WAITING else SevenFaceState.ERROR_SOFT,
                 modifier = Modifier.size(220.dp)
             )
             Spacer(modifier = Modifier.height(20.dp))
@@ -1315,56 +1289,34 @@ private fun ClassicSession(
         if (state == ClassicTimerState.IDLE) onChangeActivity() else pauseByTeacher()
     }
 
-    val visualState = when {
-        isPausedByTeacher -> SevenVisualState.PAUSED
-        state == ClassicTimerState.WAITING_FIXED_RESPONSE -> SevenVisualState.COUNTDOWN
-        toyVoiceSpeaking ||
-            state == ClassicTimerState.SESSION_STARTING ||
-            state == ClassicTimerState.PRESENTING_QUESTION ||
-            state == ClassicTimerState.ANSWER_RECEIVED ||
-            state == ClassicTimerState.TIME_EXPIRED -> SevenVisualState.SPEAKING
-        state == ClassicTimerState.SESSION_COMPLETED -> SevenVisualState.COMPLETED
-        state == ClassicTimerState.ERROR -> SevenVisualState.ERROR
-        state == ClassicTimerState.IDLE || state == ClassicTimerState.READY -> SevenVisualState.WAITING_START_COMMAND
-        else -> SevenVisualState.IDLE
-    }
+    // UI02-FINAL: mapeo neutral del temporizador a la cara final de Seven. Nunca
+    // usa estados que revelen acierto o error (Happy/Supportive/Retry/Thinking):
+    // el resultado semantico interno no participa en la cara.
+    val faceState = classicSevenFaceState(
+        state = state,
+        toyVoiceSpeaking = toyVoiceSpeaking,
+        pausedByTeacher = isPausedByTeacher
+    )
+    val showCountdown = state == ClassicTimerState.WAITING_FIXED_RESPONSE && !isPausedByTeacher
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(SevenFaceBackground, SevenFaceBackgroundAlt)
-                )
-            )
-            .padding(20.dp)
-    ) {
-        OutlinedButton(
-            onClick = { pauseByTeacher() },
-            enabled = state != ClassicTimerState.IDLE && !isPausedByTeacher,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .width(96.dp)
-        ) {
-            Text("Pausa")
-        }
-
-        if (visualState == SevenVisualState.COUNTDOWN) {
-            SevenCountdownView(secondsLeft = timerSecondsLeft)
-        } else {
-            SevenFace(
-                state = visualState,
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+    SevenFaceScaffold(
+        faceState = faceState,
+        statusText = if (showCountdown) "Tu turno" else null,
+        countdownSeconds = if (showCountdown) timerSecondsLeft else null,
+        overlays = {
+            OutlinedButton(
+                onClick = { pauseByTeacher() },
+                enabled = state != ClassicTimerState.IDLE && !isPausedByTeacher,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 12.dp)
+                    .width(96.dp)
+            ) {
+                Text("Pausa")
+            }
+        },
+        bottomContent = {
             when {
                 isPausedByTeacher -> {
                     Text(
@@ -1434,7 +1386,7 @@ private fun ClassicSession(
                 }
             }
         }
-    }
+    )
     return
 
     val sessionTerminal = state == ClassicTimerState.SESSION_COMPLETED ||
@@ -1872,227 +1824,6 @@ private fun ClassicTechnicalSummaryCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun SevenFace(
-    state: SevenVisualState,
-    modifier: Modifier = Modifier
-) {
-    val transition = rememberInfiniteTransition(label = "seven-eyes")
-    val blink by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                durationMillis = 3600
-                1f at 0
-                1f at 2780
-                0.24f at 2900
-                1f at 3040
-                1f at 3600
-            },
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "blink"
-    )
-    val speakingPulse by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1100),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "speaking-pulse"
-    )
-    val eyeOpen = when (state) {
-        SevenVisualState.SPEAKING -> (0.92f + speakingPulse * 0.03f) * blink.coerceIn(0.72f, 1f)
-        SevenVisualState.PAUSED -> 0.74f * blink.coerceIn(0.76f, 1f)
-        SevenVisualState.COMPLETED -> 0.90f * blink.coerceIn(0.78f, 1f)
-        SevenVisualState.ERROR -> 0.82f * blink.coerceIn(0.82f, 1f)
-        else -> blink.coerceIn(0.80f, 1f)
-    }
-
-    Canvas(
-        modifier = modifier
-            .fillMaxWidth(0.82f)
-            .height(260.dp)
-    ) {
-        val faceCenter = Offset(size.width / 2f, size.height * 0.52f)
-        val faceRadius = size.minDimension * 0.45f
-        drawCircle(
-            color = Color.White.copy(alpha = 0.26f),
-            radius = faceRadius,
-            center = faceCenter
-        )
-        if (state == SevenVisualState.SPEAKING) {
-            val accentAlpha = 0.12f + speakingPulse * 0.16f
-            drawCircle(
-                color = SevenFaceAccent.copy(alpha = accentAlpha),
-                radius = size.minDimension * 0.032f,
-                center = Offset(size.width * 0.16f, size.height * 0.30f)
-            )
-            drawCircle(
-                color = SevenCountdownOrange.copy(alpha = accentAlpha),
-                radius = size.minDimension * 0.026f,
-                center = Offset(size.width * 0.84f, size.height * 0.38f)
-            )
-            drawCircle(
-                color = SevenEyeIris.copy(alpha = accentAlpha),
-                radius = size.minDimension * 0.018f,
-                center = Offset(size.width * 0.78f, size.height * 0.23f)
-            )
-        }
-
-        val eyeWidth = size.width * 0.35f
-        val fullEyeHeight = size.height * 0.62f
-        val eyeHeight = fullEyeHeight * eyeOpen
-        val eyeCenters = listOf(
-            Offset(size.width * 0.30f, size.height * 0.45f),
-            Offset(size.width * 0.70f, size.height * 0.45f)
-        )
-        val eyeSize = Size(eyeWidth, eyeHeight)
-        val irisRadius = eyeWidth * when (state) {
-            SevenVisualState.PAUSED -> 0.27f
-            SevenVisualState.COMPLETED -> 0.33f
-            else -> 0.31f
-        }
-        val pupilRadius = irisRadius * 0.42f
-        val irisGlow = if (state == SevenVisualState.SPEAKING) speakingPulse * 0.14f else 0f
-        val irisNudgeX = if (state == SevenVisualState.SPEAKING) {
-            (speakingPulse - 0.5f) * size.minDimension * 0.010f
-        } else {
-            0f
-        }
-
-        eyeCenters.forEach { eyeCenter ->
-            val eyeOffset = Offset(eyeCenter.x - eyeWidth / 2f, eyeCenter.y - eyeHeight / 2f)
-            drawOval(
-                color = SevenFaceAccent.copy(alpha = 0.08f),
-                topLeft = eyeOffset + Offset(0f, fullEyeHeight * 0.04f),
-                size = eyeSize
-            )
-            drawOval(
-                color = SevenEyeWhite,
-                topLeft = eyeOffset,
-                size = eyeSize
-            )
-            val irisCenter = eyeCenter + Offset(
-                x = irisNudgeX,
-                y = if (state == SevenVisualState.PAUSED) eyeHeight * 0.04f else 0f
-            )
-            drawCircle(
-                color = SevenEyeIris.copy(alpha = 0.18f + irisGlow),
-                radius = irisRadius * 1.24f,
-                center = irisCenter
-            )
-            drawCircle(
-                color = SevenEyeIris,
-                radius = irisRadius,
-                center = irisCenter
-            )
-            drawCircle(
-                color = SevenEyePupil.copy(alpha = 0.92f),
-                radius = pupilRadius,
-                center = irisCenter
-            )
-            drawCircle(
-                color = Color(0xFF7DE7F2).copy(alpha = 0.78f + irisGlow),
-                radius = irisRadius * 0.54f,
-                center = irisCenter + Offset(irisRadius * 0.06f, irisRadius * 0.04f)
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.90f),
-                radius = irisRadius * 0.23f,
-                center = irisCenter + Offset(-irisRadius * 0.34f, -irisRadius * 0.42f)
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.70f + irisGlow),
-                radius = irisRadius * 0.12f,
-                center = irisCenter + Offset(irisRadius * 0.34f, -irisRadius * 0.12f)
-            )
-            val sparkleCenter = irisCenter + Offset(-irisRadius * 0.03f, irisRadius * 0.36f)
-            drawLine(
-                color = Color.White.copy(alpha = 0.74f + irisGlow),
-                start = sparkleCenter + Offset(-irisRadius * 0.16f, 0f),
-                end = sparkleCenter + Offset(irisRadius * 0.16f, 0f),
-                strokeWidth = 3f
-            )
-            drawLine(
-                color = Color.White.copy(alpha = 0.74f + irisGlow),
-                start = sparkleCenter + Offset(0f, -irisRadius * 0.16f),
-                end = sparkleCenter + Offset(0f, irisRadius * 0.16f),
-                strokeWidth = 3f
-            )
-            drawArc(
-                color = SevenEyeLid.copy(alpha = 0.34f),
-                startAngle = 200f,
-                sweepAngle = 140f,
-                useCenter = false,
-                topLeft = Offset(eyeCenter.x - eyeWidth * 0.43f, eyeCenter.y - fullEyeHeight * 0.44f),
-                size = Size(eyeWidth * 0.86f, fullEyeHeight * 0.38f),
-                style = Stroke(width = 4f)
-            )
-        }
-
-        val cheekAlpha = when (state) {
-            SevenVisualState.ERROR -> 0.18f
-            SevenVisualState.PAUSED -> 0.22f
-            SevenVisualState.SPEAKING -> 0.30f + speakingPulse * 0.08f
-            else -> 0.34f
-        }
-        val cheekY = size.height * 0.68f
-        drawOval(
-            color = SevenCheek.copy(alpha = cheekAlpha),
-            topLeft = Offset(size.width * 0.18f, cheekY),
-            size = Size(size.width * 0.13f, size.height * 0.052f)
-        )
-        drawOval(
-            color = SevenCheek.copy(alpha = cheekAlpha),
-            topLeft = Offset(size.width * 0.69f, cheekY),
-            size = Size(size.width * 0.13f, size.height * 0.052f)
-        )
-    }
-}
-
-@Composable
-private fun SevenCountdownView(secondsLeft: Int) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Canvas(modifier = Modifier.size(238.dp)) {
-            drawCircle(
-                color = Color.White.copy(alpha = 0.58f),
-                radius = size.minDimension * 0.46f,
-                center = center
-            )
-            drawRoundRect(
-                color = SevenFaceAccent.copy(alpha = 0.13f),
-                topLeft = Offset(size.width * 0.19f, size.height * 0.12f),
-                size = Size(size.width * 0.62f, size.height * 0.16f),
-                cornerRadius = CornerRadius(36f, 36f)
-            )
-        }
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "Tu turno",
-                color = ClassicTimerPrimaryText,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = secondsLeft.coerceAtLeast(0).toString(),
-                color = SevenCountdownOrange,
-                fontSize = 132.sp,
-                lineHeight = 136.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
         }
     }
 }

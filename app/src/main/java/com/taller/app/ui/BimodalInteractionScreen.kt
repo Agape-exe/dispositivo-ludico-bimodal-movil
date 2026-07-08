@@ -132,6 +132,10 @@ import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.settings.MarkdownLimiterRepository
 import com.taller.app.speech.SpeechToTextService
 import com.taller.app.speech.SttState
+import com.taller.app.ui.face.SevenDogFace
+import com.taller.app.ui.face.SevenFaceScaffold
+import com.taller.app.ui.face.SevenFaceState
+import com.taller.app.ui.face.sevenFaceStateForIntelligentRender
 import com.taller.app.recapture.FlowPhase
 import com.taller.app.recapture.RecaptureController
 import com.taller.app.recapture.RecaptureDecision
@@ -401,9 +405,11 @@ private fun IntelligentSevenLoadingOrError(
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            IntelligentSevenFace(
-                expression = IntelligentSevenExpression.READY,
-                modifier = Modifier.fillMaxWidth(0.74f)
+            SevenDogFace(
+                state = if (isLoading) SevenFaceState.WAITING else SevenFaceState.ERROR_SOFT,
+                modifier = Modifier
+                    .fillMaxWidth(0.74f)
+                    .height(220.dp)
             )
             Spacer(modifier = Modifier.height(16.dp))
             if (isLoading) {
@@ -2462,8 +2468,16 @@ private fun BimodalSession(
         sevenHoldUntilMs = if (holdMs > 0L) System.currentTimeMillis() + holdMs else 0L
     }
 
+    // UI02-FINAL: la cara final de Seven (perrito) se dibuja a partir de la
+    // expresion ya resuelta y retenida; los estados terminales tienen cara propia.
+    val sevenFaceState = sevenFaceStateForIntelligentRender(
+        interactionState = state,
+        resolvedExpression = sevenExpression
+    )
+
     val gptDebugConfig = GptConfig.fromBuild(gptSettings.sanitized())
     val intelligentDebugText = intelligentDebugPanelText(
+        faceStateLabel = "Cara Seven: ${sevenFaceState.name}",
         showAttention = attentionVisualDebugEnabled,
         attentionSnapshot = latestAttentionSnapshot,
         recaptureLabel = recaptureDebugLabel(
@@ -2552,98 +2566,10 @@ private fun BimodalSession(
         else -> ""
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(IntelligentSevenBackground, IntelligentSevenBackgroundAlt)
-                )
-            )
-            .padding(horizontal = 4.dp, vertical = 4.dp)
-    ) {
-        // La camara y el detector facial SOLO se montan si la atencion esta activada
-        // en configuracion y hay permiso. Con la atencion apagada no se abre la
-        // camara, no corre ML Kit y no se generan senales de atencion.
-        if (attentionActive) {
-            Box(
-                modifier = Modifier
-                    .size(1.dp)
-                    .clipToBounds()
-                    .align(Alignment.TopStart)
-            ) {
-                FacePresenceCard(
-                    cameraGranted = cameraGranted,
-                    facePresent = facePresent,
-                    onPresenceChanged = { onPresenceTransition(it) },
-                    onAttentionSnapshot = { onAttentionSnapshot(it) }
-                )
-            }
-        }
-
-        IntelligentSevenFace(
-            expression = sevenExpression,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth(0.94f)
-                .padding(bottom = 18.dp),
-            faceHeight = 372.dp,
-            showTurnLabel = state == BimodalInteractionState.LISTENING
-        )
-
-        OutlinedButton(
-            onClick = onChangeActivity,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .width(92.dp)
-        ) {
-            Text("Salir")
-        }
-
-        if (intelligentDebugText.isNotBlank()) {
-            // Panel tecnico flotante: ancho y alto acotados para no tapar el boton
-            // Salir ni la cara de Seven; con scroll vertical cuando el contenido
-            // excede la pantalla (util en horizontal con muchas metricas).
-            Card(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 8.dp, top = 8.dp)
-                    .widthIn(max = 250.dp)
-                    .heightIn(max = 260.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.White.copy(alpha = 0.84f)
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-            ) {
-                Text(
-                    text = intelligentDebugText,
-                    modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    color = IntelligentModePrimaryText,
-                    fontSize = 12.sp,
-                    lineHeight = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            if (childStatusText.isNotBlank()) {
-                Text(
-                    text = childStatusText,
-                    color = IntelligentModePrimaryText,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-            }
+    SevenFaceScaffold(
+        faceState = sevenFaceState,
+        statusText = childStatusText,
+        bottomContent = {
             if (!audioGranted && (state == BimodalInteractionState.IDLE ||
                     state == BimodalInteractionState.READY)
             ) {
@@ -2695,16 +2621,75 @@ private fun BimodalSession(
                     Text("Ver métricas técnicas")
                 }
             }
-        }
+        },
+        overlays = {
+            // La camara y el detector facial SOLO se montan si la atencion esta
+            // activada en configuracion y hay permiso. Con la atencion apagada no se
+            // abre la camara, no corre ML Kit y no se generan senales de atencion.
+            if (attentionActive) {
+                Box(
+                    modifier = Modifier
+                        .size(1.dp)
+                        .clipToBounds()
+                        .align(Alignment.TopStart)
+                ) {
+                    FacePresenceCard(
+                        cameraGranted = cameraGranted,
+                        facePresent = facePresent,
+                        onPresenceChanged = { onPresenceTransition(it) },
+                        onAttentionSnapshot = { onAttentionSnapshot(it) }
+                    )
+                }
+            }
 
-        if (showTechnicalReport) {
-            IntelligentTechnicalReportDialog(
-                voiceEvents = voiceDebugHistory,
-                evaluations = evaluationHistory,
-                onDismiss = { showTechnicalReport = false }
-            )
+            OutlinedButton(
+                onClick = onChangeActivity,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 8.dp)
+                    .width(92.dp)
+            ) {
+                Text("Salir")
+            }
+
+            if (intelligentDebugText.isNotBlank()) {
+                // Panel tecnico flotante: ancho y alto acotados para no tapar el boton
+                // Salir ni la cara de Seven; con scroll vertical cuando el contenido
+                // excede la pantalla (util en horizontal con muchas metricas).
+                Card(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 8.dp, top = 8.dp)
+                        .widthIn(max = 250.dp)
+                        .heightIn(max = 260.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color.White.copy(alpha = 0.84f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Text(
+                        text = intelligentDebugText,
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        color = IntelligentModePrimaryText,
+                        fontSize = 12.sp,
+                        lineHeight = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            if (showTechnicalReport) {
+                IntelligentTechnicalReportDialog(
+                    voiceEvents = voiceDebugHistory,
+                    evaluations = evaluationHistory,
+                    onDismiss = { showTechnicalReport = false }
+                )
+            }
         }
-    }
+    )
     return
 
     // Controla la visibilidad de la seccion tecnica de simulacion (colapsada por
@@ -2733,9 +2718,11 @@ private fun BimodalSession(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        IntelligentSevenFace(
-            expression = sevenExpression,
-            showTurnLabel = state == BimodalInteractionState.LISTENING
+        SevenDogFace(
+            state = sevenFaceState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(240.dp)
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -3924,6 +3911,7 @@ internal fun sttDebugLabel(
 internal fun intelligentDebugPanelText(
     showAttention: Boolean,
     attentionSnapshot: AttentionSnapshot?,
+    faceStateLabel: String? = null,
     recaptureLabel: String? = null,
     sttDebug: String? = null,
     showTts: Boolean,
@@ -3953,6 +3941,7 @@ internal fun intelligentDebugPanelText(
     if (showAttention) {
         add(
             listOfNotNull(
+                faceStateLabel,
                 attentionDebugLabel(attentionSnapshot),
                 recaptureLabel,
                 sttDebug
