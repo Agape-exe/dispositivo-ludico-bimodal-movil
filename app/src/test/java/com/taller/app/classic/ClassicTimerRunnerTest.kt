@@ -6,7 +6,6 @@ import com.taller.app.model.OperationMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -17,16 +16,16 @@ class ClassicTimerRunnerTest {
 
     @Before
     fun setUp() {
-        runner = ClassicTimerRunner(now = { 1_000L })
+        runner = ClassicTimerRunner()
     }
 
-    private fun question(id: String, maxTimeSeconds: Int = 10, mediationKey: String? = null) = LearningQuestion(
+    private fun question(id: String, mediationKey: String? = null) = LearningQuestion(
         id = id,
         questionText = "Pregunta $id",
-        expectedAnswer = "respuesta",
+        expectedAnswer = "respuesta que el temporizador no usa",
         keywords = listOf("respuesta"),
-        maxTimeSeconds = maxTimeSeconds,
-        maxAttempts = 1,
+        maxTimeSeconds = 99,
+        maxAttempts = 3,
         mediationKey = mediationKey
     )
 
@@ -37,290 +36,137 @@ class ClassicTimerRunnerTest {
         questions = questions.toList()
     )
 
-    private fun load(activity: LearningActivity) {
-        runner.loadActivity(activity)
+    private fun load(vararg questions: LearningQuestion) {
+        runner.loadActivity(activity(*questions))
         runner.markActivityLoaded()
     }
 
-    private fun reachWaitingResponse(): Unit {
+    private fun reachResponseWindow() {
         runner.startSession()
         runner.presentCurrentQuestion()
         runner.startResponseWindow()
     }
 
-    // ----- Carga de actividad --------------------------------------------------
-
     @Test
-    fun loadValidActivity_reachesReadyState() {
-        load(activity(question("q1")))
+    fun completeFlowIsIntroQuestionWaitNextQuestionAndClosing() {
+        load(question("q1"), question("q2"))
         assertEquals(ClassicTimerState.READY, runner.state)
-        assertNotNull(runner.progress)
-    }
-
-    @Test
-    fun loadEmptyActivity_transitionsToError() {
-        runner.loadActivity(activity())
-        runner.markActivityLoaded()
-        assertEquals(ClassicTimerState.ERROR, runner.state)
-        assertNotNull(runner.errorMessage)
-    }
-
-    // ----- Flujo básico --------------------------------------------------------
-
-    @Test
-    fun startSession_reachesSessionStarting() {
-        load(activity(question("q1")))
         runner.startSession()
         assertEquals(ClassicTimerState.SESSION_STARTING, runner.state)
-    }
-
-    @Test
-    fun presentCurrentQuestion_reachesPresentingQuestion() {
-        load(activity(question("q1")))
-        runner.startSession()
         runner.presentCurrentQuestion()
+        runner.startResponseWindow()
+        runner.onTimeExpired()
+        runner.advanceQuestion()
+        assertEquals(1, runner.progress?.currentQuestionIndex)
+        runner.startResponseWindow()
+        runner.onResponseStarted()
+        runner.onAnswerReceived()
+        runner.advanceQuestion()
+        assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
+    }
+
+    @Test
+    fun timeoutWithoutSpeechAdvancesToNextQuestion() {
+        load(question("q1"), question("q2"))
+        reachResponseWindow()
+        runner.onTimeExpired()
+        assertEquals(ClassicTimerState.TIME_EXPIRED, runner.state)
+        runner.advanceQuestion()
         assertEquals(ClassicTimerState.PRESENTING_QUESTION, runner.state)
+        assertEquals(1, runner.progress?.currentQuestionIndex)
     }
 
     @Test
-    fun startResponseWindow_reachesWaitingFixedResponse() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        assertEquals(ClassicTimerState.WAITING_FIXED_RESPONSE, runner.state)
+    fun responseStartedBeforeTimeoutKeepsQuestionOpenUntilSpeechEnds() {
+        load(question("q1"), question("q2"))
+        reachResponseWindow()
+        runner.onResponseStarted()
+        assertEquals(ClassicTimerState.RESPONSE_IN_PROGRESS, runner.state)
+
+        runner.onTimeExpired()
+        assertEquals(ClassicTimerState.RESPONSE_IN_PROGRESS, runner.state)
+
+        runner.onAnswerReceived()
+        assertEquals(ClassicTimerState.ANSWER_RECEIVED, runner.state)
+        runner.advanceQuestion()
+        assertEquals(1, runner.progress?.currentQuestionIndex)
     }
 
-    // ----- Respuesta recibida --------------------------------------------------
+    @Test
+    fun safetyCompletionUsesSameNeutralEndEvent() {
+        load(question("q1"))
+        reachResponseWindow()
+        runner.onResponseStarted()
+        runner.onAnswerReceived()
+        runner.advanceQuestion()
+        assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
+    }
 
     @Test
-    fun answerReceived_transitionsToAnswerReceived() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
+    fun answerCanFinishEvenWhenRecognizerOnlyReturnsFinalText() {
+        load(question("q1"))
+        reachResponseWindow()
         runner.onAnswerReceived()
         assertEquals(ClassicTimerState.ANSWER_RECEIVED, runner.state)
     }
 
     @Test
-    fun answerReceived_progressReflectsAnswer() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        assertTrue(runner.progress?.answerReceived == true)
+    fun runnerHasNoEvaluationPersistenceOrCapturedAnswerSurface() {
+        val surface = (ClassicTimerRunner::class.java.declaredFields.map { it.name + it.type.name } +
+            ClassicTimerRunner::class.java.declaredMethods.map { it.name }).joinToString(" ").lowercase()
+
+        assertFalse(surface.contains("semantic"))
+        assertFalse(surface.contains("transcript"))
+        assertFalse(surface.contains("logger"))
+        assertFalse(surface.contains("correct"))
+        assertFalse(surface.contains("attempt"))
+        assertFalse(surface.contains("result"))
     }
 
     @Test
-    fun answerReceived_resultHasAnswerReceivedTrue() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        assertTrue(runner.lastResult?.answerReceived == true)
-        assertFalse(runner.lastResult?.timedOut == true)
-    }
-
-    // ----- Tiempo agotado ------------------------------------------------------
-
-    @Test
-    fun timeExpired_transitionsToTimeExpired() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onTimeExpired()
-        assertEquals(ClassicTimerState.TIME_EXPIRED, runner.state)
+    fun noRetriesOrFeedbackStatesExist() {
+        val states = ClassicTimerState.entries.map { it.name }
+        assertFalse(states.any { it.contains("RETRY") || it.contains("FEEDBACK") })
     }
 
     @Test
-    fun timeExpired_resultHasTimedOutTrue() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onTimeExpired()
-        assertTrue(runner.lastResult?.timedOut == true)
-        assertFalse(runner.lastResult?.answerReceived == true)
-    }
-
-    @Test
-    fun timeExpiredWithPartial_progressReflectsPartial() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onTimeExpired(hadPartial = true)
-        assertTrue(runner.progress?.hadPartialResponseOnTimeout == true)
-    }
-
-    // ----- No invoca SemanticEvaluator -----------------------------------------
-
-    @Test
-    fun classicRunner_neverInvokesSemanticEvaluator() {
-        // El runner no tiene ninguna referencia ni invocación de SemanticEvaluator.
-        // Esta prueba verifica el flujo completo sin que se produzca ninguna excepción
-        // relacionada con evaluación semántica.
-        load(activity(question("q1"), question("q2")))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        runner.advanceQuestion()
-        runner.startResponseWindow()
+    fun centralTimeAppliesToEveryQuestion() {
+        runner = ClassicTimerRunner(responseTimeSeconds = 20)
+        load(question("q1"), question("q2"))
+        reachResponseWindow()
+        assertEquals(20, runner.progress?.effectiveMaxTimeSeconds)
         runner.onTimeExpired()
         runner.advanceQuestion()
-        assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
+        assertEquals(20, runner.progress?.effectiveMaxTimeSeconds)
     }
 
     @Test
-    fun classicRunner_hasNoCameraOrAttentionSurface() {
-        val memberNames = ClassicTimerRunner::class.java.declaredFields.map { it.type.name } +
-            ClassicTimerRunner::class.java.declaredMethods.map { it.name }
-        val joined = memberNames.joinToString(" ")
-
-        assertFalse(joined.contains("Attention"))
-        assertFalse(joined.contains("Camera"))
-        assertFalse(joined.contains("Face"))
-    }
-
-    // ----- Avance de preguntas -------------------------------------------------
-
-    @Test
-    fun advanceAfterAnswer_withMoreQuestions_goesToPresentingQuestion() {
-        load(activity(question("q1"), question("q2")))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        runner.advanceQuestion()
-        assertEquals(ClassicTimerState.PRESENTING_QUESTION, runner.state)
-        assertEquals(1, runner.progress?.currentQuestionIndex)
+    fun defaultTimeIsUsedWhenCentralValueIsInvalid() {
+        runner = ClassicTimerRunner(responseTimeSeconds = -1)
+        load(question("q1"))
+        reachResponseWindow()
+        assertEquals(CLASSIC_DEFAULT_MAX_TIME_SECONDS, runner.progress?.effectiveMaxTimeSeconds)
     }
 
     @Test
-    fun advanceAfterTimeout_withMoreQuestions_goesToPresentingQuestion() {
-        load(activity(question("q1"), question("q2")))
-        reachWaitingResponse()
-        runner.onTimeExpired()
-        runner.advanceQuestion()
-        assertEquals(ClassicTimerState.PRESENTING_QUESTION, runner.state)
-        assertEquals(1, runner.progress?.currentQuestionIndex)
+    fun emptyActivityFailsClearly() {
+        load()
+        assertEquals(ClassicTimerState.ERROR, runner.state)
+        assertNotNull(runner.errorMessage)
     }
 
     @Test
-    fun advanceOnLastQuestion_goesToSessionCompleted() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        runner.advanceQuestion()
-        assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
-    }
-
-    @Test
-    fun advanceOnLastQuestionAfterTimeout_goesToSessionCompleted() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onTimeExpired()
-        runner.advanceQuestion()
-        assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
-    }
-
-    // ----- El modo clásico no usa intentos para repetir preguntas --------------
-
-    @Test
-    fun classicRunner_doesNotRepeatQuestionsOnAnswer() {
-        // En modo clásico, no hay reintentos: siempre avanza al siguiente.
-        load(activity(question("q1", maxTimeSeconds = 10), question("q2", maxTimeSeconds = 10)))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        runner.advanceQuestion()
-        // Ahora está en pregunta 2, no en pregunta 1 de nuevo
-        assertEquals(1, runner.progress?.currentQuestionIndex)
-        assertEquals(ClassicTimerState.PRESENTING_QUESTION, runner.state)
-    }
-
-    // ----- Última pregunta -----------------------------------------------------
-
-    @Test
-    fun lastQuestionProgress_isLastQuestionTrue() {
-        load(activity(question("q1"), question("q2")))
-        runner.startSession()
-        runner.presentCurrentQuestion()
-        runner.startResponseWindow()
-        runner.onAnswerReceived()
-        runner.advanceQuestion()
-        // Ahora en última pregunta
+    fun progressCarriesPresentationDataOnly() {
+        load(question("q1", mediationKey = "ANIMAL_DOG_SOUND"))
+        assertEquals("ANIMAL_DOG_SOUND", runner.progress?.currentQuestionMediationKey)
         assertTrue(runner.progress?.isLastQuestion == true)
     }
 
     @Test
-    fun firstQuestionProgress_isLastQuestionFalse() {
-        load(activity(question("q1"), question("q2")))
-        runner.startSession()
-        runner.presentCurrentQuestion()
-        assertFalse(runner.progress?.isLastQuestion == true)
-    }
-
-    // ----- Cancelación ---------------------------------------------------------
-
-    @Test
-    fun cancelSession_transitionsToSessionCancelled() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
+    fun cancelActiveSessionIsTerminal() {
+        load(question("q1"))
+        reachResponseWindow()
         runner.cancelSession()
         assertEquals(ClassicTimerState.SESSION_CANCELLED, runner.state)
-    }
-
-    @Test
-    fun cancelFromIdle_isIgnored() {
-        runner.cancelSession()
-        assertEquals(ClassicTimerState.IDLE, runner.state)
-    }
-
-    // ----- Error técnico -------------------------------------------------------
-
-    @Test
-    fun technicalError_transitionsToError() {
-        load(activity(question("q1")))
-        runner.reportTechnicalError("fallo grave")
-        assertEquals(ClassicTimerState.ERROR, runner.state)
-        assertEquals("fallo grave", runner.errorMessage)
-    }
-
-    // ----- Tiempo efectivo -----------------------------------------------------
-
-    @Test
-    fun invalidQuestionMaxTime_usesCentralDefault() {
-        load(activity(question("q1", maxTimeSeconds = -1)))
-        reachWaitingResponse()
-        assertEquals(CLASSIC_DEFAULT_MAX_TIME_SECONDS, runner.progress?.effectiveMaxTimeSeconds)
-    }
-
-    @Test
-    fun progressCarriesMediationKey() {
-        load(activity(question("q1", mediationKey = "ANIMAL_DOG_SOUND")))
-        reachWaitingResponse()
-        assertEquals("ANIMAL_DOG_SOUND", runner.progress?.currentQuestionMediationKey)
-    }
-
-    @Test
-    fun validQuestionMaxTime_doesNotOverrideCentralDefault() {
-        load(activity(question("q1", maxTimeSeconds = 15)))
-        reachWaitingResponse()
-        assertEquals(CLASSIC_DEFAULT_MAX_TIME_SECONDS, runner.progress?.effectiveMaxTimeSeconds)
-    }
-
-    @Test
-    fun centralResponseTimeIsUsedForAllQuestions() {
-        runner = ClassicTimerRunner(responseTimeSeconds = 20, now = { 1_000L })
-        load(activity(question("q1", maxTimeSeconds = 15), question("q2", maxTimeSeconds = 30)))
-        reachWaitingResponse()
-        assertEquals(20, runner.progress?.effectiveMaxTimeSeconds)
-        runner.onTimeExpired()
-        runner.advanceQuestion()
-        runner.startResponseWindow()
-        assertEquals(20, runner.progress?.effectiveMaxTimeSeconds)
-    }
-
-    // ----- Reinicio de sesión --------------------------------------------------
-
-    @Test
-    fun reloadAfterCompletion_resetsToIdle_thenReady() {
-        load(activity(question("q1")))
-        reachWaitingResponse()
-        runner.onAnswerReceived()
-        runner.advanceQuestion()
-        assertEquals(ClassicTimerState.SESSION_COMPLETED, runner.state)
-
-        // Nueva carga desde estado terminal
-        load(activity(question("q2")))
-        assertEquals(ClassicTimerState.READY, runner.state)
-        assertEquals(0, runner.progress?.currentQuestionIndex)
     }
 }

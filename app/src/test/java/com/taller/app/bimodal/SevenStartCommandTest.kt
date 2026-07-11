@@ -8,6 +8,11 @@ import org.junit.Test
 class SevenStartCommandTest {
 
     @Test
+    fun primaryHintUsesNaturalActivationPhrase() {
+        assertEquals("Di: Hola Seven", SevenStartCommand.PRIMARY_HINT)
+    }
+
+    @Test
     fun acceptsHolaSevenAndSimpleVariants() {
         assertTrue(SevenStartCommand.matches("Hola Seven"))
         assertTrue(SevenStartCommand.matches("hola seven"))

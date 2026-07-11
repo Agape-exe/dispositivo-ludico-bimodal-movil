@@ -325,6 +325,7 @@ fun MetricsExportScreen(onBack: () -> Unit) {
         RecentSessionsSection(
             isLoading = isLoadingCounts,
             sessions = filteredSessions,
+            modeFilter = sessionModeFilter,
             isExporting = isExporting,
             onExportPdf = { session ->
                 pendingPdfSessionId = session.sessionId
@@ -548,6 +549,7 @@ private fun SessionFiltersSection(
 private fun RecentSessionsSection(
     isLoading: Boolean,
     sessions: List<ExportSessionDto>,
+    modeFilter: SessionModeFilter,
     isExporting: Boolean,
     onExportPdf: (ExportSessionDto) -> Unit
 ) {
@@ -569,18 +571,26 @@ private fun RecentSessionsSection(
                     .padding(vertical = 8.dp)
             )
             sessions.isEmpty() -> Text(
-                text = "No hay sesiones que coincidan con el filtro.",
+                text = if (modeFilter == SessionModeFilter.CLASSIC) {
+                    "El modo temporizador no registra métricas. Solo presenta preguntas con tiempo."
+                } else {
+                    "No hay sesiones que coincidan con el filtro."
+                },
                 fontSize = 14.sp,
                 color = RecordsText
             )
             else -> sessions.forEach { session ->
+                val isClassicHistory = session.operationMode == "CLASSIC"
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 8.dp)
                 ) {
                     Text(
-                        text = "ID ${session.sessionId} - ${session.activityName ?: "Sesion sin nombre"}",
+                        text = buildString {
+                            append("ID ${session.sessionId} - ${session.activityName ?: "Sesion sin nombre"}")
+                            if (isClassicHistory) append(" (histórico)")
+                        },
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = RecordsText
@@ -592,14 +602,22 @@ private fun RecentSessionsSection(
                         fontSize = 13.sp,
                         color = RecordsSubtitle
                     )
-                    Text(
-                        text = "Respondidas: ${session.attempts.count { it.transcription != null }} | " +
-                            "Sin respuesta: ${session.summary.noResponseCount} | " +
-                            "Correctas internas: ${session.summary.correctCount ?: 0} | " +
-                            "Incorrectas internas: ${session.summary.incorrectCount ?: 0}",
-                        fontSize = 13.sp,
-                        color = RecordsSubtitle
-                    )
+                    if (isClassicHistory) {
+                        Text(
+                            text = "Registro histórico anterior a la simplificación del temporizador.",
+                            fontSize = 13.sp,
+                            color = RecordsSubtitle
+                        )
+                    } else {
+                        Text(
+                            text = "Respondidas: ${session.attempts.count { it.transcription != null }} | " +
+                                "Sin respuesta: ${session.summary.noResponseCount} | " +
+                                "Correctas: ${session.summary.correctCount ?: 0} | " +
+                                "Incorrectas: ${session.summary.incorrectCount ?: 0}",
+                            fontSize = 13.sp,
+                            color = RecordsSubtitle
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     ExportButton(
                         text = "Exportar PDF de esta sesion",

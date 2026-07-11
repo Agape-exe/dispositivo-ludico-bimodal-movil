@@ -11,13 +11,7 @@ data class ClassicTimerProgress(
     val currentQuestionId: String,
     val currentQuestionText: String,
     val currentQuestionMediationKey: String? = null,
-    val maxTimeSeconds: Int,
-    val sessionStartedAt: Long,
-    val questionStartedAt: Long? = null,
-    val answerReceived: Boolean = false,
-    val hadPartialResponseOnTimeout: Boolean = false,
-    val lastTranscription: String? = null,
-    val responseLatencyMs: Long? = null
+    val maxTimeSeconds: Int
 ) {
     val questionNumber: Int get() = currentQuestionIndex + 1
     val isLastQuestion: Boolean get() = currentQuestionIndex == totalQuestions - 1
