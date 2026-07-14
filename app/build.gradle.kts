@@ -70,6 +70,16 @@ android {
         )
         buildConfigField(
             "String",
+            "GOOGLE_SPEECH_API_KEY",
+            buildConfigString(localSecret("GOOGLE_SPEECH_API_KEY"))
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_TRANSCRIPTION_MODEL",
+            buildConfigString(localSecret("OPENAI_TRANSCRIPTION_MODEL").ifBlank { "gpt-4o-mini-transcribe" })
+        )
+        buildConfigField(
+            "String",
             "OPENAI_TTS_MODEL",
             buildConfigString(localSecret("OPENAI_TTS_MODEL").ifBlank { "gpt-4o-mini-tts" })
         )

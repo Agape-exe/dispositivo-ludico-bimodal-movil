@@ -39,6 +39,7 @@ object MetricsReportMapper {
             notInterpretableCount = session.summary.notInterpretableCount,
             timeoutCount = session.summary.timeoutCount,
             totalAttempts = session.summary.totalAttempts,
+            validVoiceResponseCount = session.summary.validVoiceResponseCount,
             averageResponseTimeMs = avgMs,
             attentionLossCount = session.technicalEvents.count { it.isAttentionLoss() },
             recaptureCount = session.technicalEvents.count { it.isRecaptureExecuted() },

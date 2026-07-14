@@ -54,13 +54,18 @@ class InteractionDataLogger(
     /**
      * Cierra la sesión con el estado final y los conteos del modo bimodal.
      * Usa [summary] para llenar correctCount, incorrectCount, etc.
+     *
+     * [validVoiceResponseCount] es el conteo oficial FINAL-CORE02 de respuestas
+     * de voz válidas del niño (transcripción no vacía en una pregunta evaluada).
+     * No incluye "Hola Seven", conversación inicial, timeouts ni capturas vacías.
      */
     suspend fun finishBimodalSession(
         sessionId: Long,
         finalState: String,
         startedAtMs: Long,
         completedQuestions: Int,
-        summary: BimodalSessionSummary
+        summary: BimodalSessionSummary,
+        validVoiceResponseCount: Int = 0
     ) {
         if (sessionId <= 0L) return
         val endedAt = now()
@@ -79,7 +84,8 @@ class InteractionDataLogger(
             noResponseCount = summary.noResponse,
             notInterpretableCount = summary.notInterpretable,
             timeoutCount = summary.timeExpired,
-            technicalErrorCount = summary.technicalErrors + summary.sttErrors
+            technicalErrorCount = summary.technicalErrors + summary.sttErrors,
+            validVoiceResponseCount = validVoiceResponseCount.coerceAtLeast(0)
         )
     }
 
@@ -116,7 +122,10 @@ class InteractionDataLogger(
             noResponseCount = noResponseCount,
             notInterpretableCount = notInterpretableCount,
             timeoutCount = timeoutCount,
-            technicalErrorCount = 0
+            technicalErrorCount = 0,
+            // El modo temporizador NUNCA cuenta respuestas de voz válidas: ese
+            // conteo es exclusivo del modo inteligente (FINAL-CORE02).
+            validVoiceResponseCount = 0
         )
     }
 

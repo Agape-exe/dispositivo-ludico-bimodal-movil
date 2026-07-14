@@ -71,7 +71,14 @@ data class AppSettings(
         const val MIN_INITIAL_CONVERSATION_DURATION_SECONDS = 15
         const val MAX_INITIAL_CONVERSATION_DURATION_SECONDS = 120
 
-        const val DEFAULT_EARLY_ANSWER_CAPTURE_ENABLED = true
+        /**
+         * FINAL-CORE02: apagada por defecto. La ventana temprana abria la escucha
+         * entre el feedback y la repeticion de la pregunta, lo que hacia ambigua
+         * la senal de "ahora respondes tu". El flujo oficial del reintento es
+         * feedback → aviso de repeticion → pregunta → escucha. La opcion sigue
+         * disponible para el docente que quiera capturar respuestas anticipadas.
+         */
+        const val DEFAULT_EARLY_ANSWER_CAPTURE_ENABLED = false
         const val DEFAULT_EARLY_ANSWER_WINDOW_MS = 2000
         const val MIN_EARLY_ANSWER_WINDOW_MS = 500
         const val MAX_EARLY_ANSWER_WINDOW_MS = 4000

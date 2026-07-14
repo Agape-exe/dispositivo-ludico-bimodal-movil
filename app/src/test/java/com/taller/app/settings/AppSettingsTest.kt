@@ -25,8 +25,9 @@ class AppSettingsTest {
         assertFalse(defaults.initialConversationEnabled)
         assertEquals(1, defaults.initialConversationMaxChildTurns)
         assertEquals(60, defaults.initialConversationMaxDurationSeconds)
-        // La captura temprana de respuestas viene activada.
-        assertTrue(defaults.earlyAnswerCaptureEnabled)
+        // FINAL-CORE02: la captura temprana viene apagada por defecto para que la
+        // senal del reintento sea clara (feedback → aviso → pregunta → escucha).
+        assertFalse(defaults.earlyAnswerCaptureEnabled)
         assertEquals(2000, defaults.earlyAnswerWindowMs)
     }
 

@@ -10,14 +10,17 @@ import kotlinx.coroutines.sync.withLock
  * Punto unico de entrada para la voz oficial de Seven.
  *
  * Los flujos de interaccion solo solicitan que Seven diga un texto; esta clase
- * decide la cadena de proveedores segun la preferencia guardada. Gemini TTS es
- * la voz principal recomendada; OpenAI, Azure y TTS local quedan como respaldo.
+ * decide la cadena de proveedores segun la preferencia guardada.
+ *
+ * FINAL-CORE02: la voz oficial de Seven usa SOLO dos proveedores: Gemini TTS
+ * como principal y OpenAI TTS como respaldo. Azure, ElevenLabs y el TTS local
+ * del dispositivo quedaron retirados de la cadena; las preferencias antiguas
+ * que apuntaban a ellos se normalizan a Gemini. Si ninguno de los dos esta
+ * configurado, la reproduccion devuelve un fallo seguro (nunca crashea).
  */
 class SevenVoiceService(
     private val geminiProvider: ToyVoiceProvider,
     private val openAiProvider: ToyVoiceProvider,
-    private val azureProvider: ToyVoiceProvider,
-    private val localProvider: ToyVoiceProvider,
     private val preferredProvider: () -> ToyVoiceProviderType = { ToyVoiceProviderType.GEMINI_TTS },
     private val providerInfo: (ToyVoiceProviderType) -> VoiceProviderInfo = { VoiceProviderInfo() }
 ) {
@@ -157,15 +160,11 @@ class SevenVoiceService(
     fun stop() {
         geminiProvider.stop()
         openAiProvider.stop()
-        azureProvider.stop()
-        localProvider.stop()
     }
 
     fun release() {
         geminiProvider.release()
         openAiProvider.release()
-        azureProvider.release()
-        localProvider.release()
     }
 
     private fun buildProviderChain(
@@ -173,9 +172,7 @@ class SevenVoiceService(
     ): List<Pair<ToyVoiceProviderType, ToyVoiceProvider>> {
         val providers = mapOf(
             ToyVoiceProviderType.GEMINI_TTS to geminiProvider,
-            ToyVoiceProviderType.OPENAI_TTS to openAiProvider,
-            ToyVoiceProviderType.AZURE_NEURAL to azureProvider,
-            ToyVoiceProviderType.LOCAL to localProvider
+            ToyVoiceProviderType.OPENAI_TTS to openAiProvider
         )
         return ToyVoiceProviderFallbackOrder.forPreferred(requested).map { type ->
             type to providers.getValue(type)
@@ -190,29 +187,33 @@ class SevenVoiceService(
 }
 
 object ToyVoiceProviderFallbackOrder {
-    fun forPreferred(provider: ToyVoiceProviderType): List<ToyVoiceProviderType> = when (normalizeProvider(provider)) {
-        ToyVoiceProviderType.GEMINI_TTS -> listOf(
-            ToyVoiceProviderType.GEMINI_TTS,
-            ToyVoiceProviderType.OPENAI_TTS,
-            ToyVoiceProviderType.AZURE_NEURAL,
-            ToyVoiceProviderType.LOCAL
-        )
-        ToyVoiceProviderType.OPENAI_TTS -> listOf(
-            ToyVoiceProviderType.OPENAI_TTS,
-            ToyVoiceProviderType.AZURE_NEURAL,
-            ToyVoiceProviderType.LOCAL
-        )
-        ToyVoiceProviderType.AZURE_NEURAL -> listOf(
-            ToyVoiceProviderType.AZURE_NEURAL,
-            ToyVoiceProviderType.LOCAL
-        )
-        ToyVoiceProviderType.LOCAL -> listOf(ToyVoiceProviderType.LOCAL)
-        ToyVoiceProviderType.ELEVENLABS -> forPreferred(ToyVoiceProviderType.GEMINI_TTS)
-    }
+    /**
+     * FINAL-CORE02: cadena oficial de la voz de Seven. Gemini principal con
+     * respaldo OpenAI; con OpenAI como preferido se intenta Gemini de respaldo.
+     * Los proveedores retirados (Azure, ElevenLabs, local) se normalizan a la
+     * cadena de Gemini para migrar configuraciones antiguas sin crashear.
+     */
+    fun forPreferred(provider: ToyVoiceProviderType): List<ToyVoiceProviderType> =
+        when (normalizeProvider(provider)) {
+            ToyVoiceProviderType.OPENAI_TTS -> listOf(
+                ToyVoiceProviderType.OPENAI_TTS,
+                ToyVoiceProviderType.GEMINI_TTS
+            )
+            else -> listOf(
+                ToyVoiceProviderType.GEMINI_TTS,
+                ToyVoiceProviderType.OPENAI_TTS
+            )
+        }
 }
 
-private fun normalizeProvider(provider: ToyVoiceProviderType): ToyVoiceProviderType =
-    if (provider == ToyVoiceProviderType.ELEVENLABS) ToyVoiceProviderType.GEMINI_TTS else provider
+/**
+ * Normaliza cualquier proveedor retirado (Azure, ElevenLabs, TTS local) al
+ * proveedor principal Gemini. Solo Gemini y OpenAI son validos en el flujo.
+ */
+fun normalizeProvider(provider: ToyVoiceProviderType): ToyVoiceProviderType = when (provider) {
+    ToyVoiceProviderType.GEMINI_TTS, ToyVoiceProviderType.OPENAI_TTS -> provider
+    else -> ToyVoiceProviderType.GEMINI_TTS
+}
 
 private fun modeFromSource(source: String): VoiceMode = when (source.lowercase()) {
     "configurar" -> VoiceMode.CONFIGURAR
