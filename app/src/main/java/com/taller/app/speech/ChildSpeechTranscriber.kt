@@ -9,7 +9,7 @@ import android.content.Context
  * reconocedor por su cuenta.
  *
  * Cadena de proveedores (ver [SttProviderResolver]):
- *  - GOOGLE_CLOUD (principal, requiere GOOGLE_SPEECH_API_KEY),
+ *  - GOOGLE_CLOUD (principal, requiere credencial importada en debug o API key),
  *  - OPENAI_TRANSCRIPTION (respaldo, requiere OPENAI_API_KEY),
  *  - ANDROID_SYSTEM (respaldo tecnico local, siempre al final).
  *
@@ -31,7 +31,7 @@ class ChildSpeechTranscriber(
 
     /** Disponibilidad real de cada proveedor en este dispositivo/compilacion. */
     fun availability(): SttAvailability = SttAvailability(
-        googleConfigured = SttProviderConfig.googleConfigured(),
+        googleConfigured = SttProviderConfig.googleConfigured(context),
         openAiConfigured = SttProviderConfig.openAiConfigured(),
         androidAvailable = SpeechToTextService.isAvailable(context)
     )

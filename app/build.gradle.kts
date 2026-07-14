@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -22,6 +23,12 @@ fun localSecret(name: String): String =
 
 fun buildConfigString(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+val googleCloudSttCredentialsPath = localSecret("GOOGLE_CLOUD_STT_CREDENTIALS_PATH")
+val googleCloudSttCredentialsFileExists = googleCloudSttCredentialsPath
+    .takeIf(String::isNotBlank)
+    ?.let(::File)
+    ?.isFile == true
 
 android {
     namespace = "com.taller.app"
@@ -72,6 +79,19 @@ android {
             "String",
             "GOOGLE_SPEECH_API_KEY",
             buildConfigString(localSecret("GOOGLE_SPEECH_API_KEY"))
+        )
+        // La ruta solo se evalua en la PC durante la compilacion. No se inyecta
+        // en el APK porque Android no puede acceder a C:/Users/... y no debe
+        // confundirse con una credencial utilizable en runtime.
+        buildConfigField(
+            "boolean",
+            "GOOGLE_CLOUD_STT_CREDENTIALS_PATH_CONFIGURED",
+            googleCloudSttCredentialsPath.isNotBlank().toString()
+        )
+        buildConfigField(
+            "boolean",
+            "GOOGLE_CLOUD_STT_CREDENTIALS_FILE_EXISTS_AT_BUILD",
+            googleCloudSttCredentialsFileExists.toString()
         )
         buildConfigField(
             "String",

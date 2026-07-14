@@ -1,6 +1,12 @@
 *.iml
 .gradle
 /local.properties
+secrets/
+**/*credential*.json
+**/*credentials*.json
+**/*service-account*.json
+**/*service_account*.json
+**/gen-lang-client-*.json
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml

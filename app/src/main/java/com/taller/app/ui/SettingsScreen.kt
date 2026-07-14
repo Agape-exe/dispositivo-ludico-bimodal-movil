@@ -62,6 +62,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.taller.app.BuildConfig
 import com.taller.app.attention.AttentionDebugSettings
 import com.taller.app.attention.AttentionDebugSettingsRepository
 import androidx.room.withTransaction
@@ -80,10 +81,15 @@ import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.settings.MarkdownLimiterFile
 import com.taller.app.settings.MarkdownLimiterRepository
+import com.taller.app.speech.GoogleSttCredentialStatus
+import com.taller.app.speech.GoogleSttCredentialStore
+import com.taller.app.speech.SttProviderConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,6 +152,10 @@ fun SettingsScreen(
     var limiterMessage by remember { mutableStateOf<String?>(null) }
     var limiterContentDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
     var limiterDeleteTarget by remember { mutableStateOf<MarkdownLimiterFile?>(null) }
+    var googleCredentialStatus by remember {
+        mutableStateOf(SttProviderConfig.googleCredentialStatus(context))
+    }
+    var googleCredentialMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(savedGptSettings) {
         draftGptSettings = savedGptSettings
@@ -175,6 +185,19 @@ fun SettingsScreen(
             val result = markdownLimiterRepository.importFromUri(uri)
             limiterMessage = result.message
             refreshLimiters()
+        }
+    }
+
+    val googleCredentialImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                GoogleSttCredentialStore.importFromUri(context.applicationContext, uri)
+            }
+            googleCredentialMessage = result.message
+            googleCredentialStatus = SttProviderConfig.googleCredentialStatus(context)
         }
     }
 
@@ -408,9 +431,26 @@ fun SettingsScreen(
             }
 
             SpeechRecognitionSection(
-                googleConfigured = com.taller.app.speech.SttProviderConfig.googleConfigured(),
-                openAiConfigured = com.taller.app.speech.SttProviderConfig.openAiConfigured(),
-                androidAvailable = com.taller.app.speech.SpeechToTextService.isAvailable(context)
+                googleCredentialStatus = googleCredentialStatus,
+                googleCredentialMessage = googleCredentialMessage,
+                openAiConfigured = SttProviderConfig.openAiConfigured(),
+                androidAvailable = com.taller.app.speech.SpeechToTextService.isAvailable(context),
+                importSupported = BuildConfig.DEBUG && GoogleSttCredentialStore.isImportSupported(),
+                onImportCredential = {
+                    googleCredentialMessage = null
+                    googleCredentialImportLauncher.launch(arrayOf("application/json", "text/json"))
+                },
+                onRemoveCredential = {
+                    val removed = GoogleSttCredentialStore.removeImportedCredential(
+                        context.applicationContext
+                    )
+                    googleCredentialMessage = if (removed) {
+                        "Credencial importada eliminada del almacenamiento interno."
+                    } else {
+                        "No se pudo eliminar la credencial importada."
+                    }
+                    googleCredentialStatus = SttProviderConfig.googleCredentialStatus(context)
+                }
             )
 
             TestDataSection(
@@ -756,9 +796,13 @@ fun SettingsScreen(
  */
 @Composable
 private fun SpeechRecognitionSection(
-    googleConfigured: Boolean,
+    googleCredentialStatus: GoogleSttCredentialStatus,
+    googleCredentialMessage: String?,
     openAiConfigured: Boolean,
-    androidAvailable: Boolean
+    androidAvailable: Boolean,
+    importSupported: Boolean,
+    onImportCredential: () -> Unit,
+    onRemoveCredential: () -> Unit
 ) {
     SettingsSectionHeader(
         title = "Reconocimiento de voz (STT)",
@@ -772,8 +816,18 @@ private fun SpeechRecognitionSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Principal: Google Cloud Speech-to-Text - " +
-                    if (googleConfigured) "credencial detectada" else "sin credencial",
+                text = "Principal: Google Cloud Speech-to-Text - " + when (googleCredentialStatus) {
+                    GoogleSttCredentialStatus.IMPORTED_DEBUG ->
+                        "credencial importada en almacenamiento interno"
+                    GoogleSttCredentialStatus.API_KEY_CONFIGURED ->
+                        "GOOGLE_SPEECH_API_KEY detectada en la compilacion"
+                    GoogleSttCredentialStatus.DESKTOP_PATH_EXISTS ->
+                        "la ruta existe en la PC, pero el celular no puede acceder a ella"
+                    GoogleSttCredentialStatus.DESKTOP_PATH_MISSING ->
+                        "GOOGLE_CLOUD_STT_CREDENTIALS_PATH no apunta a un archivo existente"
+                    GoogleSttCredentialStatus.NOT_CONFIGURED ->
+                        "no se encontro GOOGLE_CLOUD_STT_CREDENTIALS_PATH en local.properties"
+                },
                 fontSize = 13.sp,
                 lineHeight = 17.sp
             )
@@ -791,12 +845,64 @@ private fun SpeechRecognitionSection(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Las capturas de esta version usan el reconocedor local del sistema; " +
-                    "la conexion directa a Google/OpenAI quedo preparada en la configuracion.",
+                text = "Las capturas de esta version siguen usando Android SpeechRecognizer. " +
+                    "El repo aun no implementa la captura de audio ni las llamadas remotas a " +
+                    "Google/OpenAI; importar la cuenta de servicio solo la deja disponible " +
+                    "para un conector Google STT futuro.",
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
             )
+            if (importSupported) {
+                Text(
+                    text = "Prototipo local (solo debug): el JSON se valida y se guarda en " +
+                        "almacenamiento privado sin mostrar ni registrar su contenido. No uses " +
+                        "una cuenta de servicio embebida en una version distribuida.",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                Button(
+                    onClick = onImportCredential,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                ) {
+                    Text("Importar JSON de Google STT (solo debug)")
+                }
+                if (googleCredentialStatus == GoogleSttCredentialStatus.IMPORTED_DEBUG) {
+                    TextButton(
+                        onClick = onRemoveCredential,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Quitar credencial importada")
+                    }
+                }
+            } else {
+                Text(
+                    text = "La importacion de cuentas de servicio no se incluye en release.",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            googleCredentialMessage?.let { message ->
+                Text(
+                    text = message,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = if (message.contains("importada", ignoreCase = true) ||
+                        message.contains("eliminada", ignoreCase = true)
+                    ) {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
             Text(
                 text = "Idioma configurado: espanol (es-PE). No se guarda audio del nino.",
                 fontSize = 12.sp,
