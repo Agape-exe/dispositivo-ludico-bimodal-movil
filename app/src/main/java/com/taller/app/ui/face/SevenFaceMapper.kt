@@ -86,6 +86,7 @@ fun classicSevenFaceState(
         ClassicTimerState.SESSION_STARTING -> SevenFaceState.INTRO
         ClassicTimerState.PRESENTING_QUESTION -> SevenFaceState.SPEAKING
         ClassicTimerState.WAITING_FIXED_RESPONSE -> SevenFaceState.LISTENING
+        ClassicTimerState.RESPONSE_IN_PROGRESS -> SevenFaceState.LISTENING
         ClassicTimerState.ANSWER_RECEIVED -> SevenFaceState.WAITING
         ClassicTimerState.TIME_EXPIRED -> SevenFaceState.TIMEOUT_NEUTRAL
         ClassicTimerState.SESSION_COMPLETED -> SevenFaceState.CLOSING

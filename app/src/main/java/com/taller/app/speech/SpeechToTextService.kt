@@ -33,6 +33,8 @@ class SpeechToTextService(
     private var onFinal: ((String) -> Unit)? = null
     private var onStopped: ((String) -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
+    private var onSpeechStart: (() -> Unit)? = null
+    private var onSpeechEnd: (() -> Unit)? = null
 
     fun startListening(
         onStateChange: (SttState) -> Unit,
@@ -40,7 +42,9 @@ class SpeechToTextService(
         onPartialResult: (String) -> Unit,
         onFinalResult: (String) -> Unit,
         onStopped: (String) -> Unit,
-        onError: (String) -> Unit
+        onError: (String) -> Unit,
+        onSpeechStart: () -> Unit = {},
+        onSpeechEnd: () -> Unit = {}
     ) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             onError("El reconocimiento de voz no está disponible en este dispositivo.")
@@ -53,6 +57,8 @@ class SpeechToTextService(
         this.onFinal = onFinalResult
         this.onStopped = onStopped
         this.onError = onError
+        this.onSpeechStart = onSpeechStart
+        this.onSpeechEnd = onSpeechEnd
 
         userStopped = false
         lastPartial = ""
@@ -109,13 +115,17 @@ class SpeechToTextService(
             onReady?.invoke()
         }
 
-        override fun onBeginningOfSpeech() {}
+        override fun onBeginningOfSpeech() {
+            onSpeechStart?.invoke()
+        }
 
         override fun onRmsChanged(rmsdB: Float) {}
 
         override fun onBufferReceived(buffer: ByteArray?) {}
 
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() {
+            onSpeechEnd?.invoke()
+        }
 
         override fun onError(error: Int) {
             if (userStopped || state == SttState.STOPPING) {
@@ -190,6 +200,8 @@ class SpeechToTextService(
         onFinal = null
         onStopped = null
         onError = null
+        onSpeechStart = null
+        onSpeechEnd = null
     }
 
     private fun getErrorMessage(errorCode: Int): String {

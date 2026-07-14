@@ -6,23 +6,19 @@ sealed interface ClassicTimerEvent {
     data class LoadActivity(val activity: LearningActivity) : ClassicTimerEvent
     data object ActivityLoaded : ClassicTimerEvent
     data object StartSession : ClassicTimerEvent
-
-    /** Frase de apertura terminó; presentar la pregunta actual. */
     data object PresentCurrentQuestion : ClassicTimerEvent
-
-    /** Frase de pregunta terminó; abrir ventana de respuesta. */
     data object StartResponseWindow : ClassicTimerEvent
 
-    /** Se detectó voz (STT obtuvo texto). */
+    /** Se detecto que el nino empezo a hablar dentro de la ventana. */
+    data object ResponseStarted : ClassicTimerEvent
+
+    /** Termino el habla; cualquier texto reconocido se descarta. */
     data object AnswerReceived : ClassicTimerEvent
 
-    /**
-     * El tiempo asignado se agotó.
-     * @param hadPartialResponse indica si el STT captó texto parcial antes del timeout.
-     */
-    data class TimeExpired(val hadPartialResponse: Boolean = false) : ClassicTimerEvent
+    /** La ventana termino sin detectar inicio de voz. */
+    data object TimeExpired : ClassicTimerEvent
 
-    /** Frase post-respuesta o post-timeout terminó; avanzar a siguiente pregunta o cerrar. */
+    /** Avanzar sin feedback a la siguiente pregunta o al cierre. */
     data object AdvanceQuestion : ClassicTimerEvent
 
     data object CancelSession : ClassicTimerEvent

@@ -193,6 +193,16 @@ class SevenFaceMapperTest {
     }
 
     @Test
+    fun classicSpeechInProgressRemainsNeutralListening() {
+        val face = classicSevenFaceState(
+            state = ClassicTimerState.RESPONSE_IN_PROGRESS,
+            toyVoiceSpeaking = false,
+            pausedByTeacher = false
+        )
+        assertEquals(SevenFaceState.LISTENING, face)
+    }
+
+    @Test
     fun classicTimeoutMapsToTimeoutNeutral() {
         val face = classicSevenFaceState(
             state = ClassicTimerState.TIME_EXPIRED,
