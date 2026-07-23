@@ -17,65 +17,65 @@ class ToyVoiceFallbackTest {
     }
 
     @Test
-    fun fallbackOrder_forGeminiUsesOpenAiAzureAndLocal() {
+    fun fallbackOrder_forGeminiUsesOnlyOpenAiAsBackup() {
         assertEquals(
             listOf(
                 ToyVoiceProviderType.GEMINI_TTS,
-                ToyVoiceProviderType.OPENAI_TTS,
-                ToyVoiceProviderType.AZURE_NEURAL,
-                ToyVoiceProviderType.LOCAL
+                ToyVoiceProviderType.OPENAI_TTS
             ),
             ToyVoiceProviderFallbackOrder.forPreferred(ToyVoiceProviderType.GEMINI_TTS)
         )
     }
 
     @Test
-    fun fallbackOrder_forOpenAiUsesAzureAndLocal() {
+    fun fallbackOrder_forOpenAiUsesGeminiAsBackup() {
         assertEquals(
             listOf(
                 ToyVoiceProviderType.OPENAI_TTS,
-                ToyVoiceProviderType.AZURE_NEURAL,
-                ToyVoiceProviderType.LOCAL
+                ToyVoiceProviderType.GEMINI_TTS
             ),
             ToyVoiceProviderFallbackOrder.forPreferred(ToyVoiceProviderType.OPENAI_TTS)
         )
     }
 
     @Test
-    fun fallbackOrder_forAzureUsesLocal() {
+    fun fallbackOrder_retiredProvidersNormalizeToGeminiChain() {
+        val geminiChain = listOf(
+            ToyVoiceProviderType.GEMINI_TTS,
+            ToyVoiceProviderType.OPENAI_TTS
+        )
         assertEquals(
-            listOf(ToyVoiceProviderType.AZURE_NEURAL, ToyVoiceProviderType.LOCAL),
+            geminiChain,
             ToyVoiceProviderFallbackOrder.forPreferred(ToyVoiceProviderType.AZURE_NEURAL)
         )
-    }
-
-    @Test
-    fun fallbackOrder_forLocalUsesOnlyLocal() {
         assertEquals(
-            listOf(ToyVoiceProviderType.LOCAL),
+            geminiChain,
             ToyVoiceProviderFallbackOrder.forPreferred(ToyVoiceProviderType.LOCAL)
         )
+        assertEquals(
+            geminiChain,
+            ToyVoiceProviderFallbackOrder.forPreferred(ToyVoiceProviderType.ELEVENLABS)
+        )
     }
 
     @Test
-    fun speakWithFallback_usesAzureWhenOpenAiFails() = runBlocking {
-        val outcome = ToyVoiceFallback.speakWithFallback(
-            text = "Hola",
-            providerRequested = ToyVoiceProviderType.OPENAI_TTS,
-            providers = listOf(
-                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(
-                    VoicePlaybackResult.Error(VoiceErrorType.NOT_CONFIGURED, "sin openai")
-                ),
-                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success()),
-                ToyVoiceProviderType.LOCAL to FakeProvider(VoicePlaybackResult.Success())
-            )
+    fun normalizeProvider_retiredProvidersBecomeGemini() {
+        assertEquals(
+            ToyVoiceProviderType.GEMINI_TTS,
+            normalizeProvider(ToyVoiceProviderType.AZURE_NEURAL)
         )
-
-        assertTrue(outcome is VoiceOutcome.Completed)
-        assertEquals(ToyVoiceProviderType.OPENAI_TTS, outcome.providerRequested)
-        assertEquals(ToyVoiceProviderType.AZURE_NEURAL, outcome.providerUsed)
-        assertTrue(outcome.fallbackUsed)
-        assertEquals("sin openai", outcome.errorMessage)
+        assertEquals(
+            ToyVoiceProviderType.GEMINI_TTS,
+            normalizeProvider(ToyVoiceProviderType.LOCAL)
+        )
+        assertEquals(
+            ToyVoiceProviderType.GEMINI_TTS,
+            normalizeProvider(ToyVoiceProviderType.ELEVENLABS)
+        )
+        assertEquals(
+            ToyVoiceProviderType.OPENAI_TTS,
+            normalizeProvider(ToyVoiceProviderType.OPENAI_TTS)
+        )
     }
 
     @Test
@@ -85,7 +85,7 @@ class ToyVoiceFallbackTest {
             providerRequested = ToyVoiceProviderType.OPENAI_TTS,
             providers = listOf(
                 ToyVoiceProviderType.OPENAI_TTS to FakeProvider(VoicePlaybackResult.Success()),
-                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success())
+                ToyVoiceProviderType.GEMINI_TTS to FakeProvider(VoicePlaybackResult.Success())
             )
         )
 
@@ -103,9 +103,7 @@ class ToyVoiceFallbackTest {
                 ToyVoiceProviderType.GEMINI_TTS to FakeProvider(
                     VoicePlaybackResult.Error(VoiceErrorType.HTTP_ERROR, "sin gemini")
                 ),
-                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(VoicePlaybackResult.Success()),
-                ToyVoiceProviderType.AZURE_NEURAL to FakeProvider(VoicePlaybackResult.Success()),
-                ToyVoiceProviderType.LOCAL to FakeProvider(VoicePlaybackResult.Success())
+                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(VoicePlaybackResult.Success())
             )
         )
 
@@ -117,14 +115,31 @@ class ToyVoiceFallbackTest {
     }
 
     @Test
+    fun speakWithFallback_bothProvidersFailReturnsSafeFailure() = runBlocking {
+        val outcome = ToyVoiceFallback.speakWithFallback(
+            text = "Hola",
+            providerRequested = ToyVoiceProviderType.GEMINI_TTS,
+            providers = listOf(
+                ToyVoiceProviderType.GEMINI_TTS to FakeProvider(
+                    VoicePlaybackResult.Error(VoiceErrorType.NOT_CONFIGURED, "sin gemini")
+                ),
+                ToyVoiceProviderType.OPENAI_TTS to FakeProvider(
+                    VoicePlaybackResult.Error(VoiceErrorType.NOT_CONFIGURED, "sin openai")
+                )
+            )
+        )
+
+        assertTrue(outcome is VoiceOutcome.Failed)
+        assertEquals(null, outcome.providerUsed)
+    }
+
+    @Test
     fun sevenVoiceService_reportsRequestedUsedAndFallback() = runBlocking {
         val service = SevenVoiceService(
             geminiProvider = FakeProvider(
                 VoicePlaybackResult.Error(VoiceErrorType.HTTP_ERROR, "sin gemini")
             ),
             openAiProvider = FakeProvider(VoicePlaybackResult.Success()),
-            azureProvider = FakeProvider(VoicePlaybackResult.Success()),
-            localProvider = FakeProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -143,8 +158,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = gemini,
             openAiProvider = openAi,
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -166,8 +179,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = gemini,
             openAiProvider = openAi,
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.OPENAI_TTS }
         )
 
@@ -189,8 +200,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = gemini,
             openAiProvider = openAi,
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -210,8 +219,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = gemini,
             openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
         var playbackStarts = 0
@@ -232,8 +239,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = gemini,
             openAiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -257,8 +262,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = gemini,
             openAiProvider = openAi,
-            azureProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -282,8 +285,6 @@ class ToyVoiceFallbackTest {
                 VoicePlaybackResult.Success(cacheHit = false, synthesisLatencyMs = 42L, playbackLatencyMs = 90L)
             ),
             openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS },
             providerInfo = { VoiceProviderInfo(model = "gemini-3.1-flash-tts-preview", voice = "Puck") }
         )
@@ -307,8 +308,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = true, cacheKey = "abc123")),
             openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -324,8 +323,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = CountingProvider(VoicePlaybackResult.Error(VoiceErrorType.HTTP_ERROR, "Gemini HTTP 429")),
             openAiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -345,8 +342,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = CountingProvider(VoicePlaybackResult.Success()),
             openAiProvider = CountingProvider(VoicePlaybackResult.Success(cacheHit = false)),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.OPENAI_TTS }
         )
 
@@ -362,8 +357,6 @@ class ToyVoiceFallbackTest {
         val service = SevenVoiceService(
             geminiProvider = CountingProvider(VoicePlaybackResult.Success()),
             openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = CountingProvider(VoicePlaybackResult.Success()),
             preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
@@ -398,13 +391,11 @@ class ToyVoiceFallbackTest {
 
     @Test
     fun sevenVoiceService_serializesConcurrentPlaybackRequests() = runBlocking {
-        val local = SlowCountingProvider(VoicePlaybackResult.Success())
+        val gemini = SlowCountingProvider(VoicePlaybackResult.Success())
         val service = SevenVoiceService(
-            geminiProvider = CountingProvider(VoicePlaybackResult.Success()),
+            geminiProvider = gemini,
             openAiProvider = CountingProvider(VoicePlaybackResult.Success()),
-            azureProvider = CountingProvider(VoicePlaybackResult.Success()),
-            localProvider = local,
-            preferredProvider = { ToyVoiceProviderType.LOCAL }
+            preferredProvider = { ToyVoiceProviderType.GEMINI_TTS }
         )
 
         awaitAll(
@@ -412,8 +403,8 @@ class ToyVoiceFallbackTest {
             async { service.speak("Segunda frase") }
         )
 
-        assertEquals(2, local.calls)
-        assertEquals(1, local.maxConcurrentCalls)
+        assertEquals(2, gemini.calls)
+        assertEquals(1, gemini.maxConcurrentCalls)
     }
 
     @Test

@@ -53,7 +53,8 @@ class MetricsCsvExporter {
         f(s.summary.noResponseCount),
         f(s.summary.notInterpretableCount),
         f(s.summary.timeoutCount),
-        f(s.summary.technicalErrorCount)
+        f(s.summary.technicalErrorCount),
+        f(s.summary.validVoiceResponseCount)
     ).joinToString(SEP)
 
     private fun buildAttemptsRow(session: ExportSessionDto, a: ExportAttemptDto): String =
@@ -136,7 +137,8 @@ class MetricsCsvExporter {
             "started_at_ms", "finished_at_ms", "final_state", "total_duration_ms",
             "total_questions", "completed_questions", "total_attempts",
             "correct_count", "incorrect_count", "no_response_count",
-            "not_interpretable_count", "timeout_count", "technical_error_count"
+            "not_interpretable_count", "timeout_count", "technical_error_count",
+            "valid_voice_response_count"
         )
 
         val ATTEMPTS_HEADER = listOf(

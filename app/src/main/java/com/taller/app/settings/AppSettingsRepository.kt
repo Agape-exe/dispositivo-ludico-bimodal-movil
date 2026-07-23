@@ -37,6 +37,8 @@ class AppSettingsRepository(private val context: Context) {
             booleanPreferencesKey("early_answer_capture_enabled")
         val EARLY_ANSWER_WINDOW_MS =
             intPreferencesKey("early_answer_window_ms")
+        val INTELLIGENT_CONTEXTUAL_FEEDBACK_ENABLED =
+            booleanPreferencesKey("intelligent_contextual_feedback_enabled")
         val UPDATED_AT = longPreferencesKey("updated_at")
     }
 
@@ -61,6 +63,9 @@ class AppSettingsRepository(private val context: Context) {
                 ?: AppSettings.DEFAULT_EARLY_ANSWER_CAPTURE_ENABLED,
             earlyAnswerWindowMs = prefs[Keys.EARLY_ANSWER_WINDOW_MS]
                 ?: AppSettings.DEFAULT_EARLY_ANSWER_WINDOW_MS,
+            intelligentContextualFeedbackEnabled =
+                prefs[Keys.INTELLIGENT_CONTEXTUAL_FEEDBACK_ENABLED]
+                    ?: AppSettings.DEFAULT_INTELLIGENT_CONTEXTUAL_FEEDBACK_ENABLED,
             updatedAt = prefs[Keys.UPDATED_AT] ?: 0L
         ).sanitized()
     }
@@ -101,6 +106,8 @@ class AppSettingsRepository(private val context: Context) {
                 safe.initialConversationMaxDurationSeconds
             prefs[Keys.EARLY_ANSWER_CAPTURE_ENABLED] = safe.earlyAnswerCaptureEnabled
             prefs[Keys.EARLY_ANSWER_WINDOW_MS] = safe.earlyAnswerWindowMs
+            prefs[Keys.INTELLIGENT_CONTEXTUAL_FEEDBACK_ENABLED] =
+                safe.intelligentContextualFeedbackEnabled
             prefs[Keys.UPDATED_AT] = safe.updatedAt
         }
     }
@@ -127,5 +134,9 @@ class AppSettingsRepository(private val context: Context) {
 
     suspend fun saveEarlyAnswerCaptureEnabled(value: Boolean) {
         save(readOnce().copy(earlyAnswerCaptureEnabled = value))
+    }
+
+    suspend fun saveIntelligentContextualFeedbackEnabled(value: Boolean) {
+        save(readOnce().copy(intelligentContextualFeedbackEnabled = value))
     }
 }

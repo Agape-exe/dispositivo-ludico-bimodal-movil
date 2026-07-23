@@ -21,6 +21,11 @@ data class MetricsSessionReport(
     val notInterpretableCount: Int?,
     val timeoutCount: Int,
     val totalAttempts: Int,
+    /**
+     * FINAL-CORE02: respuestas de voz validas emitidas por el nino durante las
+     * preguntas evaluadas del modo inteligente. En modo temporizador es 0.
+     */
+    val validVoiceResponseCount: Int = 0,
     val averageResponseTimeMs: Long?,
     val attentionLossCount: Int,
     val recaptureCount: Int,

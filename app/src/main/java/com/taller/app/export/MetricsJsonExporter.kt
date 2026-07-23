@@ -74,7 +74,8 @@ class MetricsJsonExporter {
         sb.append("        \"noResponseCount\": ").append(s.noResponseCount).append(",\n")
         sb.append("        \"notInterpretableCount\": ").append(jsonNum(s.notInterpretableCount)).append(",\n")
         sb.append("        \"timeoutCount\": ").append(s.timeoutCount).append(",\n")
-        sb.append("        \"technicalErrorCount\": ").append(s.technicalErrorCount).append("\n")
+        sb.append("        \"technicalErrorCount\": ").append(s.technicalErrorCount).append(",\n")
+        sb.append("        \"validVoiceResponseCount\": ").append(s.validVoiceResponseCount).append("\n")
         sb.append("      }")
     }
 

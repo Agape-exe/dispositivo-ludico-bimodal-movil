@@ -36,5 +36,13 @@ data class SessionEntity(
     val noResponseCount: Int = 0,
     val notInterpretableCount: Int? = null,
     val timeoutCount: Int = 0,
-    val technicalErrorCount: Int = 0
+    val technicalErrorCount: Int = 0,
+    /**
+     * FINAL-CORE02: cantidad de respuestas de voz VALIDAS emitidas por el nino
+     * durante las preguntas evaluadas del modo inteligente (transcripcion no
+     * vacia dentro de la ventana de respuesta). Excluye la activacion
+     * "Hola Seven", la conversacion inicial, los timeouts, las capturas vacias
+     * y el modo temporizador. Nunca contiene audio, solo el conteo.
+     */
+    val validVoiceResponseCount: Int = 0
 )
