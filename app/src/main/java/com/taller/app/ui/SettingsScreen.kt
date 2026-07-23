@@ -355,6 +355,7 @@ fun SettingsScreen(
                 attentionEnabled = appSettings.intelligentAttentionEnabled,
                 recaptureEnabled = appSettings.intelligentRecaptureEnabled,
                 recapturesText = recapturesText,
+                contextualFeedbackEnabled = appSettings.intelligentContextualFeedbackEnabled,
                 onAttentionEnabledChange = { enabled ->
                     coroutineScope.launch {
                         appSettingsRepository.saveIntelligentAttentionEnabled(enabled)
@@ -365,7 +366,12 @@ fun SettingsScreen(
                         appSettingsRepository.saveIntelligentRecaptureEnabled(enabled)
                     }
                 },
-                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) }
+                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) },
+                onContextualFeedbackEnabledChange = { enabled ->
+                    coroutineScope.launch {
+                        appSettingsRepository.saveIntelligentContextualFeedbackEnabled(enabled)
+                    }
+                }
             )
 
             ClassicModeSettingsSection(
@@ -1061,14 +1067,25 @@ private fun IntelligentModeSettingsSection(
     attentionEnabled: Boolean,
     recaptureEnabled: Boolean,
     recapturesText: String,
+    contextualFeedbackEnabled: Boolean,
     onAttentionEnabledChange: (Boolean) -> Unit,
     onRecaptureEnabledChange: (Boolean) -> Unit,
-    onRecapturesChange: (String) -> Unit
+    onRecapturesChange: (String) -> Unit,
+    onContextualFeedbackEnabledChange: (Boolean) -> Unit
 ) {
     SettingsSectionHeader(
         title = "Modo inteligente",
         description = "La sesion funciona sin camara. Estas opciones controlan el " +
             "comportamiento real; la depuracion se configura mas abajo."
+    )
+    SettingsSwitchRow(
+        label = "Feedback hablado con la respuesta del nino",
+        description = "Seven arma una frase que repite lo que dijo el nino " +
+            "(\"¡Muy bien! ¡Pavo! vive en la granja\"). Como es una frase nueva, se " +
+            "genera con la voz en linea y consume cuota. Apagado, usa solo las frases " +
+            "ya preparadas o el banco local, sin gastar cuota.",
+        checked = contextualFeedbackEnabled,
+        onCheckedChange = onContextualFeedbackEnabledChange
     )
     SettingsSwitchRow(
         label = "Usar camara/atencion en modo inteligente",

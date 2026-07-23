@@ -2275,7 +2275,14 @@ private fun BimodalSession(
             // respuesta del nino ("¡Muy bien! ¡Pavo! Ese amiguito vive en la
             // granja."). Si la transcripcion no es segura de repetir, se cae al
             // banco local general de siempre.
-            val contextualFeedback = when (category) {
+            //
+            // El feedback contextual solo se calcula si el docente lo activo en
+            // Configuracion: como es texto nuevo por cada respuesta, casi nunca esta
+            // en cache y se sintetiza en vivo (consume cuota de voz). Apagado, se usa
+            // solo lo preparado/cacheado o el banco local, sin sintesis de red.
+            val contextualFeedback = if (!appSettings.intelligentContextualFeedbackEnabled) {
+                null
+            } else when (category) {
                 GeneralTeacherFeedbackType.CORRECT ->
                     contextualFeedbackComposer.composeCorrect(
                         questionText = currentQuestion?.questionText,

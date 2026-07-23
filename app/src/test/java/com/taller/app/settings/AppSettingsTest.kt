@@ -29,6 +29,9 @@ class AppSettingsTest {
         // senal del reintento sea clara (feedback → aviso → pregunta → escucha).
         assertFalse(defaults.earlyAnswerCaptureEnabled)
         assertEquals(2000, defaults.earlyAnswerWindowMs)
+        // FINAL-CORE02: el feedback contextual dinamico viene apagado por defecto
+        // para no consumir cuota de voz en cada respuesta durante sesiones reales.
+        assertFalse(defaults.intelligentContextualFeedbackEnabled)
     }
 
     @Test

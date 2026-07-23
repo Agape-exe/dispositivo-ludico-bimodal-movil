@@ -25,6 +25,16 @@ data class AppSettings(
      */
     val earlyAnswerCaptureEnabled: Boolean = DEFAULT_EARLY_ANSWER_CAPTURE_ENABLED,
     val earlyAnswerWindowMs: Int = DEFAULT_EARLY_ANSWER_WINDOW_MS,
+    /**
+     * FINAL-CORE02: retroalimentacion contextual dinamica del modo inteligente.
+     * Cuando esta activada, Seven arma una frase que usa la respuesta del nino
+     * ("¡Muy bien! ¡Pavo! vive en la granja"), que al ser texto nuevo casi nunca
+     * esta en cache y se sintetiza en vivo con Gemini/OpenAI (consume cuota).
+     * Apagada (valor por defecto), el feedback usa solo lo ya preparado/cacheado
+     * o el banco local, sin sintesis de red: protege la cuota en sesiones reales.
+     */
+    val intelligentContextualFeedbackEnabled: Boolean =
+        DEFAULT_INTELLIGENT_CONTEXTUAL_FEEDBACK_ENABLED,
     val updatedAt: Long = 0L
 ) {
     fun sanitized(nowMs: Long = updatedAt): AppSettings = copy(
@@ -82,6 +92,13 @@ data class AppSettings(
         const val DEFAULT_EARLY_ANSWER_WINDOW_MS = 2000
         const val MIN_EARLY_ANSWER_WINDOW_MS = 500
         const val MAX_EARLY_ANSWER_WINDOW_MS = 4000
+
+        /**
+         * FINAL-CORE02: apagada por defecto. Asi las sesiones reales no consumen
+         * cuota de voz por cada respuesta del nino; el docente puede activarla
+         * cuando quiera el feedback mas personalizado y tenga cuota disponible.
+         */
+        const val DEFAULT_INTELLIGENT_CONTEXTUAL_FEEDBACK_ENABLED = false
 
         fun defaults(): AppSettings = AppSettings()
 
