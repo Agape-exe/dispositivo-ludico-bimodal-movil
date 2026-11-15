@@ -223,13 +223,15 @@ class SpeechToTextService(
         private const val TAG = "SpeechToTextService"
 
         /**
-         * FINAL-FLOW01-FIX02: infraestructura de reconocimiento de voz UNIFICADA del
-         * modo inteligente. Activacion ("Hola Seven"), conversacion inicial, ventana
-         * temprana y respuestas normales comparten esta misma clase y configuracion.
+         * FINAL-CORE02: este servicio es el motor ANDROID_SYSTEM detras de la
+         * fachada [com.taller.app.speech.ChildSpeechTranscriber], que unifica la
+         * captura de activacion ("Hola Seven"), conversacion inicial, ventana
+         * temprana y respuestas evaluadas. Es el respaldo tecnico local de la
+         * cadena STT (Google Cloud principal, OpenAI de respaldo remoto).
          *
          * Es Android [SpeechRecognizer]; el proveedor real lo aporta el sistema
-         * (normalmente Google, si esta disponible en el dispositivo). No hay STT de
-         * red propio ni de Gemini: aqui no se sintetiza ni se guarda audio.
+         * (normalmente Google, si esta disponible en el dispositivo). Aqui no se
+         * sintetiza voz ni se guarda audio.
          */
         const val PROVIDER_LABEL = "Android SpeechRecognizer"
         const val SYSTEM_PROVIDER_NOTE = "Proveedor del sistema: Google si esta disponible"

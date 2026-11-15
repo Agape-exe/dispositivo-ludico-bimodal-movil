@@ -52,8 +52,6 @@ import com.taller.app.gpt.script.SessionScriptInput
 import com.taller.app.gpt.script.SessionScriptInputFactory
 import com.taller.app.gpt.script.SessionScriptValidator
 import com.taller.app.voice.SevenVoiceServiceFactory
-import com.taller.app.voice.ToySpeechService
-import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.neural.GeminiTtsConfig
@@ -66,7 +64,6 @@ import com.taller.app.voice.prep.VoicePrepReport
 import com.taller.app.voice.prep.VoicePrepReportItem
 import com.taller.app.voice.prep.VoicePrepStatus
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -96,24 +93,18 @@ fun SessionScriptScreen(activityId: Long, onBack: () -> Unit) {
     val gptSettingsRepository = remember { GptSettingsRepository(context.applicationContext) }
     val scope = rememberCoroutineScope()
 
-    // Voz de Seven para la preparacion previa (TTSV01). Se reutiliza el motor local
-    // y la cadena de proveedores estandar; se libera al salir de la pantalla.
+    // Voz de Seven para la preparacion previa (TTSV01). Cadena oficial Gemini
+    // principal + OpenAI de respaldo; se libera al salir de la pantalla.
     val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
     val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
-    val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
-    val toySpeechService = remember { ToySpeechService(context) }
     val sevenVoiceService = remember {
         SevenVoiceServiceFactory.create(
             context = context,
-            ttsStateFlow = ttsStateFlow,
-            toySpeechService = toySpeechService,
             settingsProvider = { voiceSettings }
         )
     }
     DisposableEffect(Unit) {
-        toySpeechService.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
-            toySpeechService.shutdown()
             sevenVoiceService.release()
         }
     }

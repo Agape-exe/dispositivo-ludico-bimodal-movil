@@ -24,7 +24,9 @@ data class ExportSessionSummaryDto(
     val noResponseCount: Int,
     val notInterpretableCount: Int?,
     val timeoutCount: Int,
-    val technicalErrorCount: Int
+    val technicalErrorCount: Int,
+    /** FINAL-CORE02: respuestas de voz validas del nino (solo modo inteligente). */
+    val validVoiceResponseCount: Int = 0
 )
 
 data class ExportAttemptDto(

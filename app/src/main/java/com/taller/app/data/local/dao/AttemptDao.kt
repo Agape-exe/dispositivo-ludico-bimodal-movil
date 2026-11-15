@@ -57,4 +57,7 @@ interface AttemptDao {
         feedbackLatency: Long?,
         pipelineLatency: Long?
     )
+
+    @Query("DELETE FROM attempts")
+    suspend fun deleteAll()
 }

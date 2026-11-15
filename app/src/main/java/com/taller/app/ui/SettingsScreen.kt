@@ -62,8 +62,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.taller.app.BuildConfig
 import com.taller.app.attention.AttentionDebugSettings
 import com.taller.app.attention.AttentionDebugSettingsRepository
+import androidx.room.withTransaction
+import com.taller.app.data.local.AppDatabase
+import com.taller.app.data.local.DatabaseResetService
+import com.taller.app.voice.neural.OpenAiTtsAudioCache
 import com.taller.app.gpt.GptClientImpl
 import com.taller.app.gpt.GptConfig
 import com.taller.app.gpt.GptPrompt
@@ -76,10 +81,15 @@ import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.settings.MarkdownLimiterFile
 import com.taller.app.settings.MarkdownLimiterRepository
+import com.taller.app.speech.GoogleSttCredentialStatus
+import com.taller.app.speech.GoogleSttCredentialStore
+import com.taller.app.speech.SttProviderConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,6 +128,12 @@ fun SettingsScreen(
     var cameraGranted by remember { mutableStateOf(isCameraGranted()) }
     var audioGranted by remember { mutableStateOf(isAudioGranted()) }
     var showSettingsHint by remember { mutableStateOf(false) }
+
+    // FINAL-CORE02: vaciado seguro de los datos de prueba (Room + cache de voz).
+    var resetDialogVisible by remember { mutableStateOf(false) }
+    var resetConfirmationText by remember { mutableStateOf("") }
+    var resetResultMessage by remember { mutableStateOf<String?>(null) }
+    var resetInProgress by remember { mutableStateOf(false) }
     var gptJsonTesting by remember { mutableStateOf(false) }
     var gptJsonTestResult by remember { mutableStateOf<StructuredGptResult?>(null) }
     var aiMessage by remember { mutableStateOf<String?>(null) }
@@ -136,6 +152,10 @@ fun SettingsScreen(
     var limiterMessage by remember { mutableStateOf<String?>(null) }
     var limiterContentDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
     var limiterDeleteTarget by remember { mutableStateOf<MarkdownLimiterFile?>(null) }
+    var googleCredentialStatus by remember {
+        mutableStateOf(SttProviderConfig.googleCredentialStatus(context))
+    }
+    var googleCredentialMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(savedGptSettings) {
         draftGptSettings = savedGptSettings
@@ -165,6 +185,19 @@ fun SettingsScreen(
             val result = markdownLimiterRepository.importFromUri(uri)
             limiterMessage = result.message
             refreshLimiters()
+        }
+    }
+
+    val googleCredentialImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                GoogleSttCredentialStore.importFromUri(context.applicationContext, uri)
+            }
+            googleCredentialMessage = result.message
+            googleCredentialStatus = SttProviderConfig.googleCredentialStatus(context)
         }
     }
 
@@ -322,6 +355,7 @@ fun SettingsScreen(
                 attentionEnabled = appSettings.intelligentAttentionEnabled,
                 recaptureEnabled = appSettings.intelligentRecaptureEnabled,
                 recapturesText = recapturesText,
+                contextualFeedbackEnabled = appSettings.intelligentContextualFeedbackEnabled,
                 onAttentionEnabledChange = { enabled ->
                     coroutineScope.launch {
                         appSettingsRepository.saveIntelligentAttentionEnabled(enabled)
@@ -332,7 +366,12 @@ fun SettingsScreen(
                         appSettingsRepository.saveIntelligentRecaptureEnabled(enabled)
                     }
                 },
-                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) }
+                onRecapturesChange = { recapturesText = it.filter(Char::isDigit).take(2) },
+                onContextualFeedbackEnabledChange = { enabled ->
+                    coroutineScope.launch {
+                        appSettingsRepository.saveIntelligentContextualFeedbackEnabled(enabled)
+                    }
+                }
             )
 
             ClassicModeSettingsSection(
@@ -381,8 +420,8 @@ fun SettingsScreen(
             )
 
             SettingsSectionHeader(
-                title = "Voz",
-                description = "Proveedores, voces y pruebas de la voz de Seven."
+                title = "Voz de Seven",
+                description = "Gemini es el proveedor principal y OpenAI el respaldo."
             )
             Button(
                 onClick = onNavigateToToyVoiceSettings,
@@ -396,6 +435,39 @@ fun SettingsScreen(
             ) {
                 Text("Configurar voz del juguete")
             }
+
+            SpeechRecognitionSection(
+                googleCredentialStatus = googleCredentialStatus,
+                googleCredentialMessage = googleCredentialMessage,
+                openAiConfigured = SttProviderConfig.openAiConfigured(),
+                androidAvailable = com.taller.app.speech.SpeechToTextService.isAvailable(context),
+                importSupported = BuildConfig.DEBUG && GoogleSttCredentialStore.isImportSupported(),
+                onImportCredential = {
+                    googleCredentialMessage = null
+                    googleCredentialImportLauncher.launch(arrayOf("application/json", "text/json"))
+                },
+                onRemoveCredential = {
+                    val removed = GoogleSttCredentialStore.removeImportedCredential(
+                        context.applicationContext
+                    )
+                    googleCredentialMessage = if (removed) {
+                        "Credencial importada eliminada del almacenamiento interno."
+                    } else {
+                        "No se pudo eliminar la credencial importada."
+                    }
+                    googleCredentialStatus = SttProviderConfig.googleCredentialStatus(context)
+                }
+            )
+
+            TestDataSection(
+                message = resetResultMessage,
+                inProgress = resetInProgress,
+                onRequestReset = {
+                    resetConfirmationText = ""
+                    resetResultMessage = null
+                    resetDialogVisible = true
+                }
+            )
 
             MarkdownLimitersSection(
                 files = limiterFiles,
@@ -639,6 +711,247 @@ fun SettingsScreen(
             text = { Text("Se eliminara la copia interna de ${target.displayName}.") }
         )
     }
+
+    // FINAL-CORE02: confirmacion fuerte del vaciado de datos de prueba. El boton
+    // de borrado solo se habilita al escribir BORRAR, para evitar toques
+    // accidentales. Nunca toca configuracion, claves ni limitadores .md.
+    if (resetDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { if (!resetInProgress) resetDialogVisible = false },
+            title = { Text("Vaciar datos de prueba") },
+            text = {
+                Column {
+                    Text(
+                        text = "Esta accion eliminara actividades, preguntas, guiones, " +
+                            "sesiones, respuestas, metricas y registros locales de prueba, " +
+                            "ademas de los audios de voz pre-generados. No se puede deshacer.",
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Se conservan la configuracion de la app, las claves y los " +
+                            "archivos limitadores.",
+                        fontSize = 13.sp,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = resetConfirmationText,
+                        onValueChange = { resetConfirmationText = it },
+                        label = { Text("Escribe BORRAR para confirmar") },
+                        singleLine = true,
+                        enabled = !resetInProgress,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = resetConfirmationText.trim().equals("BORRAR", ignoreCase = false) &&
+                        !resetInProgress,
+                    onClick = {
+                        resetInProgress = true
+                        coroutineScope.launch {
+                            val db = AppDatabase.getInstance(context.applicationContext)
+                            val voiceCache = OpenAiTtsAudioCache(context.applicationContext)
+                            val service = DatabaseResetService(
+                                activityDao = db.activityDao(),
+                                questionDao = db.questionDao(),
+                                sessionDao = db.sessionDao(),
+                                attemptDao = db.attemptDao(),
+                                technicalEventDao = db.technicalEventDao(),
+                                clearVoiceCache = {
+                                    val before = voiceCache.stats().audioCount
+                                    voiceCache.clear()
+                                    before
+                                },
+                                transactionRunner = { block ->
+                                    db.withTransaction { block() }
+                                }
+                            )
+                            val result = service.resetTestData()
+                            resetResultMessage = when (result) {
+                                is DatabaseResetService.Result.Success -> result.message
+                                is DatabaseResetService.Result.Failure -> result.safeMessage
+                            }
+                            resetInProgress = false
+                            resetDialogVisible = false
+                        }
+                    }
+                ) {
+                    Text("Si, borrar datos")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !resetInProgress,
+                    onClick = { resetDialogVisible = false }
+                ) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+}
+
+/**
+ * FINAL-CORE02: estado del reconocimiento de voz (STT), separado de la voz de
+ * Seven (TTS). Muestra la cadena oficial y que motor atiende las capturas hoy.
+ */
+@Composable
+private fun SpeechRecognitionSection(
+    googleCredentialStatus: GoogleSttCredentialStatus,
+    googleCredentialMessage: String?,
+    openAiConfigured: Boolean,
+    androidAvailable: Boolean,
+    importSupported: Boolean,
+    onImportCredential: () -> Unit,
+    onRemoveCredential: () -> Unit
+) {
+    SettingsSectionHeader(
+        title = "Reconocimiento de voz (STT)",
+        description = "Convierte la voz del nino en texto. Es independiente de la voz de Seven."
+    )
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Principal: Google Cloud Speech-to-Text - " + when (googleCredentialStatus) {
+                    GoogleSttCredentialStatus.IMPORTED_DEBUG ->
+                        "credencial importada en almacenamiento interno"
+                    GoogleSttCredentialStatus.API_KEY_CONFIGURED ->
+                        "GOOGLE_SPEECH_API_KEY detectada en la compilacion"
+                    GoogleSttCredentialStatus.DESKTOP_PATH_EXISTS ->
+                        "la ruta existe en la PC, pero el celular no puede acceder a ella"
+                    GoogleSttCredentialStatus.DESKTOP_PATH_MISSING ->
+                        "GOOGLE_CLOUD_STT_CREDENTIALS_PATH no apunta a un archivo existente"
+                    GoogleSttCredentialStatus.NOT_CONFIGURED ->
+                        "no se encontro GOOGLE_CLOUD_STT_CREDENTIALS_PATH en local.properties"
+                },
+                fontSize = 13.sp,
+                lineHeight = 17.sp
+            )
+            Text(
+                text = "Respaldo: OpenAI Transcription - " +
+                    if (openAiConfigured) "credencial detectada" else "sin credencial",
+                fontSize = 13.sp,
+                lineHeight = 17.sp
+            )
+            Text(
+                text = "Respaldo tecnico local: Android SpeechRecognizer - " +
+                    if (androidAvailable) "disponible" else "no disponible en este dispositivo",
+                fontSize = 13.sp,
+                lineHeight = 17.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Las capturas de esta version siguen usando Android SpeechRecognizer. " +
+                    "El repo aun no implementa la captura de audio ni las llamadas remotas a " +
+                    "Google/OpenAI; importar la cuenta de servicio solo la deja disponible " +
+                    "para un conector Google STT futuro.",
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+            )
+            if (importSupported) {
+                Text(
+                    text = "Prototipo local (solo debug): el JSON se valida y se guarda en " +
+                        "almacenamiento privado sin mostrar ni registrar su contenido. No uses " +
+                        "una cuenta de servicio embebida en una version distribuida.",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                Button(
+                    onClick = onImportCredential,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                ) {
+                    Text("Importar JSON de Google STT (solo debug)")
+                }
+                if (googleCredentialStatus == GoogleSttCredentialStatus.IMPORTED_DEBUG) {
+                    TextButton(
+                        onClick = onRemoveCredential,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Quitar credencial importada")
+                    }
+                }
+            } else {
+                Text(
+                    text = "La importacion de cuentas de servicio no se incluye en release.",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            googleCredentialMessage?.let { message ->
+                Text(
+                    text = message,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = if (message.contains("importada", ignoreCase = true) ||
+                        message.contains("eliminada", ignoreCase = true)
+                    ) {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            Text(
+                text = "Idioma configurado: espanol (es-PE). No se guarda audio del nino.",
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+            )
+        }
+    }
+}
+
+/** FINAL-CORE02: seccion "Datos de prueba" con el vaciado seguro de la base local. */
+@Composable
+private fun TestDataSection(
+    message: String?,
+    inProgress: Boolean,
+    onRequestReset: () -> Unit
+) {
+    SettingsSectionHeader(
+        title = "Datos de prueba",
+        description = "Limpia las sesiones y metricas de prueba antes de cargar los datos oficiales."
+    )
+    Button(
+        onClick = onRequestReset,
+        enabled = !inProgress,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer
+        )
+    ) {
+        Text(if (inProgress) "Eliminando..." else "Vaciar datos de prueba")
+    }
+    if (message != null) {
+        Text(
+            text = message,
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+    }
 }
 
 @Composable
@@ -754,14 +1067,25 @@ private fun IntelligentModeSettingsSection(
     attentionEnabled: Boolean,
     recaptureEnabled: Boolean,
     recapturesText: String,
+    contextualFeedbackEnabled: Boolean,
     onAttentionEnabledChange: (Boolean) -> Unit,
     onRecaptureEnabledChange: (Boolean) -> Unit,
-    onRecapturesChange: (String) -> Unit
+    onRecapturesChange: (String) -> Unit,
+    onContextualFeedbackEnabledChange: (Boolean) -> Unit
 ) {
     SettingsSectionHeader(
         title = "Modo inteligente",
         description = "La sesion funciona sin camara. Estas opciones controlan el " +
             "comportamiento real; la depuracion se configura mas abajo."
+    )
+    SettingsSwitchRow(
+        label = "Feedback hablado con la respuesta del nino",
+        description = "Seven arma una frase que repite lo que dijo el nino " +
+            "(\"¡Muy bien! ¡Pavo! vive en la granja\"). Como es una frase nueva, se " +
+            "genera con la voz en linea y consume cuota. Apagado, usa solo las frases " +
+            "ya preparadas o el banco local, sin gastar cuota.",
+        checked = contextualFeedbackEnabled,
+        onCheckedChange = onContextualFeedbackEnabledChange
     )
     SettingsSwitchRow(
         label = "Usar camara/atencion en modo inteligente",

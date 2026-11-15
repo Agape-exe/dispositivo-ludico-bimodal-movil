@@ -67,7 +67,8 @@ class InteractionDataLoggerTest {
             finalStatus: String, completed: Boolean, completedQuestions: Int,
             totalAttempts: Int, correctCount: Int?, incorrectCount: Int?,
             noResponseCount: Int, notInterpretableCount: Int?,
-            timeoutCount: Int, technicalErrorCount: Int
+            timeoutCount: Int, technicalErrorCount: Int,
+            validVoiceResponseCount: Int
         ) {
             val i = sessions.indexOfFirst { it.id == id }
             if (i >= 0) sessions[i] = sessions[i].copy(
@@ -77,8 +78,13 @@ class InteractionDataLoggerTest {
                 totalAttempts = totalAttempts, correctCount = correctCount,
                 incorrectCount = incorrectCount, noResponseCount = noResponseCount,
                 notInterpretableCount = notInterpretableCount,
-                timeoutCount = timeoutCount, technicalErrorCount = technicalErrorCount
+                timeoutCount = timeoutCount, technicalErrorCount = technicalErrorCount,
+                validVoiceResponseCount = validVoiceResponseCount
             )
+        }
+
+        override suspend fun deleteAll() {
+            sessions.clear()
         }
     }
 
@@ -124,6 +130,10 @@ class InteractionDataLoggerTest {
                 fullPipelineLatencyMs = pipelineLatency
             )
         }
+
+        override suspend fun deleteAll() {
+            attempts.clear()
+        }
     }
 
     private class FakeTechnicalEventDao : TechnicalEventDao {
@@ -143,6 +153,10 @@ class InteractionDataLoggerTest {
             events.filter { it.sessionId == sessionId }
 
         override suspend fun count(): Int = events.size
+
+        override suspend fun deleteAll() {
+            events.clear()
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -227,6 +241,63 @@ class InteractionDataLoggerTest {
         assertEquals(1, stored.incorrectCount)
         assertEquals(0, stored.noResponseCount)
         assertEquals(1, stored.timeoutCount)
+    }
+
+    @Test
+    fun finishBimodalSession_guardaInicioFinDuracionYRespuestasValidas() = runBlocking {
+        val sid = logger.startSession(1L, "Test", "ADVANCED", 3)
+
+        logger.finishBimodalSession(
+            sessionId = sid,
+            finalState = "SESSION_COMPLETED",
+            startedAtMs = 400L,
+            completedQuestions = 3,
+            summary = BimodalSessionSummary(correct = 3, resolvedQuestions = 3),
+            validVoiceResponseCount = 3
+        )
+
+        val stored = sessionDao.sessions.first()
+        // startedAt lo fija startSession; endedAt y la duracion los fija el cierre.
+        assertEquals(fixedNow, stored.startedAt)
+        assertEquals(fixedNow, stored.endedAt)
+        assertEquals(600L, stored.totalDurationMs) // fixedNow(1000) - startedAtMs(400)
+        assertEquals(3, stored.validVoiceResponseCount)
+    }
+
+    @Test
+    fun finishBimodalSession_sinRespuestasValidas_guardaCero() = runBlocking {
+        val sid = logger.startSession(1L, "Test", "ADVANCED", 1)
+
+        // Una sesion donde solo hubo timeouts y capturas vacias: el conteo de
+        // respuestas de voz validas queda en cero (no cuentan la activacion,
+        // la conversacion inicial ni los timeouts).
+        logger.finishBimodalSession(
+            sessionId = sid,
+            finalState = "SESSION_CANCELLED",
+            startedAtMs = 0L,
+            completedQuestions = 0,
+            summary = BimodalSessionSummary(noResponse = 2, timeExpired = 1),
+            validVoiceResponseCount = 0
+        )
+
+        assertEquals(0, sessionDao.sessions.first().validVoiceResponseCount)
+    }
+
+    @Test
+    fun finishClassicSession_nuncaCuentaRespuestasDeVozValidas() = runBlocking {
+        val sid = logger.startSession(1L, "Test", "CLASSIC", 2)
+
+        logger.finishClassicSession(
+            sessionId = sid,
+            finalState = "SESSION_COMPLETED",
+            startedAtMs = 0L,
+            completedQuestions = 2,
+            totalAttempts = 2,
+            noResponseCount = 0,
+            timeoutCount = 0
+        )
+
+        assertEquals(0, sessionDao.sessions.first().validVoiceResponseCount)
     }
 
     @Test

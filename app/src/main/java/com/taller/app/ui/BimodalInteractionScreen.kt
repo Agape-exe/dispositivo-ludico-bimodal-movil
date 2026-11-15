@@ -96,6 +96,7 @@ import com.taller.app.bimodal.InitialConversationResponder
 import com.taller.app.bimodal.SevenStartCommand
 import com.taller.app.bimodal.HybridSessionContext
 import com.taller.app.bimodal.IntelligentSessionReport
+import com.taller.app.bimodal.RetryPresentationPolicy
 import com.taller.app.bimodal.SemanticEvaluationAdapter
 import com.taller.app.bimodal.SpeechCaptureEventMapper
 import com.taller.app.bimodal.SpeechCaptureOutcome
@@ -104,6 +105,7 @@ import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackGenerator
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackMessage
 import com.taller.app.bimodal.feedback.GeneralTeacherFeedbackType
 import com.taller.app.bimodal.feedback.AnimalMediationBank
+import com.taller.app.bimodal.feedback.ContextualFeedbackComposer
 import com.taller.app.bimodal.latencyMsLabel
 import com.taller.app.bimodal.mediation.GenerativeMediationType
 import com.taller.app.bimodal.mediation.MediationSource
@@ -130,7 +132,10 @@ import com.taller.app.semantic.SemanticResult
 import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
 import com.taller.app.settings.MarkdownLimiterRepository
+import com.taller.app.speech.ChildSpeechTranscriber
 import com.taller.app.speech.SpeechToTextService
+import com.taller.app.speech.SttSettings
+import com.taller.app.speech.SttSettingsRepository
 import com.taller.app.speech.SttState
 import com.taller.app.ui.face.SevenDogFace
 import com.taller.app.ui.face.SevenFaceScaffold
@@ -146,10 +151,7 @@ import com.taller.app.recapture.RecapturePolicy
 import com.taller.app.recapture.RecaptureState
 import com.taller.app.vision.FaceAnalyzer
 import com.taller.app.vision.FacePresenceTracker
-import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.SevenVoiceService
-import com.taller.app.voice.ToySpeechService
-import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceProviderType
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
@@ -162,8 +164,6 @@ import com.taller.app.voice.VoicePlaybackDebugMapper
 import com.taller.app.voice.VoicePlaybackMode
 import com.taller.app.voice.VoicePlaybackSource
 import com.taller.app.voice.buildVoiceProviderInfo
-import com.taller.app.voice.neural.AzureSpeechConfig
-import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.GeminiRateLimitGate
 import com.taller.app.voice.neural.GeminiTtsConfig
 import com.taller.app.voice.neural.GeminiTtsVoiceProvider
@@ -175,10 +175,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.taller.app.logger.InteractionDataLogger
+import com.taller.app.logger.ValidVoiceResponseRule
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Etiqueta de logs internos de latencia (solo numeros, sin datos del nino). */
@@ -646,6 +646,12 @@ private fun BimodalSession(
     // instancia por actividad cargada.
     val feedbackGenerator = remember(activity) { GeneralTeacherFeedbackGenerator() }
 
+    // FINAL-CORE02: compositor local de feedback contextual. Usa la respuesta
+    // transcrita del nino (cuando es segura de repetir) para que el refuerzo o
+    // la orientacion se relacionen con lo que dijo. Sin IA, sin red y sin
+    // persistencia; si no puede componer, se usa el banco general.
+    val contextualFeedbackComposer = remember(activity) { ContextualFeedbackComposer() }
+
     // Banco local avanzado de mediacion ludica para la actividad de animales. No usa
     // IA generativa, no llama APIs externas y no depende de internet: a partir de la
     // clave de mediacion local de cada pregunta elige frases calidas y variadas,
@@ -765,6 +771,12 @@ private fun BimodalSession(
     var logSessionId by remember(activity) { mutableStateOf(-1L) }
     var logAttemptId by remember(activity) { mutableStateOf(-1L) }
 
+    // FINAL-CORE02: conteo oficial de respuestas de voz validas del nino en esta
+    // sesion. Solo se incrementa cuando una pregunta evaluada recibe una
+    // transcripcion valida (ver ValidVoiceResponseRule); nunca cuenta la
+    // activacion, la conversacion inicial, timeouts ni capturas vacias.
+    var validVoiceResponses by remember(activity) { mutableIntStateOf(0) }
+
     // Version del job de pausa facial: se incrementa cada vez que el orquestador
     // entra a PAUSED_FACE_LOST durante una pregunta activa. Usar esta clave como
     // clave del LaunchedEffect correspondiente garantiza que el job de pausa se
@@ -803,9 +815,12 @@ private fun BimodalSession(
     val recaptureFeatureEnabled = attentionActive && appSettings.intelligentRecaptureEnabled
 
     // ----- Captura de voz real -------------------------------------------------
-    // Reutiliza el servicio existente de reconocimiento de voz. Una sola instancia
-    // por sesion; se libera al salir de la pantalla en el DisposableEffect.
-    val speechService = remember { SpeechToTextService(context) }
+    // FINAL-CORE02: toda la captura pasa por la fachada unica de STT
+    // (ChildSpeechTranscriber): activacion, conversacion inicial, ventana temprana
+    // y respuestas evaluadas. Una sola instancia por sesion; se libera al salir.
+    val sttSettingsRepository = remember { SttSettingsRepository(context.applicationContext) }
+    val sttSettings by sttSettingsRepository.settings.collectAsState(initial = SttSettings.defaults())
+    val speechService = remember { ChildSpeechTranscriber(context) { sttSettings } }
 
     var audioGranted by remember {
         mutableStateOf(
@@ -836,6 +851,13 @@ private fun BimodalSession(
         if (outcomeDelivered.value) return
         outcomeDelivered.value = true
         if (orchestrator.state == BimodalInteractionState.LISTENING) {
+            // FINAL-CORE02: una transcripcion valida entregada a una pregunta
+            // evaluada cuenta como respuesta de voz valida del nino.
+            if (outcome is SpeechCaptureOutcome.Transcribed &&
+                ValidVoiceResponseRule.isValid(outcome.text)
+            ) {
+                validVoiceResponses += 1
+            }
             dispatch { orchestrator.onEvent(SpeechCaptureEventMapper.toEvent(outcome)) }
         }
     }
@@ -1225,11 +1247,9 @@ private fun BimodalSession(
     }
 
     // ----- Voz del juguete -----------------------------------------------------
-    // El juguete lee la pregunta usando la voz oficial de Seven y la cadena de
-    // fallback configurada en SevenVoiceService.
-    // Reutiliza el motor TTS local (LocalToyVoiceProvider) para no duplicar
-    // instancias. Los proveedores se liberan al salir de la pantalla.
-    val ttsStateFlow = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
+    // El juguete lee la pregunta usando la voz oficial de Seven con la cadena
+    // FINAL-CORE02: Gemini principal y OpenAI de respaldo. Los proveedores se
+    // liberan al salir de la pantalla.
     val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
     val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
     val attentionDebugSettingsRepository = remember {
@@ -1243,13 +1263,6 @@ private fun BimodalSession(
         attentionDebugSettings.showTtsDebugInIntelligentMode
     val gptDebugInIntelligentModeEnabled =
         attentionDebugSettings.showGptDebugInIntelligentMode
-    val toySpeechService = remember { ToySpeechService(context) }
-    val localVoiceProvider = remember {
-        LocalToyVoiceProvider(toySpeechService, ttsStateFlow) { voiceSettings }
-    }
-    val azureVoiceProvider = remember {
-        AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(voiceSettings.azureVoiceName) }
-    }
     val openAiVoiceProvider = remember {
         OpenAiTtsVoiceProvider(context) {
             OpenAiTtsConfig.fromBuild(
@@ -1270,17 +1283,13 @@ private fun BimodalSession(
         SevenVoiceService(
             geminiProvider = geminiVoiceProvider,
             openAiProvider = openAiVoiceProvider,
-            azureProvider = azureVoiceProvider,
-            localProvider = localVoiceProvider,
             preferredProvider = { voiceSettings.provider },
             providerInfo = { buildVoiceProviderInfo(voiceSettings, it) }
         )
     }
 
     DisposableEffect(Unit) {
-        toySpeechService.initialize { newState -> ttsStateFlow.value = newState }
         onDispose {
-            toySpeechService.shutdown()
             sevenVoiceService.release()
         }
     }
@@ -1414,6 +1423,7 @@ private fun BimodalSession(
         text: String,
         voiceContext: VoiceContext = VoiceContext.UNKNOWN,
         preparedText: String? = null,
+        dynamicWriteThrough: Boolean = false,
         onPlaybackStart: () -> Unit = {}
     ) {
         // TTSV01-FIX02: en sesiones con la voz preparada (READY) Seven reproduce SOLO
@@ -1422,13 +1432,19 @@ private fun BimodalSession(
         // intenta el texto dinamico desde cache (puede no existir aun: no se sintetiza
         // por red, queda como CACHE_MISS visible en metricas). Sin voz preparada se
         // mantiene la ruta clasica speak() (cache o sintesis).
+        //
+        // FINAL-CORE02: las frases dinamicas (feedback contextual, aviso de
+        // repeticion) pueden pedir dynamicWriteThrough: primero cache y, si la linea
+        // no existe, se sintetiza con Gemini (OpenAI de respaldo) y queda cacheada
+        // para reutilizarse, incluso en sesiones con la voz preparada.
         val preparedVoice = activity.voicePrepReady
         val effectiveText = if (preparedVoice) {
             preparedText?.takeIf { it.isNotBlank() } ?: text
         } else {
             text
         }
-        val playbackMode = if (preparedVoice) {
+        val cacheOnly = preparedVoice && !dynamicWriteThrough
+        val playbackMode = if (cacheOnly) {
             VoicePlaybackMode.CACHE_ONLY
         } else {
             VoicePlaybackMode.CACHE_OR_SYNTHESIZE
@@ -1444,7 +1460,7 @@ private fun BimodalSession(
             val timeoutMs = speechTimeoutMsFor(effectiveText)
             val outcome = withTimeoutOrNull(timeoutMs) {
                 runCatching {
-                    if (preparedVoice) {
+                    if (cacheOnly) {
                         sevenVoiceService.speakFromCacheOnly(
                             text = effectiveText,
                             source = "inteligente",
@@ -1525,21 +1541,17 @@ private fun BimodalSession(
         }
     }
 
-    // FINAL-FLOW01: voz de la conversacion inicial. Sus frases salen de un banco
-    // local finito que NO forma parte del guion cacheado, por lo que se reproducen
-    // SIEMPRE con la voz local del dispositivo: jamas se sintetiza por red texto en
-    // vivo para la conversacion. Si la voz local fallara, el flujo continua.
+    // FINAL-CORE02: voz de la conversacion inicial. Antes usaba el TTS local del
+    // dispositivo (proveedor retirado); ahora usa la cadena oficial de Seven con
+    // cache write-through: si la frase ya esta cacheada se reproduce desde cache y,
+    // si no, se sintetiza con Gemini (OpenAI de respaldo) y queda cacheada. Si la
+    // voz falla, el flujo continua.
     suspend fun speakConversationAndAwait(text: String) {
-        lastSpokenPhrase = text
-        toyVoiceSpeaking = true
-        try {
-            withTimeoutOrNull(speechTimeoutMsFor(text)) {
-                runCatching { localVoiceProvider.speak(text) {} }
-            }
-        } finally {
-            localVoiceProvider.stop()
-            toyVoiceSpeaking = false
-        }
+        speakAndAwait(
+            text = text,
+            voiceContext = VoiceContext.GREETING,
+            dynamicWriteThrough = true
+        )
     }
 
     // FINAL-FLOW01 / FINAL-FLOW01-FIX01: conversacion inicial opcional y limitada.
@@ -1894,6 +1906,11 @@ private fun BimodalSession(
             if (earlyCaptured) {
                 sttPartial = ""
                 sttFinal = earlyAnswer.orEmpty()
+                // FINAL-CORE02: la respuesta anticipada tambien es una respuesta de
+                // voz valida del nino (entra al flujo normal de evaluacion).
+                if (ValidVoiceResponseRule.isValid(earlyAnswer)) {
+                    validVoiceResponses += 1
+                }
                 dispatch { orchestrator.startListening() }
                 dispatch { orchestrator.onSpeechCaptured(earlyAnswer.orEmpty()) }
                 return@LaunchedEffect
@@ -1903,10 +1920,14 @@ private fun BimodalSession(
         val questionText = currentQuestion?.questionText ?: return@LaunchedEffect
         val mediationKey = currentQuestion?.mediationKey
         val keyName = LocalMediationKey.fromKey(mediationKey).name
+        // FINAL-CORE02: un reintento NO relee la introduccion narrativa completa.
+        // Su re-presentacion es corta y sin ambiguedad: aviso de repeticion +
+        // pregunta completa, y recien despues se abre la escucha.
+        val isRetryPresentation = (progress?.currentAttempt ?: 1) > 1
         Log.d(
             BIMODAL_VOICE_TAG,
             "preparacion: inicio estado=${orchestrator.state} indice=${progress?.currentQuestionIndex} " +
-                "intento=${progress?.currentAttempt} clave=$keyName"
+                "intento=${progress?.currentAttempt} clave=$keyName reintento=$isRetryPresentation"
         )
 
         // Construye la escena de presentacion del banco local. Si por cualquier motivo
@@ -1917,7 +1938,9 @@ private fun BimodalSession(
         // Las introducciones especificas de animales ya incluyen el enunciado de la
         // pregunta; para una clave general la introduccion es generica y la pregunta
         // se concatena verbatim despues, por lo que su intencion nunca cambia.
-        val presentationText = try {
+        val presentationText = if (isRetryPresentation) {
+            questionText
+        } else try {
             val introStart = System.nanoTime()
             val introText = animalBank.getQuestionIntroduction(mediationKey)
             lastMediationSource = MediationSource.LOCAL
@@ -1986,6 +2009,10 @@ private fun BimodalSession(
                 if (hasPreparedIntro) add(activity.generatedIntroText!!.trim())
                 add(preparedQuestion)
             }
+        } else if (isRetryPresentation) {
+            // Reintento: solo la pregunta completa (el aviso de repeticion se
+            // reproduce aparte, justo antes, con cache write-through).
+            listOf(questionText.trim())
         } else {
             buildList {
                 if (playInitialGreeting) {
@@ -2018,6 +2045,19 @@ private fun BimodalSession(
             audioGranted
         ) {
             runInitialConversation()
+        }
+        // FINAL-CORE02: aviso claro de repeticion ANTES de releer la pregunta en
+        // un reintento. Nunca es un "intentalo de nuevo" aislado: anuncia que la
+        // pregunta viene de nuevo y que la respuesta va despues. Es una frase
+        // dinamica corta, con cache write-through (Gemini/OpenAI) reutilizable.
+        if (isRetryPresentation && !interruptedByFaceLost &&
+            faceLostJobVersion == versionAtStart
+        ) {
+            speakAndAwait(
+                text = RetryPresentationPolicy.announcePhrase(),
+                voiceContext = VoiceContext.FEEDBACK_RETRY,
+                dynamicWriteThrough = true
+            )
         }
         for (segment in questionSegments) {
             if (faceLostJobVersion != versionAtStart) {
@@ -2231,7 +2271,35 @@ private fun BimodalSession(
         val category = feedbackGenerator.feedbackTypeFor(feedbackContext)
         if (category != null) {
             val feedbackStart = System.nanoTime()
-            val spokenText = when (category) {
+            // FINAL-CORE02: primero se intenta el feedback CONTEXTUAL, que usa la
+            // respuesta del nino ("¡Muy bien! ¡Pavo! Ese amiguito vive en la
+            // granja."). Si la transcripcion no es segura de repetir, se cae al
+            // banco local general de siempre.
+            //
+            // El feedback contextual solo se calcula si el docente lo activo en
+            // Configuracion: como es texto nuevo por cada respuesta, casi nunca esta
+            // en cache y se sintetiza en vivo (consume cuota de voz). Apagado, se usa
+            // solo lo preparado/cacheado o el banco local, sin sintesis de red.
+            val contextualFeedback = if (!appSettings.intelligentContextualFeedbackEnabled) {
+                null
+            } else when (category) {
+                GeneralTeacherFeedbackType.CORRECT ->
+                    contextualFeedbackComposer.composeCorrect(
+                        questionText = currentQuestion?.questionText,
+                        childTranscript = lastResult?.transcription
+                    )
+                GeneralTeacherFeedbackType.INCORRECT_RETRY ->
+                    contextualFeedbackComposer.composeIncorrectRetry(
+                        questionText = currentQuestion?.questionText,
+                        childTranscript = lastResult?.transcription
+                    )
+                GeneralTeacherFeedbackType.INCORRECT_NEXT ->
+                    contextualFeedbackComposer.composeIncorrectFinal(
+                        childTranscript = lastResult?.transcription
+                    )
+                else -> null
+            }
+            val bankText = when (category) {
                 GeneralTeacherFeedbackType.CORRECT ->
                     animalBank.getCorrectFeedback(mediationKey, isLast)
                 GeneralTeacherFeedbackType.INCORRECT_RETRY ->
@@ -2255,20 +2323,39 @@ private fun BimodalSession(
                 GeneralTeacherFeedbackType.QUESTION_INTRO ->
                     feedbackGenerator.message(category).text
             }
+            val spokenText = contextualFeedback?.text ?: bankText
             lastMediationSource = MediationSource.LOCAL
             lastMediationLatencyMs = (System.nanoTime() - feedbackStart) / 1_000_000
             lastMediationType = GenerativeMediationType.CONTEXTUAL_FEEDBACK
             lastMediationFallbackReason = null
             // La tarjeta de feedback muestra la categoria fijada por el flujo y el
-            // texto finalmente reproducido por el banco local.
+            // texto finalmente reproducido (contextual o del banco local).
             lastFeedbackMessage = GeneralTeacherFeedbackMessage(category, spokenText)
-            Log.d(BIMODAL_VOICE_TAG, "feedback: categoria=$category mediacion=local")
-            // TTSV01-FIX02: con la voz preparada se reproduce el feedback del guion
-            // (positivo/apoyo/reintento o cierre) que quedo cacheado; el texto del
-            // banco sirve de respaldo solo cuando no hay voz preparada.
-            val preparedFeedbackText = preparedFeedbackTextFor(category, currentQuestion, activity)
-            // Reproduce el feedback completo: SUSPENDE hasta que el audio termina.
-            speakAndAwait(spokenText, voiceContextForFeedback(category), preparedText = preparedFeedbackText)
+            Log.d(
+                BIMODAL_VOICE_TAG,
+                "feedback: categoria=$category mediacion=local " +
+                    "contextual=${contextualFeedback != null}"
+            )
+            if (contextualFeedback != null) {
+                // Feedback contextual dinamico: cache si la linea ya existe y, si
+                // no, sintesis Gemini/OpenAI con write-through. Nunca usa el texto
+                // preparado del guion porque debe mencionar la respuesta del nino.
+                speakAndAwait(
+                    text = spokenText,
+                    voiceContext = voiceContextForFeedback(category),
+                    dynamicWriteThrough = true
+                )
+            } else {
+                // TTSV01-FIX02: con la voz preparada se reproduce el feedback del
+                // guion (positivo/apoyo/reintento o cierre) que quedo cacheado; el
+                // texto del banco sirve de respaldo solo cuando no hay voz preparada.
+                val preparedFeedbackText = preparedFeedbackTextFor(category, currentQuestion, activity)
+                speakAndAwait(
+                    text = spokenText,
+                    voiceContext = voiceContextForFeedback(category),
+                    preparedText = preparedFeedbackText
+                )
+            }
         }
 
         // 3) Solo despues de que la retroalimentacion termino por completo, decide el
@@ -2319,7 +2406,8 @@ private fun BimodalSession(
                 finalState = terminalStateKey,
                 startedAtMs = startedMs,
                 completedQuestions = s.resolvedQuestions,
-                summary = s
+                summary = s,
+                validVoiceResponseCount = validVoiceResponses
             )
         }
         logSessionId = -1L
@@ -2336,6 +2424,7 @@ private fun BimodalSession(
         latencyTracker.reset()
         latencyStats = BimodalLatencyStats()
         logAttemptId = -1L
+        validVoiceResponses = 0
         // Una sesion nueva puede volver a dar el saludo inicial de bienvenida.
         initialGreetingSpoken[0] = false
         recaptureController.resetForSession()

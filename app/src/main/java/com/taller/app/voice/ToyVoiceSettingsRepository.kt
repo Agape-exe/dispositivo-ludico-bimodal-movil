@@ -42,9 +42,13 @@ class ToyVoiceSettingsRepository(private val context: Context) {
             speechRate = prefs[Keys.SPEECH_RATE] ?: 0.92f,
             pitch = prefs[Keys.PITCH] ?: 1.12f,
             localeTag = prefs[Keys.LOCALE_TAG],
-            provider = prefs[Keys.PROVIDER]?.let { name ->
-                runCatching { ToyVoiceProviderType.valueOf(name) }.getOrNull()
-            } ?: ToyVoiceProviderType.GEMINI_TTS,
+            // FINAL-CORE02: una preferencia antigua con un proveedor retirado
+            // (Azure, ElevenLabs, local) se normaliza a Gemini al leerla.
+            provider = normalizeProvider(
+                prefs[Keys.PROVIDER]?.let { name ->
+                    runCatching { ToyVoiceProviderType.valueOf(name) }.getOrNull()
+                } ?: ToyVoiceProviderType.GEMINI_TTS
+            ),
             neuralVoiceId = prefs[Keys.NEURAL_VOICE_ID],
             openAiVoiceName = prefs[Keys.OPENAI_VOICE_NAME],
             openAiInstructions = prefs[Keys.OPENAI_INSTRUCTIONS],
@@ -72,7 +76,7 @@ class ToyVoiceSettingsRepository(private val context: Context) {
             } else {
                 prefs.remove(Keys.LOCALE_TAG)
             }
-            prefs[Keys.PROVIDER] = settings.provider.name
+            prefs[Keys.PROVIDER] = normalizeProvider(settings.provider).name
             if (settings.neuralVoiceId != null) {
                 prefs[Keys.NEURAL_VOICE_ID] = settings.neuralVoiceId
             } else {

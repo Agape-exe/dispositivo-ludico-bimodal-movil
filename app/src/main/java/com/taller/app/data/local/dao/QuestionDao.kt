@@ -61,4 +61,7 @@ interface QuestionDao {
         scriptReviewed: Boolean,
         scriptUpdatedAt: Long
     )
+
+    @Query("DELETE FROM questions")
+    suspend fun deleteAll()
 }

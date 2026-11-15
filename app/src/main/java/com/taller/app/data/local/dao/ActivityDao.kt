@@ -70,4 +70,7 @@ interface ActivityDao {
         totalCount: Int,
         lastError: String?
     )
+
+    @Query("DELETE FROM activities")
+    suspend fun deleteAll()
 }

@@ -20,4 +20,7 @@ interface TechnicalEventDao {
 
     @Query("SELECT COUNT(*) FROM technical_events")
     suspend fun count(): Int
+
+    @Query("DELETE FROM technical_events")
+    suspend fun deleteAll()
 }

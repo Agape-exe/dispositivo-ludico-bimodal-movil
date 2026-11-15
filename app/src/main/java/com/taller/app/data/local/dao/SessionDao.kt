@@ -46,7 +46,8 @@ interface SessionDao {
         "completedQuestions = :completedQuestions, totalAttempts = :totalAttempts, " +
         "correctCount = :correctCount, incorrectCount = :incorrectCount, " +
         "noResponseCount = :noResponseCount, notInterpretableCount = :notInterpretableCount, " +
-        "timeoutCount = :timeoutCount, technicalErrorCount = :technicalErrorCount " +
+        "timeoutCount = :timeoutCount, technicalErrorCount = :technicalErrorCount, " +
+        "validVoiceResponseCount = :validVoiceResponseCount " +
         "WHERE id = :id"
     )
     suspend fun updateFinal(
@@ -63,6 +64,10 @@ interface SessionDao {
         noResponseCount: Int,
         notInterpretableCount: Int?,
         timeoutCount: Int,
-        technicalErrorCount: Int
+        technicalErrorCount: Int,
+        validVoiceResponseCount: Int
     )
+
+    @Query("DELETE FROM sessions")
+    suspend fun deleteAll()
 }

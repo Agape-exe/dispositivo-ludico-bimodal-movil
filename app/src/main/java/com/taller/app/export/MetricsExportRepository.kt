@@ -47,7 +47,8 @@ class MetricsExportRepository(
                     noResponseCount = session.noResponseCount,
                     notInterpretableCount = session.notInterpretableCount,
                     timeoutCount = session.timeoutCount,
-                    technicalErrorCount = session.technicalErrorCount
+                    technicalErrorCount = session.technicalErrorCount,
+                    validVoiceResponseCount = session.validVoiceResponseCount
                 ),
                 attempts = attempts.map { a ->
                     ExportAttemptDto(

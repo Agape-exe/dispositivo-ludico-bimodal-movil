@@ -64,28 +64,22 @@ import com.taller.app.data.local.mapper.toDomain
 import com.taller.app.model.LearningActivity
 import com.taller.app.settings.AppSettings
 import com.taller.app.settings.AppSettingsRepository
-import com.taller.app.speech.SpeechToTextService
+import com.taller.app.speech.ChildSpeechTranscriber
 import com.taller.app.speech.SttState
 import com.taller.app.ui.face.SevenDogFace
 import com.taller.app.ui.face.SevenFaceScaffold
 import com.taller.app.ui.face.SevenFaceState
 import com.taller.app.ui.face.classicSevenFaceState
-import com.taller.app.voice.LocalToyVoiceProvider
 import com.taller.app.voice.SevenVoiceService
-import com.taller.app.voice.ToySpeechService
-import com.taller.app.voice.ToySpeechState
 import com.taller.app.voice.ToyVoiceSettings
 import com.taller.app.voice.ToyVoiceSettingsRepository
 import com.taller.app.voice.VoiceContext
 import com.taller.app.voice.VoiceMode
-import com.taller.app.voice.neural.AzureSpeechConfig
-import com.taller.app.voice.neural.AzureSpeechVoiceProvider
 import com.taller.app.voice.neural.GeminiTtsConfig
 import com.taller.app.voice.neural.GeminiTtsVoiceProvider
 import com.taller.app.voice.neural.OpenAiTtsConfig
 import com.taller.app.voice.neural.OpenAiTtsVoiceProvider
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CLASSIC_LOG_TAG = "ClassicTimer"
@@ -298,7 +292,7 @@ private fun ClassicSession(
 
     ClassicImmersiveSystemBarsEffect(context)
 
-    val speechService = remember { SpeechToTextService(context) }
+    val speechService = remember { ChildSpeechTranscriber(context) }
     var audioGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -376,16 +370,11 @@ private fun ClassicSession(
         onDispose { speechService.destroy() }
     }
 
-    val ttsState = remember { MutableStateFlow(ToySpeechState.UNINITIALIZED) }
+    // FINAL-CORE02: el temporizador usa la misma cadena oficial de voz que el
+    // modo inteligente (Gemini principal, OpenAI de respaldo), sin proveedores
+    // retirados. Sigue reproduciendo desde cache cuando la voz esta preparada.
     val voiceRepository = remember { ToyVoiceSettingsRepository(context) }
     val voiceSettings by voiceRepository.settings.collectAsState(initial = ToyVoiceSettings())
-    val toySpeechService = remember { ToySpeechService(context) }
-    val localProvider = remember {
-        LocalToyVoiceProvider(toySpeechService, ttsState) { voiceSettings }
-    }
-    val azureProvider = remember {
-        AzureSpeechVoiceProvider(context) { AzureSpeechConfig.fromBuild(voiceSettings.azureVoiceName) }
-    }
     val openAiProvider = remember {
         OpenAiTtsVoiceProvider(context) {
             OpenAiTtsConfig.fromBuild(voiceSettings.openAiVoiceName, voiceSettings.openAiInstructions)
@@ -400,17 +389,13 @@ private fun ClassicSession(
         SevenVoiceService(
             geminiProvider = geminiProvider,
             openAiProvider = openAiProvider,
-            azureProvider = azureProvider,
-            localProvider = localProvider,
             preferredProvider = { voiceSettings.provider }
         )
     }
     var voiceSpeaking by remember(activity) { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
-        toySpeechService.initialize { ttsState.value = it }
         onDispose {
-            toySpeechService.shutdown()
             voiceService.release()
         }
     }
